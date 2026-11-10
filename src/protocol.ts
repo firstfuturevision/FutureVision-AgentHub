@@ -26,6 +26,7 @@ export interface SessionInfo {
   forkedFrom?: string; // 포크한 원래 세션 id(포크에서 한 일이 여기로 공유된다)
   copiedFrom?: string; // 복사한 원래 세션 id(대화는 이어받지만 공유하지 않음)
   extraDirs?: string[]; // 작업 폴더 말고 더 연결한 폴더(절대 경로, 작업 폴더 뿌리 안)
+  autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
   title: string;
   workdir: string;
   requestedBy: string; // 대시보드 사용자 이름, 로컬이면 'local'
@@ -73,7 +74,7 @@ export type ClientCommand =
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
   // 에이전트 설정 바꾸기: null = 없앰(기본), 없음 = 그대로. 메인 CLI 를 새 설정으로 다시 띄우고 지금까지의 대화를 다음 지시에 붙인다
-  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null }
+  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null; autoApprove?: boolean }
   // 공용 PC 화면에 진짜 터미널 창을 띄운다 — PC 앞(local)에서만 허용
   | { type: 'terminal.open'; agent: AgentKind; sessionId?: string; workdir?: string; profile?: boolean }; // profile: Agent Hub 전용 프로필로 로그인
 
@@ -167,6 +168,7 @@ export function parseCommand(raw: unknown): ClientCommand | null {
         if (k === 'model' && typeof v === 'string' && !MODEL_RE.test(v)) return null;
         if (v !== undefined) out[k] = v;
       }
+      if (typeof c.autoApprove === 'boolean') out.autoApprove = c.autoApprove;
       return out;
     }
     case 'session.fork': {

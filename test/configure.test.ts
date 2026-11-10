@@ -90,3 +90,35 @@ test('에이전트 설정 바꾸기: 작업 중·하위 에이전트·없는 에
   assert.equal(parseCommand({ type: 'session.configure', sessionId: 'a', model: 'x & del' }), null);
   assert.equal(parseCommand({ type: 'session.configure', sessionId: 'a', agent: 'gpt' }), null);
 });
+
+test('권한 묻지 않기: Claude 는 bypassPermissions 로 뜨고, 끄면 설정값으로 돌아간다', async () => {
+  const { sessions, events, presets } = setup();
+  const free = presets.save({ name: '자유', agent: 'claude', description: '권한 없이', instructions: '바로 한다.', autoApprove: true });
+  assert.equal(presets.find(free.id)?.autoApprove, true);
+  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workdir: 'proj', preset: free.id }, local);
+  const s = (events.find((e) => e.type === 'session.created') as any).session;
+  assert.equal(s.autoApprove, true);
+  await say(sessions, events, s.id, '안녕'); // 첫 지시에는 역할 지침이 붙는다
+  const reply = await say(sessions, events, s.id, 'argv?');
+  assert.match(reply.text, /--permission-mode bypassPermissions/);
+
+  // 끄면 설정값(default)으로 다시 뜬다
+  await sessions.handle({ type: 'session.configure', sessionId: s.id, autoApprove: false }, local);
+  await waitFor(events, () => sessions.info(s.id)?.status === 'idle' && !sessions.info(s.id)?.autoApprove);
+  await say(sessions, events, s.id, '이어서'); // 다시 뜬 뒤 첫 지시에는 앞 대화가 붙는다
+  const again = await say(sessions, events, s.id, 'argv?');
+  assert.match(again.text, /--permission-mode default/);
+  sessions.stopAll();
+});
+
+test('권한 묻지 않기: 메인이 묻지 않으면 맡긴 하위 에이전트도 묻지 않는다', async () => {
+  const { sessions, events, presets } = setup();
+  const free = presets.save({ name: '자유', agent: 'claude', description: '권한 없이', instructions: '바로 한다.', autoApprove: true });
+  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workdir: 'proj', preset: free.id }, local);
+  const main = (events.find((e) => e.type === 'session.created') as any).session;
+  await waitFor(events, () => sessions.info(main.id)?.status === 'idle');
+  await sessions.clink(main.id, { prompt: '정리해 줘', cli_name: 'claude' });
+  const worker = sessions.list().find((s) => s.parentId === main.id);
+  assert.equal(worker?.autoApprove, true);
+  sessions.stopAll();
+});

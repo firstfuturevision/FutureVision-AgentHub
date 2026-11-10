@@ -373,3 +373,6 @@ select:disabled { opacity: .45; cursor: default; }
 .fpick-item { text-align: left; padding: 6px 10px; border-radius: 8px; font-size: 13px; }
 .fpick-item:hover, .fpick-item:focus-visible { background: var(--hover); }
 .hint-inline.err { color: var(--warn); }
+/* 권한 묻지 않기 */
+.p-warn { font-size: 12px; color: var(--warn); margin-top: 6px; }
+.check-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }

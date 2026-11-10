@@ -18,6 +18,7 @@ export interface Preset {
   agents?: string[]; // 이 프리셋이 메인일 때 맡길 수 있는 하위 에이전트(프리셋 id). 없으면 전부
   tools?: string[]; // 이 프리셋으로 뜬 세션에 붙일 툴(툴 id). 없으면 켜진 툴 전부, [] 이면 툴 없음
   skills?: string[]; // 쓸 Agent Hub 스킬 이름. 없으면 전부, [] 이면 없음(계정 스킬은 프리셋에서 안 읽힘)
+  autoApprove?: boolean; // 권한 묻지 않기 — 이 에이전트로 뜬 세션은 도구 권한을 묻지 않고 허용
 }
 
 const LIMITS = { name: 40, description: 300, instructions: 8000 };
@@ -106,7 +107,7 @@ function validate(v: any, id: string, strict = false): Preset | null {
   const agents = ids(v.agents)?.filter((a) => a !== id); // 자기 자신은 부르지 않는다
   const tools = ids(v.tools);
   const skills = Array.isArray(v.skills) ? [...new Set(v.skills.filter((s: unknown): s is string => typeof s === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(s)))].slice(0, 100) : undefined;
-  return { id, name, agent: v.agent, ...(model ? { model } : {}), description, instructions, ...(agents ? { agents } : {}), ...(tools ? { tools } : {}), ...(skills ? { skills } : {}) };
+  return { id, name, agent: v.agent, ...(model ? { model } : {}), description, instructions, ...(agents ? { agents } : {}), ...(tools ? { tools } : {}), ...(skills ? { skills } : {}), ...(v.autoApprove === true ? { autoApprove: true } : {}) };
 }
 
 /** 작업자에게 보내는 첫 지시 — 역할 지침을 앞에 붙인다(모든 CLI 에 똑같이 통하는 방법). */

@@ -189,7 +189,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') info.customTitle = e.title;
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
-        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset });
+        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
       }
       const live: Live = { info, adapter: new UnavailableAdapter('끝난 작업'), history: events.slice(-HISTORY_CAP), turn: null };
       if (!events.some((e) => e.type === 'session.ended')) {
@@ -355,6 +355,7 @@ export class SessionManager {
           extraDirs,
           title: cmd.title,
           origin,
+          autoApprove: preset?.autoApprove,
         });
         if (preset) live.role = preset;
         if (wp) live.guide = wp;
@@ -461,7 +462,7 @@ export class SessionManager {
         return;
       }
       case 'session.configure':
-        await this.configure(cmd);
+        await this.configure(cmd, origin);
         return;
       case 'session.fork': {
         const live = this.get(cmd.sessionId);
@@ -502,6 +503,7 @@ export class SessionManager {
       copiedFrom: link ? undefined : o.id,
       customTitle: o.customTitle ? `${o.customTitle}${suffix}` : undefined,
       extraDirs: o.extraDirs,
+      autoApprove: o.autoApprove,
     });
     const role = o.preset ? this.presets?.find(o.preset.id) : undefined;
     const guide = o.workPreset ? this.workPresets?.find(o.workPreset.id) : undefined;
@@ -604,6 +606,7 @@ export class SessionManager {
         workdir: main.info.workdir, // 메인과 같은 작업 폴더
         extraDirs: main.info.extraDirs, // 메인에 연결한 폴더도 같이
         workPreset: main.info.workPreset,
+        autoApprove: Boolean(preset?.autoApprove || main.info.autoApprove), // 메인이 묻지 않으면 맡긴 일도 묻지 않는다
         title: prompt.slice(0, 60),
         origin: { via: main.info.via, user: main.info.requestedBy },
       });
@@ -670,6 +673,7 @@ export class SessionManager {
     copiedFrom?: string;
     customTitle?: string;
     extraDirs?: string[];
+    autoApprove?: boolean;
   }): Promise<Live> {
     const info: SessionInfo = {
       id: randomUUID(),
@@ -684,6 +688,7 @@ export class SessionManager {
       copiedFrom: o.copiedFrom,
       customTitle: o.customTitle,
       extraDirs: o.extraDirs?.length ? o.extraDirs : undefined,
+      ...(o.autoApprove ? { autoApprove: true } : {}),
       title: o.title ?? (o.role === 'main' ? '메인 에이전트' : `${o.agent} 작업`),
       workdir: o.workdir,
       requestedBy: o.origin.user,
@@ -738,7 +743,7 @@ export class SessionManager {
    * 같은 작업(id·기록·하위 작업)은 그대로. 새 CLI 는 앞 대화를 모르므로 다음 지시에 지금까지의 대화를 붙인다.
    * 폴더는 그대로 둔다(연결 폴더는 환경에서 따로). 작업 중에는 바꾸지 않는다.
    */
-  private async configure(cmd: Extract<ClientCommand, { type: 'session.configure' }>) {
+  private async configure(cmd: Extract<ClientCommand, { type: 'session.configure' }>, origin: CommandOrigin) {
     const live = this.get(cmd.sessionId);
     if (!live) return;
     const fail = (message: string) => this.publish({ type: 'error', sessionId: cmd.sessionId, message });
@@ -760,6 +765,9 @@ export class SessionManager {
     const presetChanged = cmd.preset !== undefined && (cmd.preset ?? undefined) !== info.preset?.id;
     let model = cmd.model !== undefined ? (cmd.model ?? undefined) : info.model;
     if (cmd.model === undefined && (presetChanged || agent !== info.agent)) model = preset?.model;
+    // 권한 묻지 않기: 정했으면 그 값, 에이전트를 새로 고르면 그 에이전트의 값, 아니면 그대로. 켜는 건 PC 앞에서만
+    let autoApprove = cmd.autoApprove ?? (presetChanged ? Boolean(preset?.autoApprove) : Boolean(info.autoApprove));
+    if (autoApprove && !info.autoApprove && origin.via !== 'local') return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
     if (info.status !== 'ended') live.adapter.stop();
@@ -775,6 +783,8 @@ export class SessionManager {
     info.model = model;
     info.preset = preset ? { id: preset.id, name: preset.name } : undefined;
     info.workPreset = wp ? { id: wp.id, name: wp.name } : undefined;
+    if (autoApprove) info.autoApprove = true;
+    else delete info.autoApprove;
     info.status = 'starting';
     this.publish({ type: 'session.configured', sessionId: info.id, session: { ...info } });
     live.adapter = this.makeAdapter(agent);
@@ -785,6 +795,11 @@ export class SessionManager {
     if (live.info.status === 'ended') return;
     const full = { ...ev, sessionId: live.info.id } as HostEvent;
     this.publish(full);
+    // 권한 묻지 않기: 요청과 허용을 기록에만 남기고 바로 허용한다
+    if (ev.type === 'permission.request' && live.info.autoApprove) {
+      this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: true, by: '자동 허용' });
+      live.adapter.respondPermission(ev.requestId, true);
+    }
     const turn = live.turn;
     if (turn) {
       if (ev.type === 'agent.text' && !ev.partial) turn.texts.push(ev.text);

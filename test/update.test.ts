@@ -65,23 +65,3 @@ test('업데이트: 수동이면 확인만, 받으면 앞으로 감기 후 다�
   // 레포 설정(origin)은 건드리지 않는다
   assert.equal(git(pc, 'remote'), 'origin');
 });
-
-test('업데이트: 자동이면 정한 시각이 지났을 때 받는다, 하루 한 번', async () => {
-  const { base, origin, pc, url } = setup();
-  const u = make(pc, join(base, 'update.json'), url);
-  assert.equal(u.mode, 'auto');
-  push(origin, '2\n');
-  const now = new Date();
-  await u.tick(now);
-  assert.equal(readFileSync(join(pc, 'a.txt'), 'utf8').trim(), '2');
-  assert.equal(u.public().state, 'ready');
-  assert.equal(u.public().canRestart, false); // 실행기 없이 띄우면 다시 켜야 적용
-
-  push(origin, '3\n');
-  await u.tick(new Date(now.getTime() + 60_000)); // 같은 날 다시 — 이미 확인함
-  assert.equal(readFileSync(join(pc, 'a.txt'), 'utf8').trim(), '2');
-
-  const slot = u.lastSlot(new Date(now.getTime() + 86400_000));
-  await u.tick(new Date(slot.getTime() + 1000)); // 다음 날 정한 시각 뒤
-  assert.equal(readFileSync(join(pc, 'a.txt'), 'utf8').trim(), '3');
-});

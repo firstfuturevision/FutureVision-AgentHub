@@ -100,3 +100,25 @@ test('ACP: 응답이 없으면 제한 시간 뒤 로그인 확인 안내와 함�
   const ended = await waitFor(events, (e) => e.type === 'session.ended', 3000);
   assert.match(ended.reason, /응답 없음.*로그인/);
 });
+
+test('권한 묻지 않기: 켜면 승인 요청을 바로 허용하고, 대시보드에서는 켤 수 없다', async () => {
+  const { sessions, events, id } = await open('normal');
+  await waitFor(events, (e) => e.type === 'session.status' && e.status === 'idle');
+  await sessions.handle({ type: 'session.configure', sessionId: id, autoApprove: true }, phone);
+  assert.match((events.filter((e) => e.type === 'error').at(-1) as any).message, /PC 앞에서만/);
+
+  await sessions.handle({ type: 'session.configure', sessionId: id, autoApprove: true }, pc);
+  await waitFor(events, () => sessions.info(id)?.autoApprove === true && sessions.info(id)?.status === 'idle');
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'please write' }, pc);
+  const resolved = await waitFor(events, (e) => e.type === 'permission.resolved');
+  assert.equal(resolved.by, '자동 허용');
+  assert.equal(resolved.allow, true);
+  const result = await waitFor(events, (e) => e.type === 'agent.tool_result');
+  assert.equal(result.ok, true);
+
+  // 대시보드에서 끄는 건 된다
+  await waitFor(events, (e) => e.type === 'turn.done');
+  await sessions.handle({ type: 'session.configure', sessionId: id, autoApprove: false }, phone);
+  await waitFor(events, () => sessions.info(id)?.autoApprove === undefined && sessions.info(id)?.status === 'idle');
+  sessions.stopAll();
+});

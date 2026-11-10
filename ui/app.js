@@ -879,7 +879,7 @@ function renderPresets() {
   for (const p of presets) {
     const row = el('div', `preset agent-${p.agent}`);
     const head = el('div', 'preset-head');
-    head.append(el('span', 'card-dot'), el('span', 'preset-name', p.name), el('span', 'preset-meta', `${NAMES[p.agent]} · ${p.model ? modelName(p.agent, p.model) : '작업자 기본 모델'}`));
+    head.append(el('span', 'card-dot'), el('span', 'preset-name', p.name), el('span', 'preset-meta', `${NAMES[p.agent]} · ${p.model ? modelName(p.agent, p.model) : '작업자 기본 모델'}${p.autoApprove ? ' · 권한 묻지 않음' : ''}`));
     const edit = el('button', 'ghost', '고치기');
     edit.type = 'button';
     edit.onclick = () => openForm(p);
@@ -915,6 +915,7 @@ async function openForm(p) {
   fillPresetModels(f.agent.value, p?.model);
   f.description.value = p?.description ?? '';
   f.instructions.value = p?.instructions ?? '';
+  f.autoApprove.checked = Boolean(p?.autoApprove);
   if (!toolList.length) await loadTools();
   // 허용 목록: 없으면 "전부", 있으면 "고르기"에 체크
   fillAllow('agents', presets.filter((x) => x.id !== p?.id).map((x) => ({ id: x.id, label: `${x.name} · ${NAMES[x.agent]}` })), p?.agents);
@@ -977,6 +978,7 @@ pform.onsubmit = async (e) => {
     agents: readAllow('agents'),
     tools: readAllow('tools'),
     skills: readAllow('skills'),
+    autoApprove: f.autoApprove.checked,
   };
   const r = await fetch('/presets', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) return flash(await r.text(), true);
@@ -1039,7 +1041,7 @@ function onEvent(ev) {
       Object.assign(s.info, ev.session);
       skillsCache.delete(s.info.id);
       const who = ev.session.preset ? ev.session.preset.name : '기본';
-      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : ''].filter(Boolean).join(' · ');
+      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : '', ev.session.autoApprove ? '권한 묻지 않음' : ''].filter(Boolean).join(' · ');
       s.items.push({ k: 'line meta', t: `설정 바꿈: ${what}. 다음 지시에 앞 대화를 붙여 이어갑니다` });
       break;
     }
@@ -1263,6 +1265,7 @@ function renderPanel() {
   } else {
     role.append(el('div', 'p-item-title', `기본 · ${NAMES[s.info.agent]}${s.info.model ? ` · ${modelName(s.info.agent, s.info.model)}` : ''}`), el('div', 'p-text', '계정 설정 그대로'));
   }
+  if (s.info.autoApprove) role.append(el('div', 'p-warn', '권한 묻지 않음 · 도구를 허용 없이 바로 실행'));
   if (s.info.role !== 'worker') {
     const acts = el('div', 'p-acts');
     const change = el('button', 'p-mini', confEdit === s.info.id ? '닫기' : '바꾸기');
@@ -1343,7 +1346,7 @@ let confEdit = null; // 바꾸기 창이 열린 세션 id
 let confDraft = null; // 고르는 중인 값 — 다른 이벤트로 패널을 다시 그려도 지킨다
 function configForm(s) {
   const f = el('div', 'p-conf');
-  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '' });
+  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '', auto: Boolean(s.info.autoApprove) });
   const field = (label, sel) => {
     const l = el('label', 'p-conf-row');
     l.append(el('span', 'p-meta', label), sel);
@@ -1360,6 +1363,9 @@ function configForm(s) {
   aiSel.append(...AGENTS.map((a) => new Option(NAMES[a], a)));
   aiSel.value = d.ai;
   const mSel = field('모델', el('select'));
+  const auSel = field('권한', el('select'));
+  auSel.append(new Option('묻기', ''), new Option('묻지 않기', '1'));
+  auSel.value = d.auto ? '1' : '';
   const aiRow = aiSel.parentElement;
   // 에이전트를 고르면 AI 는 그 에이전트 것. 모델은 고른 에이전트·AI 기준으로 다시 채운다
   const sync = (keepModel) => {
@@ -1374,7 +1380,8 @@ function configForm(s) {
     Object.assign(d, { wp: wpSel.value, ag: agSel.value, ai: aiSel.value, m: mSel.value });
   };
   sync(d.m);
-  agSel.onchange = () => sync();
+  agSel.onchange = () => { sync(); d.auto = Boolean(presets.find((x) => x.id === agSel.value)?.autoApprove); auSel.value = d.auto ? '1' : ''; };
+  auSel.onchange = () => { d.auto = auSel.value === '1'; };
   aiSel.onchange = () => sync('');
   wpSel.onchange = mSel.onchange = () => Object.assign(d, { wp: wpSel.value, m: mSel.value });
   const busy = s.info.status === 'working' || s.info.status === 'starting';
@@ -1391,6 +1398,7 @@ function configForm(s) {
       preset: agSel.value || null,
       ...(agSel.value ? {} : { agent: aiSel.value }),
       model: mSel.value || null,
+      autoApprove: auSel.value === '1',
     });
     confEdit = null;
     confDraft = null;

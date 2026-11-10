@@ -40,7 +40,8 @@ export class ClaudeAdapter implements AgentAdapter {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--permission-mode', this.opts.permissionMode,
+      // 권한 묻지 않기면 확인 없이 실행(bypassPermissions). 아니면 설정값 — -p 모드라 묻지 못하는 도구는 막힌다
+      '--permission-mode', session.autoApprove ? 'bypassPermissions' : this.opts.permissionMode,
     ];
     for (const d of ctx.extraDirs ?? []) args.push('--add-dir', d); // 연결 폴더
     if (ctx.pluginDir) args.push('--plugin-dir', ctx.pluginDir); // 프리셋: Agent Hub 스킬

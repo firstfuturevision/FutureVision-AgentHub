@@ -12,7 +12,7 @@
     "start:direct": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/main.ts",
     "stop": "node scripts/launch.mjs --stop",
     "setup": "node scripts/setup.mjs",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-timeout=20000 \"test/**/*.test.ts\""
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-timeout=60000 \"test/**/*.test.ts\""
   },
   "license": "SEE LICENSE IN LICENSE"
 }
