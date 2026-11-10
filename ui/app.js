@@ -1108,6 +1108,7 @@ const menu = el('div', 'ctx-menu');
 menu.hidden = true;
 document.body.append(menu);
 function openTaskMenu(s, x, y) {
+  closeMenu();
   menu.replaceChildren();
   const items = [
     ['이름 바꾸기', async () => {
@@ -1131,15 +1132,70 @@ function openTaskMenu(s, x, y) {
     b.onclick = () => { closeMenu(); fn(); };
     menu.append(b);
   }
+  placeMenu(x, y);
+}
+let menuOwner = null; // 메뉴를 연 선택 상자(그 상자를 다시 누르면 닫는다)
+function placeMenu(x, y, above = 0) {
   menu.hidden = false;
   const r = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, innerWidth - r.width - 8)}px`;
-  menu.style.top = `${Math.min(y, innerHeight - r.height - 8)}px`;
+  // 아래 자리가 모자라면 위로 연다(above = 위로 열 때의 기준 y)
+  const top = y + r.height > innerHeight - 8 && above ? above - r.height - 4 : Math.min(y, innerHeight - r.height - 8);
+  menu.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
 }
-const closeMenu = () => (menu.hidden = true);
-document.addEventListener('click', (e) => { if (!menu.contains(e.target)) closeMenu(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+const closeMenu = () => { menu.hidden = true; menu.className = 'ctx-menu'; menu.style.minWidth = ''; menuOwner = null; };
+document.addEventListener('click', (e) => { if (!menu.contains(e.target) && !menuOwner?.contains(e.target)) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { const o = menuOwner; closeMenu(); o?.focus(); } });
 addEventListener('blur', closeMenu);
+// 메뉴 안 화살표 이동
+menu.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const bs = [...menu.querySelectorAll('button')];
+  const i = bs.indexOf(document.activeElement);
+  bs[(i + (e.key === 'ArrowDown' ? 1 : bs.length - 1)) % bs.length]?.focus();
+});
+
+// ── 선택 상자: 브라우저 기본 목록 대신 직접 그린 메뉴로 연다(마우스일 때. 폰은 기본 목록이 편하다) ──
+const finePointer = matchMedia('(pointer: fine)');
+document.addEventListener('mousedown', (e) => {
+  const sel = e.target instanceof Element ? e.target.closest('select') : null;
+  if (!sel || sel.disabled || sel.multiple || e.button !== 0 || !finePointer.matches) return;
+  e.preventDefault();
+  sel.focus();
+  if (menuOwner === sel) return closeMenu();
+  openSelectMenu(sel);
+});
+function openSelectMenu(sel) {
+  closeMenu();
+  menu.replaceChildren();
+  menu.classList.add('sel');
+  const add = (opt) => {
+    if (opt.hidden) return;
+    const b = el('button', opt.selected ? 'on' : '', opt.textContent);
+    b.type = 'button';
+    b.disabled = opt.disabled;
+    b.onclick = () => {
+      closeMenu();
+      sel.focus();
+      if (sel.value === opt.value) return;
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    menu.append(b);
+  };
+  for (const c of sel.children) {
+    if (c.tagName === 'OPTGROUP') { menu.append(el('div', 'ctx-label', c.label)); for (const o of c.children) add(o); }
+    else add(c);
+  }
+  menuOwner = sel;
+  const r = sel.getBoundingClientRect();
+  menu.style.minWidth = `${Math.max(160, r.width)}px`;
+  placeMenu(r.left, r.bottom + 4, r.top);
+  (menu.querySelector('button.on') ?? menu.querySelector('button'))?.focus({ preventScroll: true });
+  menu.querySelector('button.on')?.scrollIntoView({ block: 'nearest' });
+}
 
 function render() {
   renderList();
@@ -1330,7 +1386,9 @@ function renderPanel() {
   }
   const add = $('p-folder-add');
   const used = new Set([s.info.workdir, ...extra]);
-  add.replaceChildren(new Option('＋ 폴더 연결', ''), ...folderList.filter((f) => !used.has(f.path)).map((f) => new Option(f.name || rootName(), f.name || '.')), new Option('다른 폴더 찾기…', '?browse'));
+  const ph = new Option('＋ 폴더 연결', '');
+  ph.hidden = true; // 상자에만 보이고 목록에는 안 나온다
+  add.replaceChildren(ph, ...folderList.filter((f) => !used.has(f.path)).map((f) => new Option(f.name || rootName(), f.name || '.')), new Option('다른 폴더 찾기…', '?browse'));
 
   // 허용: 메인 프리셋이 정한 하위 에이전트 · 툴
   const al = $('p-allow');
