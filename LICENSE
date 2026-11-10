@@ -1,21 +1,76 @@
-MIT License
+FutureVision Agent Hub License 1.0
 
-Copyright (c) 2026 firstfuturevision
+Copyright (c) 2026 firstfuturevision. All rights not expressly granted below are reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+"Software" means FutureVision Agent Hub, in source or compiled form, and any part of it.
+"Licensor" means firstfuturevision.
+"You" means the person or organization exercising rights under this license.
+"Official Website" means [OFFICIAL_WEBSITE_URL], or another address the Licensor
+announces in the Software's repository.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Grant
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Subject to the terms below, the Licensor grants You a free, worldwide, non-exclusive,
+non-transferable license to use, copy, and modify the Software, to create derivative
+works of it, and to distribute it and Your derivative works, only for Permitted Purposes.
+
+2. Permitted Purposes
+
+a) Personal use, study, research, and evaluation.
+b) Non-commercial use.
+c) Internal use inside Your own organization, including running Your own business
+   operations with it, as long as You do not provide the Software, a derivative work,
+   or access to either to any third party in exchange for payment or other commercial
+   benefit.
+
+3. Commercial Use Requires a Commercial License
+
+Unless You have a commercial license obtained through the Official Website or a written
+agreement signed by the Licensor, You may not:
+
+a) sell, rent, lease, sublicense, or otherwise commercially distribute the Software or
+   a derivative work;
+b) offer the Software or a derivative work to third parties as a hosted, managed,
+   cloud, or software-as-a-service offering;
+c) charge any fee for access to, installation of, or use of the Software or a
+   derivative work, including bundling it into a paid product, or delivering it as
+   part of paid consulting or development work whose value comes substantially from
+   the Software;
+d) use the Software or a derivative work to build or operate a product or service
+   that competes with the commercial offerings available on the Official Website.
+
+4. Conditions for Distribution
+
+a) Anyone who receives the Software or a derivative work from You must also receive a
+   complete, unmodified copy of this license.
+b) Derivative works You distribute must be licensed under this same license.
+c) You must not remove or change any copyright, license, or attribution notice in the
+   Software.
+
+5. Trademarks
+
+This license grants no right to use the names "FutureVision", "Agent Hub", or the
+Licensor's logos or trademarks, except as needed to state truthfully where the
+Software came from.
+
+6. Termination
+
+Your rights under this license end automatically if You break any of its terms. If You
+stop the violation within 30 days after receiving notice from the Licensor, and it is
+Your first violation, Your rights are restored.
+
+7. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+8. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+9. Governing Law
+
+This license is governed by the laws of the Republic of Korea.

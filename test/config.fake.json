@@ -1,0 +1,6 @@
+{
+  "port": 4318,  "dataDir": "./data-fake",
+  "claude": { "command": "node", "extraArgs": ["./test/fake-claude.mjs"], "permissionMode": "default" },
+  "gemini": { "command": "node", "args": ["./test/fake-acp.mjs", "normal"] },
+  "codex": { "command": "node", "args": ["./test/fake-acp.mjs", "auth"] }
+}
