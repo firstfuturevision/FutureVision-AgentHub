@@ -995,11 +995,13 @@ es.onopen = () => {
   // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 그린다.
   sessions.clear();
   render();
-  link.textContent = '호스트 연결됨';
+  link.textContent = '';
+  link.title = '이 PC 의 Agent Hub 에 연결됨';
   link.classList.remove('off');
 };
 es.onerror = () => {
-  link.textContent = '연결 끊김, 다시 연결 중';
+  link.textContent = '연결 끊김';
+  link.title = '다시 연결하는 중';
   link.classList.add('off');
 };
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
@@ -1440,7 +1442,7 @@ function workerState(w) {
 
 function fillLinks(box, links) {
   box.replaceChildren();
-  if (!links.length) box.append(el('div', 'p-empty', '없음'));
+  box.closest('.psec').hidden = !links.length; // 빈 칸은 숨긴다
   for (const l of links) {
     const b = el('button', 'p-item p-link');
     b.type = 'button';
@@ -1494,7 +1496,6 @@ function renderSchedules(s) {
     fetch('/schedules?sessionId=' + encodeURIComponent(s.info.id)).then((r) => (r.ok ? r.json() : [])).then((l) => { scheduleCache.set(s.info.id, l); renderPanel(); }).catch(() => scheduleCache.set(s.info.id, []));
     return;
   }
-  if (!list.length && !schedForm) box.append(el('div', 'p-empty', '없음'));
   for (const x of list) {
     const row = el('div', 'p-item sched' + (x.enabled ? '' : ' off'));
     const body = el('button', 'sched-body');

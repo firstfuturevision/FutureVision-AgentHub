@@ -42,10 +42,10 @@ select:disabled { opacity: .45; cursor: default; }
 .side-top { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px 12px; }
 .brand { font-weight: 600; font-size: 16px; }
 .side-nav { display: flex; flex-direction: column; gap: 1px; }
-.side-nav button, .new-task { text-align: left; padding: 7px 10px; font-size: 14px; display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.side-nav button, .new-task, .side-set { text-align: left; padding: 7px 10px; font-size: 14px; display: flex; align-items: center; gap: 10px; color: var(--ink); }
 .side-nav button[aria-current="true"] { background: var(--hover); }
 .nav-ico { width: 16px; text-align: center; color: var(--ink-soft); }
-.new-task { margin-top: 2px; }
+.new-task { margin: 2px 0 10px; }
 .side-label { font-size: 12px; color: var(--ink-faint); padding: 14px 10px 4px; }
 .task-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; min-height: 0; }
 .task { position: relative; text-align: left; padding: 7px 30px 7px 10px; display: flex; flex-direction: column; gap: 0; width: 100%; }
@@ -69,9 +69,12 @@ select:disabled { opacity: .45; cursor: default; }
 .task:hover .task-more, .task[aria-current="true"] .task-more { opacity: 1; }
 .task-more:hover { background: var(--rule); color: var(--ink); }
 @media (hover: none) { .task-more { opacity: 1; } }
-.side-bottom { padding: 6px 10px 0; }
-.link { font-size: 11px; color: var(--ink-faint); }
-.link.off { color: var(--warn); }
+.side-bottom { display: flex; align-items: center; gap: 8px; padding-top: 6px; border-top: 1px solid var(--rule); }
+.side-set { flex: 1; color: var(--ink-soft) !important; }
+.side-set[aria-current="true"] { background: var(--hover); color: var(--ink) !important; }
+.link { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--warn); padding-right: 10px; white-space: nowrap; }
+.link::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.link.off::before { background: var(--warn); }
 
 .ctx-menu { position: fixed; z-index: 20; min-width: 160px; padding: 4px; background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); display: flex; flex-direction: column; }
 .ctx-menu button { text-align: left; padding: 8px 12px; font-size: 14px; }
@@ -93,7 +96,7 @@ select:disabled { opacity: .45; cursor: default; }
 
 .scroll { flex: 1; overflow-y: auto; }
 .welcome { max-width: 720px; margin: 20vh auto 0; padding: 0 20px; text-align: center; }
-.welcome h2 { font-weight: 400; font-size: 30px; margin: 0 0 12px; letter-spacing: -.01em; }
+.welcome h2 { font-weight: 400; font-size: 30px; margin: 0 0 16px; letter-spacing: -.01em; }
 .welcome p { color: var(--ink-soft); margin: 0; font-size: 14px; }
 .choose-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 /* 새 작업: 메인 에이전트 고르기 */
@@ -195,8 +198,10 @@ select:disabled { opacity: .45; cursor: default; }
 .settings .hint { margin: 0 0 14px; font-size: 13px; color: var(--ink-soft); }
 .settings .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .settings .row button { padding: 8px 14px; border: 1px solid var(--rule); font-size: 14px; }
-.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.sec-head button { border: 1px solid var(--rule); }
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.sec-head .hint { margin: 0 !important; }
+.sec-head button { border: 1px solid var(--rule); flex: none; }
+.hint code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: var(--hover); }
 .dot { display: none; }
 .ext-empty { font-size: 13px; color: var(--ink-faint); padding: 8px 0; margin: 0; }
 
@@ -378,3 +383,4 @@ select:disabled { opacity: .45; cursor: default; }
 .check-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
 /* 분담 표시 */
 .task-tag { flex: none; font-size: 11px; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 0 4px; line-height: 16px; }
+body:has(#chat[hidden]) .task[aria-current="true"] { background: transparent; }
