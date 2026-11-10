@@ -376,3 +376,5 @@ select:disabled { opacity: .45; cursor: default; }
 /* 권한 묻지 않기 */
 .p-warn { font-size: 12px; color: var(--warn); margin-top: 6px; }
 .check-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+/* 분담 표시 */
+.task-tag { flex: none; font-size: 11px; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 0 4px; line-height: 16px; }

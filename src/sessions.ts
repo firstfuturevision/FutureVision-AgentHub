@@ -75,7 +75,7 @@ function conversation(history: HostEvent[], upTo?: number): string[] {
       users++;
       lines.push(`사람(${e.from}): ${e.text}`);
     } else if (e.type === 'agent.text' && !e.partial) lines.push(`에이전트: ${e.text}`);
-    else if (e.type === 'session.merged') lines.push(`[포크 공유: ${e.title}]\n${e.text}`);
+    else if (e.type === 'session.merged') lines.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${e.text}`);
   }
   return lines;
 }
@@ -471,11 +471,18 @@ export class SessionManager {
         await this.forkLive(live, origin, ' (포크)', cmd.upTo);
         return;
       }
+      case 'session.split': {
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        if (live.info.role === 'worker') return this.publish({ type: 'error', sessionId: cmd.sessionId, message: '하위 에이전트는 분담할 수 없음. 메인 작업을 분담하세요' });
+        await this.forkLive(live, origin, ' (분담)', undefined, 'split');
+        return;
+      }
       case 'session.copy': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         if (live.info.role === 'worker') return this.publish({ type: 'error', sessionId: cmd.sessionId, message: '하위 에이전트는 복사할 수 없음' });
-        await this.forkLive(live, origin, ' (사본)', undefined, false);
+        await this.forkLive(live, origin, ' (사본)', undefined, 'copy');
         return;
       }
       case 'terminal.open':
@@ -488,7 +495,7 @@ export class SessionManager {
    * 같은 설정·폴더로 새 작업을 만들고 지금까지의 대화를 이어받게 한다.
    * 에이전트·프리셋도 이어받는다(전용 프로필, 첫 지시의 역할·작업 환경 지침).
    */
-  private async forkLive(live: Live, origin: CommandOrigin, suffix: string, upTo?: number, link = true): Promise<Live> {
+  private async forkLive(live: Live, origin: CommandOrigin, suffix: string, upTo?: number, kind: 'fork' | 'split' | 'copy' = 'fork'): Promise<Live> {
     const o = live.info;
     const copy = await this.create({
       agent: o.agent,
@@ -499,8 +506,10 @@ export class SessionManager {
       workPreset: o.workPreset,
       workdir: o.workdir,
       origin,
-      forkedFrom: link ? o.id : undefined, // 복사는 원본과 잇지 않는다(공유 없음)
-      copiedFrom: link ? undefined : o.id,
+      forkedFrom: kind === 'fork' ? o.id : undefined, // 포크: 포크 → 원본 공유
+      splitFrom: kind === 'split' ? o.id : undefined, // 분담: 서로 공유
+      splitLines: kind === 'split' ? conversation(live.history).length : undefined,
+      copiedFrom: kind === 'copy' ? o.id : undefined, // 복사: 공유 없음
       customTitle: o.customTitle ? `${o.customTitle}${suffix}` : undefined,
       extraDirs: o.extraDirs,
       autoApprove: o.autoApprove,
@@ -670,6 +679,8 @@ export class SessionManager {
     title?: string;
     parentId?: string;
     forkedFrom?: string;
+    splitFrom?: string;
+    splitLines?: number;
     copiedFrom?: string;
     customTitle?: string;
     extraDirs?: string[];
@@ -685,6 +696,8 @@ export class SessionManager {
       preset: o.preset,
       workPreset: o.workPreset,
       forkedFrom: o.forkedFrom,
+      splitFrom: o.splitFrom,
+      ...(o.splitFrom ? { splitLines: o.splitLines ?? 0 } : {}),
       copiedFrom: o.copiedFrom,
       customTitle: o.customTitle,
       extraDirs: o.extraDirs?.length ? o.extraDirs : undefined,
@@ -810,7 +823,7 @@ export class SessionManager {
     }
     if (ev.type === 'turn.done') {
       this.setStatus(live, 'idle');
-      this.shareFork(live);
+      this.share(live);
     }
     if (ev.type === 'session.ended') {
       live.info.status = 'ended';
@@ -826,18 +839,37 @@ export class SessionManager {
    * 원본이 끝났으면 기록에만 남아 원본을 다시 포크할 때 함께 이어받는다.
    * 포크의 포크는 바로 위 원본에 공유되고, 그 원본의 다음 답이 끝날 때 다시 위로 올라간다.
    */
-  private shareFork(live: Live) {
-    const parent = live.info.forkedFrom ? this.sessions.get(live.info.forkedFrom) : undefined;
-    if (!parent || live.info.role !== 'main') return;
-    const lines = conversation(live.history);
-    const prev = parent.history.filter((e) => e.type === 'session.merged' && e.fromId === live.info.id).at(-1);
-    const fresh = lines.slice(prev && prev.type === 'session.merged' ? prev.lines : 0);
+  /** 답이 끝날 때마다: 포크 → 원본, 분담한 쪽 → 원본, 원본 → 분담한 쪽들 */
+  private share(live: Live) {
+    if (live.info.role === 'worker') return;
+    const get = (id?: string) => (id ? this.sessions.get(id) : undefined);
+    const fork = get(live.info.forkedFrom);
+    if (fork) this.shareTo(live, fork, 'fork');
+    const origin = get(live.info.splitFrom);
+    if (origin) this.shareTo(live, origin, 'split');
+    for (const s of this.sessions.values()) if (s.info.splitFrom === live.info.id) this.shareTo(live, s, 'split');
+  }
+
+  /**
+   * from 의 대화 중 지난번에 target 에게 보낸 뒤로 새로 생긴 것을 target 기록에 남기고, 진행 중이면 다음 지시에 붙인다.
+   * target 에게서 받은 공유는 빼고 센다(양쪽 공유가 서로 메아리치지 않게).
+   */
+  private shareTo(from: Live, target: Live, kind: 'fork' | 'split') {
+    const lines = conversation(from.history.filter((e) => !(e.type === 'session.merged' && e.fromId === target.info.id)));
+    const prev = target.history.filter((e) => e.type === 'session.merged' && e.fromId === from.info.id).at(-1);
+    // 처음 보낼 때: 원본 → 분담이면 분담할 때까지의 대화는 이미 이어받았으니 그 뒤부터
+    const base = target.info.splitFrom === from.info.id ? (target.info.splitLines ?? 0) : 0;
+    const fresh = lines.slice(prev && prev.type === 'session.merged' ? prev.lines : base);
     if (!fresh.length) return;
-    const firstUser = live.history.find((e) => e.type === 'user.message');
-    const title = live.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : '포크');
+    const firstUser = from.history.find((e) => e.type === 'user.message');
+    const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : kind === 'split' ? '분담' : '포크');
     const text = tail(fresh.join('\n'));
-    this.publish({ type: 'session.merged', sessionId: parent.info.id, fromId: live.info.id, title, text, lines: lines.length });
-    if (parent.info.status !== 'ended') (parent.merges ??= []).push(`[포크 공유: ${title} — 원본에서 갈라져 따로 진행한 대화. 결과를 반영한다]\n${text}`);
+    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: lines.length, ...(kind === 'split' ? { kind } : {}) });
+    if (target.info.status === 'ended') return;
+    const head = kind === 'split'
+      ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 진행한 대화. 겹치지 않게 반영한다]`
+      : `[포크 공유: ${title} — 원본에서 갈라져 따로 진행한 대화. 결과를 반영한다]`;
+    (target.merges ??= []).push(`${head}\n${text}`);
   }
 
   private setStatus(live: Live, status: SessionInfo['status']) {

@@ -24,6 +24,8 @@ export interface SessionInfo {
   workPreset?: { id: string; name: string }; // 작업 환경 프리셋(폴더 구조·작업 방식 지침)
   customTitle?: string; // 사람이 바꾼 이름(없으면 화면이 첫 마디로 이름을 짓는다)
   forkedFrom?: string; // 포크한 원래 세션 id(포크에서 한 일이 여기로 공유된다)
+  splitFrom?: string; // 분담한 원래 세션 id(원본과 분담이 서로 한 일을 주고받는다)
+  splitLines?: number; // 분담할 때 원본 대화 줄 수 — 원본 → 분담 공유는 그 뒤부터(앞은 이미 이어받음)
   copiedFrom?: string; // 복사한 원래 세션 id(대화는 이어받지만 공유하지 않음)
   extraDirs?: string[]; // 작업 폴더 말고 더 연결한 폴더(절대 경로, 작업 폴더 뿌리 안)
   autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
@@ -59,7 +61,7 @@ export type HostEvent =
   | { type: 'session.configured'; sessionId: string; session: SessionInfo }
   // 포크 공유: 포크의 답이 끝날 때마다 새로 생긴 대화를 원본 기록에 남긴다. 원본이 진행 중이면 다음 지시에 붙어 간다.
   // lines = 지금까지 공유한 포크 대화 줄 수(다음엔 그 뒤만). 이름은 기록 파일과 맞추려고 merged 그대로
-  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number }
+  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split' } // kind 없으면 포크 공유
   | { type: 'error'; sessionId?: string; agent?: AgentKind; message: string };
 
 // 화면 → 호스트
@@ -71,6 +73,7 @@ export type ClientCommand =
   | { type: 'session.rename'; sessionId: string; title: string }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
+  | { type: 'session.split'; sessionId: string } // 분담: 포크처럼 이어받고, 원본과 서로 한 일을 주고받는다(양쪽 공유)
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
   // 에이전트 설정 바꾸기: null = 없앰(기본), 없음 = 그대로. 메인 CLI 를 새 설정으로 다시 띄우고 지금까지의 대화를 다음 지시에 붙인다
@@ -177,6 +180,7 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       return { type: 'session.fork', sessionId: c.sessionId as string, ...(upTo !== undefined ? { upTo } : {}) };
     }
     case 'session.copy':
+    case 'session.split':
     case 'session.delete':
       if (!str(c.sessionId)) return null;
       return { type: c.type, sessionId: c.sessionId as string };

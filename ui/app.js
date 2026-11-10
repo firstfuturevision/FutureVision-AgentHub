@@ -1021,6 +1021,7 @@ function onEvent(ev) {
     const info = ev.session;
     sessions.set(info.id, { info, items: [], draft: null });
     if (info.forkedFrom && pendingFork === info.forkedFrom) { viewId = info.id; pendingFork = null; } // 포크하면 새 작업으로 이동
+    else if (info.splitFrom && pendingFork === info.splitFrom) { viewId = info.id; pendingFork = null; } // 분담도
     else if (info.copiedFrom && pendingCopy === info.copiedFrom) { viewId = info.id; pendingCopy = null; } // 복사도
     if (info.role === 'worker') sessions.get(info.parentId)?.items.push({ k: 'worker', id: info.id });
     if (info.role === 'main' && pendingFirst && info.via === 'local' && !info.forkedFrom) {
@@ -1045,7 +1046,7 @@ function onEvent(ev) {
       s.items.push({ k: 'line meta', t: `설정 바꿈: ${what}. 다음 지시에 앞 대화를 붙여 이어갑니다` });
       break;
     }
-    case 'session.merged': s.items.push({ k: 'merged', t: ev.title, text: ev.text, fromId: ev.fromId }); break;
+    case 'session.merged': s.items.push({ k: 'merged', t: ev.title, text: ev.text, fromId: ev.fromId, split: ev.kind === 'split' }); break;
     case 'session.ended': s.info.status = 'ended'; s.draft = null; s.items.push({ k: 'line err', t: `끝남: ${ev.reason}` }); break;
     case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = Date.now(); break;
     case 'agent.text':
@@ -1090,11 +1091,11 @@ const pendingPerm = (s) => s.info.status !== 'ended' && s.items.some((it) => it.
 const waitingIn = (s) => pendingPerm(s) || workersOf(s).some(pendingPerm);
 const titleOf = (s) => {
   const first = s.items.find((it) => it.k === 'user');
-  return s.info.customTitle || first?.t || (first?.files?.length ? first.files[0].name : '') || (s.info.forkedFrom ? '포크한 작업' : s.info.copiedFrom ? '복사한 작업' : '새 작업');
+  return s.info.customTitle || first?.t || (first?.files?.length ? first.files[0].name : '') || (s.info.forkedFrom ? '포크한 작업' : s.info.splitFrom ? '분담한 작업' : s.info.copiedFrom ? '복사한 작업' : '새 작업');
 };
 
-// ── 작업 메뉴: 우클릭 또는 ⋯ → 이름 바꾸기 · 포크 · 복사 · 삭제 ──
-// 포크 = 대화를 이어받아 갈라짐(답이 끝날 때마다 원본에 공유), 복사 = 대화까지 가져가는 따로 된 사본
+// ── 작업 메뉴: 우클릭 또는 ⋯ → 이름 바꾸기 · 포크 · 분담 · 복사 · 삭제 ──
+// 포크 = 대화를 이어받아 갈라짐(답이 끝날 때마다 원본에 공유), 분담 = 이어받고 원본과 서로 공유, 복사 = 공유 없는 사본
 let pendingFork = null;
 let pendingCopy = null;
 function forkTask(s, upTo) {
@@ -1112,6 +1113,7 @@ function openTaskMenu(s, x, y) {
       if (t && t.trim()) send({ type: 'session.rename', sessionId: s.info.id, title: t.trim() });
     }],
     ['포크', () => forkTask(s)],
+    ['분담', () => { pendingFork = s.info.id; send({ type: 'session.split', sessionId: s.info.id }); }],
     ['복사', () => {
       pendingCopy = s.info.id;
       send({ type: 'session.copy', sessionId: s.info.id });
@@ -1415,6 +1417,8 @@ function renderLinks(s) {
   const forks = [];
   if (s.info.forkedFrom && sessions.get(s.info.forkedFrom)) forks.push({ s: sessions.get(s.info.forkedFrom), label: '포크 원본', sub: titleOf(sessions.get(s.info.forkedFrom)) });
   for (const f of sessions.values()) if (f.info.forkedFrom === s.info.id) forks.push({ s: f, label: '포크', sub: titleOf(f) });
+  if (s.info.splitFrom && sessions.get(s.info.splitFrom)) forks.push({ s: sessions.get(s.info.splitFrom), label: '분담 원본', sub: titleOf(sessions.get(s.info.splitFrom)) });
+  for (const f of sessions.values()) if (f.info.splitFrom === s.info.id) forks.push({ s: f, label: '분담', sub: titleOf(f) });
   const running = [];
   const rest = [];
   for (const w of workersOf(s)) {
@@ -1610,7 +1614,8 @@ function renderList() {
   const list = $('task-list');
   list.replaceChildren();
   const all = mains();
-  const kidsOf = (s) => all.filter((k) => k.info.forkedFrom === s.info.id).reverse();
+  const parentOf = (k) => k.info.forkedFrom ?? k.info.splitFrom;
+  const kidsOf = (s) => all.filter((k) => parentOf(k) === s.info.id).reverse();
   const holds = (s, id) => kidsOf(s).some((k) => k.info.id === id || holds(k, id));
   const group = (s, depth) => {
     const g = el('div', 'task-group');
@@ -1624,7 +1629,7 @@ function renderList() {
     }
     return g;
   };
-  for (const s of all) if (!s.info.forkedFrom || !sessions.get(s.info.forkedFrom)) list.append(group(s, 0));
+  for (const s of all) if (!parentOf(s) || !sessions.get(parentOf(s))) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
 }
 
@@ -1636,12 +1641,13 @@ function taskRow(s, depth, open) {
   const wait = waitingIn(s);
   const time = new Date(s.info.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
+  if (depth && s.info.splitFrom) head.append(el('span', 'task-tag', '분담')); // 서로 공유하는 갈래
   head.append(el('span', 'task-title', titleOf(s)));
   if (open !== null) {
     const fold = el('span', `task-fold${open ? '' : ' shut'}`);
     fold.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     fold.setAttribute('role', 'button');
-    fold.setAttribute('aria-label', open ? '포크 접기' : '포크 펼치기');
+    fold.setAttribute('aria-label', open ? '갈래 접기' : '갈래 펼치기');
     fold.onclick = (e) => {
       e.stopPropagation();
       if (open) folded.add(s.info.id);
@@ -1694,6 +1700,9 @@ function renderChat() {
     if (s.info.forkedFrom) {
       const from = sessions.get(s.info.forkedFrom);
       log.append(el('div', 'note', from ? `${titleOf(from)} 에서 포크. 여기서 한 일은 원본에 공유돼요` : '지워진 작업에서 포크'));
+    } else if (s.info.splitFrom) {
+      const from = sessions.get(s.info.splitFrom);
+      log.append(el('div', 'note', from ? `${titleOf(from)} 와 분담. 서로 한 일이 다음 지시에 공유돼요` : '지워진 작업에서 분담'));
     } else if (s.info.copiedFrom) {
       const from = sessions.get(s.info.copiedFrom);
       log.append(el('div', 'note', `${from ? titleOf(from) : '지워진 작업'} 에서 복사`));
@@ -1830,7 +1839,7 @@ function agentItem(s, it, upTo) {
 /** 포크에서 공유받은 대화: 접힌 카드, 누르면 그 대화 */
 function mergedItem(it) {
   const box = el('details', 'merged');
-  const head = el('summary', '', `포크 공유 · ${it.t}`);
+  const head = el('summary', '', `${it.split ? '분담' : '포크'} 공유 · ${it.t}`);
   box.append(head, el('div', 'merged-body', it.text));
   return box;
 }
