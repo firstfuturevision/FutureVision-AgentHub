@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { SHARED_READONLY, uniqueName } from './presets.ts';
 
 /**
  * 프리셋 — 작업 환경. 새 작업을 시작할 때 고른다.
@@ -18,11 +19,13 @@ export interface WorkPreset {
   guidelines: string;
   mainAgent?: string; // 이 프리셋으로 시작할 때 기본 메인 에이전트(에이전트 id). 없으면 기본(Claude)
   agents?: string[]; // 이 작업에서 맡길 수 있는 하위 에이전트(에이전트 id). 없으면 전부
+  shared?: true; // 공유 레포에서 받은 것(읽기 전용)
 }
 
 export class WorkPresetStore {
   private file: string;
   private items: WorkPreset[] = [];
+  private shared: WorkPreset[] = [];
 
   constructor(file: string) {
     this.file = file;
@@ -37,18 +40,53 @@ export class WorkPresetStore {
   }
 
   list(): WorkPreset[] {
-    return this.items.map((p) => ({ ...p, extraDirs: [...p.extraDirs] }));
+    return [...this.shared.map((p) => ({ ...p, extraDirs: [...p.extraDirs], shared: true as const })), ...this.items.map((p) => ({ ...p, extraDirs: [...p.extraDirs] }))];
   }
 
   find(key: string): WorkPreset | undefined {
     const k = key.trim().toLowerCase();
-    return this.items.find((p) => p.id === key || p.name.toLowerCase() === k);
+    const hit = (p: WorkPreset) => p.id === key || p.name.toLowerCase() === k;
+    const s = this.shared.find(hit);
+    return s ? { ...s, shared: true } : this.items.find(hit);
+  }
+
+  setShared(items: WorkPreset[]) {
+    this.shared = items.map((p) => ({ ...p }));
+  }
+
+  isShared(id: string): boolean {
+    return this.shared.some((p) => p.id === id);
+  }
+
+  renameLocal(name: string): boolean {
+    const p = this.items.find((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!p) return false;
+    p.name = uniqueName(name, (n) => this.items.some((x) => x !== p && x.name.toLowerCase() === n.toLowerCase()));
+    this.flush();
+    return true;
+  }
+
+  /** 이 PC 프리셋이 가리키던 에이전트 id 를 바꾼다 */
+  remapAgent(from: string, to: string) {
+    let changed = false;
+    for (const p of this.items) {
+      if (p.mainAgent === from) { p.mainAgent = to; changed = true; }
+      if (p.agents?.includes(from)) { p.agents = [...new Set(p.agents.map((x) => (x === from ? to : x)))]; changed = true; }
+    }
+    if (changed) this.flush();
+  }
+
+  private flush() {
+    mkdirSync(dirname(this.file), { recursive: true });
+    writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 2));
+    renameSync(`${this.file}.tmp`, this.file);
   }
 
   save(input: unknown): WorkPreset {
+    if (typeof (input as any)?.id === 'string' && this.isShared((input as any).id)) throw new Error(SHARED_READONLY);
     const existing = typeof (input as any)?.id === 'string' ? this.items.find((p) => p.id === (input as any).id) : undefined;
     const p = validate(input, existing?.id ?? randomUUID().slice(0, 8), true)!;
-    if (this.items.some((x) => x.id !== p.id && x.name.toLowerCase() === p.name.toLowerCase())) throw new Error(`같은 이름의 프리셋이 있음: ${p.name}`);
+    if ([...this.shared, ...this.items].some((x) => x.id !== p.id && x.name.toLowerCase() === p.name.toLowerCase())) throw new Error(`같은 이름의 프리셋이 있음: ${p.name}`);
     this.items = existing ? this.items.map((x) => (x.id === p.id ? p : x)) : [...this.items, p];
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 2));
@@ -57,12 +95,18 @@ export class WorkPresetStore {
   }
 
   remove(id: string) {
+    if (this.isShared(id)) throw new Error(SHARED_READONLY);
     const n = this.items.length;
     this.items = this.items.filter((p) => p.id !== id);
     if (this.items.length === n) return;
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 2));
     renameSync(`${this.file}.tmp`, this.file);
   }
+}
+
+/** 공유 레포의 프리셋 → 검사한 값(틀리면 null) */
+export function parseWorkPreset(v: unknown, id: string): WorkPreset | null {
+  return validate(v, id);
 }
 
 const FOLDER_RE = /^[^\\/:*?"<>|\x00-\x1f]{1,60}$/; // 뿌리 바로 아래 폴더 이름 하나

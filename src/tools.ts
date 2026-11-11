@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { SHARED_READONLY } from './presets.ts';
 
 /**
  * 툴 — Agent Hub 가 띄우는 모든 세션(메인·작업자)에 붙이는 MCP 서버.
@@ -17,6 +18,7 @@ export interface Tool {
   args?: string[]; // stdio
   description: string;
   enabled: boolean;
+  shared?: true; // 공유 레포에서 받은 것(읽기 전용)
 }
 
 const NAME_RE = /^[a-z][a-z0-9_-]{0,39}$/;
@@ -25,6 +27,7 @@ const RESERVED = new Set(['hub']); // 메인의 clink 서버 이름
 export class ToolStore {
   private file: string;
   private items: Tool[] = [];
+  private shared: Tool[] = [];
 
   constructor(file: string) {
     this.file = file;
@@ -39,7 +42,27 @@ export class ToolStore {
   }
 
   list(): Tool[] {
-    return this.items.map((t) => ({ ...t, args: t.args ? [...t.args] : undefined }));
+    const copy = (t: Tool) => ({ ...t, args: t.args ? [...t.args] : undefined });
+    return [...this.shared.map((t) => ({ ...copy(t), shared: true as const })), ...this.items.map(copy)];
+  }
+
+  setShared(items: Tool[]) {
+    this.shared = items.map((t) => ({ ...t }));
+  }
+
+  isShared(id: string): boolean {
+    return this.shared.some((t) => t.id === id);
+  }
+
+  /** 이 PC 툴 중 같은 이름이 있으면 -mine 을 붙여 남긴다(툴 이름은 영문 소문자라) */
+  renameLocal(name: string): boolean {
+    const t = this.items.find((x) => x.name === name);
+    if (!t) return false;
+    let n = '';
+    for (let i = 1; i < 100 && (!n || this.items.some((x) => x.name === n)); i++) n = `${name.slice(0, 33)}-mine${i > 1 ? i : ''}`;
+    t.name = n;
+    this.flush();
+    return true;
   }
 
   enabled(): Tool[] {
@@ -47,15 +70,17 @@ export class ToolStore {
   }
 
   save(input: unknown): Tool {
+    if (typeof (input as any)?.id === 'string' && this.isShared((input as any).id)) throw new Error(SHARED_READONLY);
     const existing = typeof (input as any)?.id === 'string' ? this.items.find((t) => t.id === (input as any).id) : undefined;
     const t = validate(input, existing?.id ?? randomUUID().slice(0, 8), true)!;
-    if (this.items.some((x) => x.id !== t.id && x.name === t.name)) throw new Error(`같은 이름의 툴이 있음: ${t.name}`);
+    if ([...this.shared, ...this.items].some((x) => x.id !== t.id && x.name === t.name)) throw new Error(`같은 이름의 툴이 있음: ${t.name}`);
     this.items = existing ? this.items.map((x) => (x.id === t.id ? t : x)) : [...this.items, t];
     this.flush();
     return t;
   }
 
   remove(id: string) {
+    if (this.isShared(id)) throw new Error(SHARED_READONLY);
     const n = this.items.length;
     this.items = this.items.filter((t) => t.id !== id);
     if (this.items.length !== n) this.flush();
@@ -66,6 +91,11 @@ export class ToolStore {
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 2));
     renameSync(`${this.file}.tmp`, this.file);
   }
+}
+
+/** 공유 레포의 툴 → 검사한 값(틀리면 null) */
+export function parseTool(v: unknown, id: string): Tool | null {
+  return validate(v, id);
 }
 
 function validate(v: any, id: string, strict = false): Tool | null {

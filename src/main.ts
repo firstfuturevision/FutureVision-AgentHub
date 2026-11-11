@@ -15,6 +15,7 @@ import { Updater } from './update.ts';
 import { HubSkillStore } from './hubskills.ts';
 import { WorkPresetStore } from './workpresets.ts';
 import { ScheduleStore } from './schedules.ts';
+import { SharedRepo } from './shared.ts';
 import { startLocalServer } from './transports/local.ts';
 import { startDashboardLink } from './transports/dashboard.ts';
 import type { AgentKind } from './protocol.ts';
@@ -84,6 +85,21 @@ const updater = new Updater({
   restart: process.env.AGENT_HUB_LAUNCHER === '1' ? () => shutdown(75) : undefined,
 });
 
+// 공유 레포: 프리셋·에이전트·스킬·툴을 회사 GitHub 레포로 주고받는다
+const shared = new SharedRepo({
+  file: join(cfg.dataDir, 'shared.json'),
+  dir: join(cfg.dataDir, 'shared', 'repo'),
+  presets,
+  workPresets,
+  tools,
+  skills: hubSkills,
+  gitEnv: () => github.sessionEnv(),
+  author: async () => (await github.status()).login,
+  // 시험용: GitHub 대신 로컬 레포(가짜 AI 화면 확인)
+  remoteUrl: process.env.AGENT_HUB_SHARED_REMOTE ? () => process.env.AGENT_HUB_SHARED_REMOTE! : undefined,
+  onChange: () => sessions.presetsChanged(),
+});
+
 const restored = sessions.restore();
 if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되살림(끝남 상태)`);
 
@@ -110,12 +126,16 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   hubSkills,
   workPresets,
   schedules,
+  shared,
 });
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);
 // 업데이트: 1분마다 정한 시각이 지났는지 본다(켜진 뒤 처음은 10초 뒤)
 const updateTimer = setInterval(() => void updater.tick(), 60_000);
 const firstUpdate = setTimeout(() => void updater.tick(), 10_000);
+// 공유 레포: 켜고 15초 뒤, 그다음 6시간마다 받는다
+const firstShared = setTimeout(() => void shared.tick(), 15_000);
+const sharedTimer = setInterval(() => void shared.tick(), 6 * 60 * 60 * 1000);
 const stopDashboard = startDashboardLink(cfg.dashboard, sessions);
 console.log(`[agent-hub] 직접 작업 화면: http://127.0.0.1:${cfg.port}`);
 console.log(`[agent-hub] 작업 폴더 뿌리: ${cfg.workspaceRoot}`);
@@ -126,6 +146,8 @@ function shutdown(code = 0) {
   clearInterval(scheduleTimer);
   clearInterval(updateTimer);
   clearTimeout(firstUpdate);
+  clearTimeout(firstShared);
+  clearInterval(sharedTimer);
   sessions.stopAll();
   server.close();
   setTimeout(() => process.exit(code), 3500);

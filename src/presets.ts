@@ -19,13 +19,17 @@ export interface Preset {
   tools?: string[]; // 이 프리셋으로 뜬 세션에 붙일 툴(툴 id). 없으면 켜진 툴 전부, [] 이면 툴 없음
   skills?: string[]; // 쓸 Agent Hub 스킬 이름. 없으면 전부, [] 이면 없음(계정 스킬은 프리셋에서 안 읽힘)
   autoApprove?: boolean; // 권한 묻지 않기 — 이 에이전트로 뜬 세션은 도구 권한을 묻지 않고 허용
+  shared?: true; // 공유 레포에서 받은 것(읽기 전용, 파일에 저장하지 않음)
 }
+
+export const SHARED_READONLY = '공유받은 것은 여기서 고치거나 지울 수 없음 — 복사해서 내 것으로 쓰세요';
 
 const LIMITS = { name: 40, description: 300, instructions: 8000 };
 
 export class PresetStore {
   private file: string;
   private items: Preset[] = [];
+  private shared: Preset[] = []; // 공유 레포에서 받은 것 — 같은 이름이면 이쪽이 이긴다
 
   constructor(file: string) {
     this.file = file;
@@ -40,30 +44,62 @@ export class PresetStore {
   }
 
   list(): Preset[] {
-    return this.items.map((p) => ({ ...p }));
+    return [...this.shared.map((p) => ({ ...p, shared: true as const })), ...this.items.map((p) => ({ ...p }))];
+  }
+
+  /** 공유 레포에서 받은 것으로 바꿔 끼운다(이미 검사한 것) */
+  setShared(items: Preset[]) {
+    this.shared = items.map((p) => ({ ...p }));
+  }
+
+  isShared(id: string): boolean {
+    return this.shared.some((p) => p.id === id);
+  }
+
+  /** 이 PC 것 중 같은 이름이 있으면 "(내 것)" 을 붙여 남긴다. 바꿨으면 true */
+  renameLocal(name: string): boolean {
+    const p = this.items.find((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!p) return false;
+    p.name = uniqueName(name, (n) => this.items.some((x) => x !== p && x.name.toLowerCase() === n.toLowerCase()));
+    this.flush();
+    return true;
+  }
+
+  /** 이 PC 것이 가리키던 id 를 바꾼다(올려서 공유본이 된 에이전트·툴) */
+  remap(field: 'agents' | 'tools', from: string, to: string) {
+    let changed = false;
+    for (const p of this.items) {
+      const list = p[field];
+      if (list?.includes(from)) { p[field] = [...new Set(list.map((x) => (x === from ? to : x)))]; changed = true; }
+    }
+    if (changed) this.flush();
   }
 
   /** id 또는 이름(대소문자·앞뒤 공백 무시)으로 찾기 */
   find(key: string): Preset | undefined {
     const k = key.trim().toLowerCase();
-    return this.items.find((p) => p.id === key || p.name.toLowerCase() === k);
+    const hit = (p: Preset) => p.id === key || p.name.toLowerCase() === k;
+    const s = this.shared.find(hit);
+    return s ? { ...s, shared: true } : this.items.find(hit);
   }
 
   /** 저장하지 않고 형식·이름 중복만 확인(잘못이면 throw) */
   check(input: unknown) {
     const id = typeof (input as any)?.id === 'string' ? (input as any).id : '__new__';
+    if (this.isShared(id)) throw new Error(SHARED_READONLY);
     const p = validate(input, id, true)!;
-    const dup = this.items.find((x) => x.id !== id && x.name.toLowerCase() === p.name.toLowerCase());
+    const dup = [...this.shared, ...this.items].find((x) => x.id !== id && x.name.toLowerCase() === p.name.toLowerCase());
     if (dup) throw new Error(`같은 이름의 프리셋이 있음: ${p.name}`);
     if (id !== '__new__' && !this.items.some((x) => x.id === id)) throw new Error(`없는 프리셋 id: ${id}`);
   }
 
   /** 만들기·고치기. id 가 있으면 고친다. 잘못된 값이면 이유와 함께 throw. */
   save(input: unknown): Preset {
+    if (typeof (input as any)?.id === 'string' && this.isShared((input as any).id)) throw new Error(SHARED_READONLY);
     const existing = typeof (input as any)?.id === 'string' ? this.items.find((p) => p.id === (input as any).id) : undefined;
     const p = validate(input, existing?.id ?? randomUUID().slice(0, 8), true);
     if (!p) throw new Error('프리셋 형식이 맞지 않음');
-    const dup = this.items.find((x) => x.id !== p.id && x.name.toLowerCase() === p.name.toLowerCase());
+    const dup = [...this.shared, ...this.items].find((x) => x.id !== p.id && x.name.toLowerCase() === p.name.toLowerCase());
     if (dup) throw new Error(`같은 이름의 프리셋이 있음: ${p.name}`);
     this.items = existing ? this.items.map((x) => (x.id === p.id ? p : x)) : [...this.items, p];
     this.flush();
@@ -71,6 +107,7 @@ export class PresetStore {
   }
 
   remove(id: string) {
+    if (this.isShared(id)) throw new Error(SHARED_READONLY);
     const before = this.items.length;
     this.items = this.items.filter((p) => p.id !== id);
     if (this.items.length !== before) this.flush();
@@ -82,6 +119,21 @@ export class PresetStore {
     writeFileSync(tmp, JSON.stringify(this.items, null, 2));
     renameSync(tmp, this.file); // 쓰다 끊겨도 원본이 깨지지 않게
   }
+}
+
+/** 같은 이름이 있으면 "(내 것)" 을 붙인다(40자 안에서, 그래도 겹치면 번호) */
+export function uniqueName(name: string, taken: (n: string) => boolean, tail = ' (내 것)'): string {
+  for (let i = 1; i < 100; i++) {
+    const t = i === 1 ? tail : tail.replace(/\)$/, ` ${i})`);
+    const n = name.slice(0, 40 - t.length) + t;
+    if (!taken(n)) return n;
+  }
+  return name.slice(0, 32) + Date.now().toString(36).slice(-8);
+}
+
+/** 공유 레포의 에이전트 → 검사한 값(틀리면 null) */
+export function parsePreset(v: unknown, id: string): Preset | null {
+  return validate(v, id);
 }
 
 /** 형식 검사. strict=true 면 이유를 throw, 아니면 null. */

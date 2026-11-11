@@ -12,6 +12,7 @@ import type { Updater } from '../update.ts';
 import type { HubSkillStore } from '../hubskills.ts';
 import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
+import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
@@ -27,8 +28,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css']);
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   const server = createServer(async (req, res) => {
@@ -138,7 +139,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, workPresets.list());
         }
         if (req.method === 'DELETE') {
-          workPresets.remove(url.searchParams.get('id') ?? '');
+          try { workPresets.remove(url.searchParams.get('id') ?? ''); } catch (err) { return send(res, 400, (err as Error).message); }
           return json(res, 200, workPresets.list());
         }
       }
@@ -156,7 +157,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, hubSkills.list());
         }
         if (req.method === 'DELETE') {
-          hubSkills.remove(url.searchParams.get('name') ?? '');
+          try { hubSkills.remove(url.searchParams.get('name') ?? ''); } catch (err) { return send(res, 400, (err as Error).message); }
           return json(res, 200, hubSkills.list());
         }
       }
@@ -224,6 +225,25 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, await github.status());
         }
       }
+      // 공유 레포 — 설정(레포·종류), 지금 받기, 올리기, 내리기. PC 앞 화면에서만(이 서버가 그렇다)
+      if (url.pathname === '/shared' && shared) {
+        if (req.method === 'GET') return json(res, 200, shared.public());
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try {
+            const kind = body?.kind as SharedKind;
+            if (body?.action === 'pull') await shared.pull();
+            else if (body?.action === 'push' || body?.action === 'unshare') {
+              if (!SHARED_KINDS.includes(kind) || typeof body.id !== 'string') return send(res, 400, '종류와 대상을 정해 주세요');
+              await (body.action === 'push' ? shared.push(kind, body.id) : shared.unshare(kind, body.id));
+            } else await shared.set(body ?? {});
+          } catch (err) {
+            return send(res, 400, (err as Error).message);
+          }
+          return json(res, 200, shared.public());
+        }
+      }
       // 툴 — 모든 세션에 붙이는 MCP 서버. 새 작업부터 적용.
       if (url.pathname === '/tools' && tools) {
         if (req.method === 'GET') return json(res, 200, tools.list());
@@ -238,7 +258,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, tools.list());
         }
         if (req.method === 'DELETE') {
-          tools.remove(url.searchParams.get('id') ?? '');
+          try { tools.remove(url.searchParams.get('id') ?? ''); } catch (err) { return send(res, 400, (err as Error).message); }
           return json(res, 200, tools.list());
         }
       }
@@ -257,7 +277,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, presets.list());
         }
         if (req.method === 'DELETE') {
-          presets.remove(url.searchParams.get('id') ?? '');
+          try { presets.remove(url.searchParams.get('id') ?? ''); } catch (err) { return send(res, 400, (err as Error).message); }
           sessions.presetsChanged();
           return json(res, 200, presets.list());
         }

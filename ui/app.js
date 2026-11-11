@@ -348,6 +348,7 @@ const AUTH_HELP = {
 let cliState = {}; // AI CLI 설치 여부
 let ghState = null; // GitHub: { installed, login?, pending?: { code, url } }
 let updState = null; // 업데이트: { repo, mode, state, current, latest, behind, lastCheck, checking, canRestart }
+let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
     const r = await fetch(url);
@@ -357,8 +358,9 @@ const getJson = async (url, fallback) => {
   }
 };
 async function loadAuth() {
-  [authState, cliState, ghState, updState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null)]);
+  [authState, cliState, ghState, updState, sharedState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null)]);
   renderAuth();
+  renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
 }
 // 설치·로그인을 시작하면 끝날 때까지 상태를 몇 초마다 다시 읽는다(최대 16분 — GitHub 일회용 코드는 15분이면 만료)
 let authPoll = null;
@@ -425,6 +427,7 @@ function renderAuth() {
   }
   if (ghState) list.append(githubRow());
   if (updState) list.append(updateRow());
+  if (sharedState) list.append(sharedRow());
 }
 
 /** GitHub — 회사 계정으로 로그인. 저장소 만들기·푸시에 쓴다 */
@@ -535,6 +538,86 @@ function updateRow() {
   row.append(body);
   return row;
 }
+/** 공유 — 회사 GitHub 레포로 프리셋·에이전트·스킬·툴을 주고받는다 */
+const SHARED_KINDS = [['presets', '프리셋'], ['agents', '에이전트'], ['skills', '스킬'], ['tools', '툴']];
+async function postShared(body, busyText) {
+  if (busyText) flash(busyText);
+  const r = await postJson('/shared', body);
+  if (r) sharedState = r;
+  renderAuth();
+  return r;
+}
+function sharedRow() {
+  const s = sharedState;
+  const row = el('div', 'auth-row');
+  const head = el('div', 'auth-head');
+  head.append(el('span', 'preset-name', '공유'));
+  if (s.repo && s.lastPull && !s.error) head.append(el('span', 'auth-state on', '연결됨'));
+  row.append(head);
+
+  const repo = el('div', 'auth-body');
+  const inp = el('input', 'key-input');
+  inp.placeholder = 'firstfuturevision/agent-hub-shared';
+  inp.value = s.repo;
+  inp.autocomplete = 'off';
+  inp.spellcheck = false;
+  inp.setAttribute('aria-label', '공유 레포');
+  const save = el('button', 'line-btn', '저장');
+  save.type = 'button';
+  save.onclick = async () => {
+    save.disabled = true;
+    if (await postShared({ repo: inp.value }, inp.value.trim() ? '레포를 받는 중' : '')) flash(inp.value.trim() ? '공유 레포를 받았어요' : '공유를 껐어요');
+  };
+  repo.append(inp, save);
+  row.append(repo);
+
+  const kinds = el('div', 'auth-body');
+  for (const [k, label] of SHARED_KINDS) {
+    const on = s.kinds[k];
+    const b = el('button', `kind-chip${on ? ' on' : ''}`, s.repo && on && s.counts[k] ? `${label} ${s.counts[k]}` : label);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(on));
+    b.onclick = async () => { b.disabled = true; await postShared({ kinds: { [k]: !on } }); };
+    kinds.append(b);
+  }
+  row.append(kinds);
+
+  const body = el('div', 'auth-body');
+  const when = s.lastPull ? new Date(s.lastPull).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  if (s.error) body.append(el('span', 'auth-state off', s.error));
+  else if (s.repo) body.append(el('span', 'auth-state', s.pulling ? '받는 중' : when ? `마지막 받음 ${when}` : '아직 안 받음'));
+  if (s.repo) {
+    const pull = el('button', 'line-btn', '지금 받기');
+    pull.type = 'button';
+    pull.disabled = s.pulling;
+    pull.onclick = async () => { pull.disabled = true; if (await postShared({ action: 'pull' }, '받는 중')) flash('받았어요'); };
+    body.append(pull);
+  }
+  body.append(el('div', 'hint-inline auth-help', '회사 레포. 켠 종류만 받고, 받은 것은 복사해서 고칩니다. 6시간마다 받습니다'));
+  row.append(body);
+  return row;
+}
+
+/** 목록 줄의 공유 버튼: 공유본이면 "공유" 표시·복사·내리기, 이 PC 것이면(공유가 켜져 있으면) 올리기 */
+function sharedButtons(kind, item, id, copy) {
+  const out = [];
+  const btn = (label, fn) => { const b = el('button', 'ghost', label); b.type = 'button'; b.onclick = fn; out.push(b); return b; };
+  if (item.shared) {
+    out.push(el('span', 'shared-badge', '공유'));
+    btn('복사', copy);
+    btn('내리기', async () => {
+      if (!(await askDialog({ title: `${item.name} 공유에서 내리기`, text: '공유 레포에서 지웁니다. 다른 PC 에서도 사라지고, 이 PC 에는 내 것으로 남습니다.', ok: '내리기', danger: true }))) return;
+      if (await postShared({ action: 'unshare', kind, id }, '내리는 중')) flash(`${item.name} 내림`);
+    });
+  } else if (sharedState?.repo && sharedState.kinds[kind]) {
+    btn('올리기', async () => {
+      if (!(await askDialog({ title: `${item.name} 공유에 올리기`, text: '회사 공유 레포에 올립니다. 모든 PC 가 받아 쓰고, 이 PC 에서도 공유본으로 바뀝니다. 키·토큰이 들어 있으면 올리지 않습니다.', ok: '올리기' }))) return;
+      if (await postShared({ action: 'push', kind, id }, '올리는 중')) flash(`${item.name} 올림`);
+    });
+  }
+  return out;
+}
+
 async function startGithubLogin() {
   const g = await postJson('/github', { action: 'login' });
   if (!g) return;
@@ -622,15 +705,16 @@ function renderSkills() {
       if (r.ok) hubSkillList = await r.json();
       renderSkills();
     };
-    head.append(el('span', 'preset-name', k.name), edit, del);
+    if (k.shared) head.append(el('span', 'preset-name', k.name), ...sharedButtons('skills', k, k.name, () => openSkillForm({ ...k, name: `${k.name}-mine`, shared: undefined }, true)));
+    else head.append(el('span', 'preset-name', k.name), edit, del, ...sharedButtons('skills', k, k.name));
     row.append(head, el('div', 'preset-desc', k.description), el('div', 'preset-inst', k.body.length > 160 ? k.body.slice(0, 160) + '…' : k.body));
     list.append(row);
   }
 }
-function openSkillForm(k) {
+function openSkillForm(k, asNew = false) {
   const f = kform.elements;
   f.name.value = k?.name ?? '';
-  f.name.readOnly = Boolean(k); // 이름이 폴더 이름이라 고칠 때는 그대로
+  f.name.readOnly = Boolean(k) && !asNew; // 이름이 폴더 이름이라 고칠 때는 그대로(복사는 새로)
   f.description.value = k?.description ?? '';
   f.body.value = k?.body ?? '';
   kform.hidden = false;
@@ -683,7 +767,9 @@ function renderWorkPresets() {
       fillWorkPresetSelect();
     };
     const mainName = p.mainAgent ? presets.find((a) => a.id === p.mainAgent)?.name : null;
-    head.append(el('span', 'preset-name', p.name), el('span', 'preset-meta', `${p.folder || '뿌리'}, 메인 ${mainName ?? '기본'}, 하위 ${allowText(p.agents, presets, (x) => x.name)}`), edit, del);
+    head.append(el('span', 'preset-name', p.name), el('span', 'preset-meta', `${p.folder || '뿌리'}, 메인 ${mainName ?? '기본'}, 하위 ${allowText(p.agents, presets, (x) => x.name)}`));
+    if (p.shared) head.append(...sharedButtons('presets', p, p.id, () => openWpForm({ ...p, id: '', name: `${p.name} (내 것)` })));
+    else head.append(edit, del, ...sharedButtons('presets', p, p.id));
     row.append(head);
     if (p.description) row.append(el('div', 'preset-desc', p.description));
     if (p.guidelines) row.append(el('div', 'preset-inst', p.guidelines.length > 160 ? p.guidelines.slice(0, 160) + '…' : p.guidelines));
@@ -806,7 +892,9 @@ function renderTools() {
       if (r.ok) toolList = await r.json();
       renderTools();
     };
-    head.append(el('span', 'preset-name', t.name), el('span', 'preset-meta', t.type === 'http' ? 'HTTP' : '명령'), edit, del, sw);
+    head.append(el('span', 'preset-name', t.name), el('span', 'preset-meta', t.type === 'http' ? 'HTTP' : '명령'));
+    if (t.shared) { sw.disabled = true; sw.title = '공유받은 툴은 공유 레포에서 켜고 끕니다'; head.append(...sharedButtons('tools', t, t.id, () => openToolForm({ ...t, id: '', name: `${t.name}-mine`.slice(0, 40) })), sw); }
+    else head.append(edit, del, ...sharedButtons('tools', t, t.id), sw);
     row.append(head);
     if (t.description) row.append(el('div', 'preset-desc', t.description));
     row.append(el('div', 'preset-inst mono-line', t.type === 'http' ? t.url : [t.command, ...(t.args ?? [])].join(' ')));
@@ -893,7 +981,8 @@ function renderPresets() {
       if (r.ok) presets = await r.json();
       renderPresets();
     };
-    head.append(edit, del);
+    if (p.shared) head.append(...sharedButtons('agents', p, p.id, () => openForm({ ...p, id: '', name: `${p.name} (내 것)` })));
+    else head.append(edit, del, ...sharedButtons('agents', p, p.id));
     row.append(head);
     if (p.description) row.append(el('div', 'preset-desc', p.description));
     row.append(el('div', 'preset-inst', p.instructions.length > 180 ? p.instructions.slice(0, 180) + '…' : p.instructions));
@@ -1020,7 +1109,11 @@ es.onmessage = (m) => onEvent(JSON.parse(m.data));
 function onEvent(ev) {
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
-  if (ev.type === 'presets.changed') return void loadPresets(); // 설정 목록·메인 선택·@ 팝업 모두 새로
+  if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
+    void loadPresets(); void loadWorkPresets(); void loadTools(); void loadSkills();
+    if (!$('settings').hidden) void getJson('/shared', sharedState).then((s) => { sharedState = s; renderAuth(); });
+    return;
+  }
   if (ev.type === 'schedules.changed') { scheduleCache.clear(); return renderPanel(); } // 예약이 바뀌거나 실행됨
 
   if (ev.type === 'session.deleted') {
