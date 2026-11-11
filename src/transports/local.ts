@@ -13,6 +13,7 @@ import type { HubSkillStore } from '../hubskills.ts';
 import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
+import type { AutoStart } from '../autostart.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
@@ -28,8 +29,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css']);
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   const server = createServer(async (req, res) => {
@@ -223,6 +224,20 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
             return send(res, 400, (err as Error).message);
           }
           return json(res, 200, await github.status());
+        }
+      }
+      // 자동 실행 — 이 PC 에 로그인하면 뒤에서 켜기. PC 앞 화면에서만(이 서버가 그렇다)
+      if (url.pathname === '/autostart' && autostart) {
+        if (req.method === 'GET') return json(res, 200, autostart.status());
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          if (typeof body?.enabled !== 'boolean') return send(res, 400, 'enabled 는 true/false');
+          try {
+            return json(res, 200, await autostart.set(body.enabled));
+          } catch (err) {
+            return send(res, 400, (err as Error).message);
+          }
         }
       }
       // 공유 레포 — 설정(레포·종류), 지금 받기, 올리기, 내리기. PC 앞 화면에서만(이 서버가 그렇다)

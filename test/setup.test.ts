@@ -65,3 +65,28 @@ test('리눅스 터미널 창: 있는 터미널을 골라 폴더·명령은 인�
   assert.match(linuxGhInstall(only('dnf')), /dnf install -y gh/);
   assert.throws(() => linuxGhInstall(() => false), /패키지 관리자/);
 });
+
+test('자동 실행 켜고 끄기: 자동 시작 하나만 만들고 지운다(바탕화면 아이콘은 안 건드림)', async () => {
+  const { AutoStart } = await import('../src/autostart.ts');
+  // 리눅스
+  const home = tmp();
+  const lx = new AutoStart({ platform: 'linux', home, root: ROOT, node: NODE });
+  assert.deepEqual(lx.status(), { supported: true, enabled: false });
+  assert.deepEqual(await lx.set(true), { supported: true, enabled: true });
+  assert.match(readFileSync(join(home, '.config', 'autostart', 'agent-hub.desktop'), 'utf8'), /--background$/m);
+  assert.ok(!existsSync(join(home, '.local', 'share', 'applications', 'agent-hub.desktop')));
+  assert.deepEqual(await lx.set(false), { supported: true, enabled: false });
+  // macOS
+  const mac = new AutoStart({ platform: 'darwin', home, root: '/Users/a/hub', node: NODE });
+  await mac.set(true);
+  assert.ok(existsSync(join(home, 'Library', 'LaunchAgents', 'com.firstfuturevision.agenthub.plist')));
+  assert.ok(!existsSync(join(home, 'Desktop', 'Agent Hub.command')));
+  // Windows: 실제 바로가기(이 PC 가 Windows 일 때만)
+  if (process.platform === 'win32') {
+    const dir = join(tmp(), 'Startup');
+    const win = new AutoStart({ root: process.cwd(), startupDir: dir });
+    assert.deepEqual(await win.set(true), { supported: true, enabled: true });
+    assert.ok(existsSync(join(dir, 'Agent Hub.lnk')));
+    assert.deepEqual(await win.set(false), { supported: true, enabled: false });
+  }
+});

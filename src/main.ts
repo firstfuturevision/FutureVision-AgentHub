@@ -16,6 +16,7 @@ import { HubSkillStore } from './hubskills.ts';
 import { WorkPresetStore } from './workpresets.ts';
 import { ScheduleStore } from './schedules.ts';
 import { SharedRepo } from './shared.ts';
+import { AutoStart } from './autostart.ts';
 import { startLocalServer } from './transports/local.ts';
 import { startDashboardLink } from './transports/dashboard.ts';
 import type { AgentKind } from './protocol.ts';
@@ -128,6 +129,8 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   workPresets,
   schedules,
   shared,
+  // 연동의 자동 실행(로그인하면 뒤에서 켜기). 시험용: AGENT_HUB_STARTUP_DIR 로 시작프로그램 폴더를 바꾼다
+  autostart: new AutoStart({ root, startupDir: process.env.AGENT_HUB_STARTUP_DIR || undefined }),
 });
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);

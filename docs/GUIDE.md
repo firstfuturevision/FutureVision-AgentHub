@@ -85,6 +85,8 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 - **하위 작업**: 끝났거나 쉬고 있는 하위 에이전트 일(끝남·실패). 누르면 대화의 체크리스트 카드에서 펼친다.
 - **예약**: 이 작업에 정해 둔 시각의 지시(아래). 설정이 아니라 일정이라 늘 보인다.
 
+**자동 실행**(`src/autostart.ts`, `GET/POST /autostart`): 연동의 켜기/끄기. `npm run setup` 이 만드는 것 중 자동 시작 하나만 만들고 지운다 — Windows 시작프로그램의 `Agent Hub.lnk`(PowerShell WScript.Shell, 창 없이 --background), macOS LaunchAgent, 리눅스 `~/.config/autostart/agent-hub.desktop`. 바탕화면·시작 메뉴 아이콘은 그대로. 다음 로그인부터 적용. 시험용 `AGENT_HUB_STARTUP_DIR` 로 시작프로그램 폴더를 바꾼다.
+
 **공유 레포**(`data/shared.json`, 받은 레포 `data/shared/repo`, `src/shared.ts`): 연동의 "공유"에 회사 GitHub 레포를 넣으면 git 으로 받는다(연동의 GitHub 로그인 자격 증명, 전역 git 설정은 안 건드림). 켠 종류만 각 저장소에 **공유본**으로 끼운다.
 - 레포 구조: `presets/<이름>.json`(프리셋), `agents/<이름>.json`(에이전트), `tools/<이름>.json`, `skills/<이름>/SKILL.md`. 서로는 id 가 아니라 **이름**으로 가리킨다(PC 마다 id 가 다르다). 공유본 id 는 종류+이름의 해시라 모든 PC 에서 같다.
 - 공유본이 이긴다: 같은 이름의 이 PC 것은 "(내 것)"(툴·스킬은 `-mine`)을 붙여 남긴다. 공유본은 고치기·지우기가 막히고(`SHARED_READONLY`), "복사"로 내 것을 만든다. 공유받은 툴의 켜고 끄기도 레포에서.

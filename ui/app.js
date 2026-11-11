@@ -348,6 +348,7 @@ const AUTH_HELP = {
 let cliState = {}; // AI CLI 설치 여부
 let ghState = null; // GitHub: { installed, login?, pending?: { code, url } }
 let updState = null; // 업데이트: { repo, mode, state, current, latest, behind, lastCheck, checking, canRestart }
+let autoState = null; // 자동 실행: { supported, enabled }
 let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
@@ -358,7 +359,7 @@ const getJson = async (url, fallback) => {
   }
 };
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null)]);
+  [authState, cliState, ghState, updState, sharedState, autoState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null)]);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
 }
@@ -427,6 +428,7 @@ function renderAuth() {
   }
   if (ghState) list.append(githubRow());
   if (updState) list.append(updateRow());
+  if (autoState?.supported) list.append(autoRow());
   if (sharedState) list.append(sharedRow());
 }
 
@@ -538,6 +540,32 @@ function updateRow() {
   row.append(body);
   return row;
 }
+/** 자동 실행 — 이 PC 에 로그인하면 Agent Hub 를 뒤에서 켠다 */
+function autoRow() {
+  const a = autoState;
+  const row = el('div', 'auth-row');
+  const head = el('div', 'auth-head');
+  head.append(el('span', 'preset-name', '자동 실행'));
+  const sw = el('button', `switch${a.enabled ? ' on' : ''}`);
+  sw.type = 'button';
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', String(a.enabled));
+  sw.setAttribute('aria-label', a.enabled ? '자동 실행 끄기' : '자동 실행 켜기');
+  sw.style.marginLeft = 'auto';
+  sw.onclick = async () => {
+    sw.disabled = true;
+    const r = await postJson('/autostart', { enabled: !a.enabled });
+    if (r) { autoState = r; flash(r.enabled ? '자동 실행 켬' : '자동 실행 끔'); }
+    renderAuth();
+  };
+  head.append(sw);
+  row.append(head);
+  const body = el('div', 'auth-body');
+  body.append(el('div', 'hint-inline auth-help', '이 PC 에 로그인하면 뒤에서 켭니다. 다음 로그인부터 적용'));
+  row.append(body);
+  return row;
+}
+
 /** 공유 — 회사 GitHub 레포로 프리셋·에이전트·스킬·툴을 주고받는다 */
 const SHARED_KINDS = [['presets', '프리셋'], ['agents', '에이전트'], ['skills', '스킬'], ['tools', '툴']];
 async function postShared(body, busyText) {
