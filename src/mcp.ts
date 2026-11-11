@@ -22,6 +22,8 @@ const INSTRUCTIONS = [
   '결과가 status=working 이면 아직 끝나지 않은 것이다(사람 승인 대기일 수 있음). 같은 continuation_id 로 prompt 없이 다시 불러 기다린다.',
   '작업자 결과를 그대로 믿지 말고 확인한 뒤, 누구에게 무엇을 맡겼고 무엇이 바뀌었는지 사람에게 짧게 보고한다.',
   '사람이 에이전트(하위 에이전트 역할)을 만들거나 고치거나 지워 달라고 하면 agent_list / agent_save / agent_delete 를 쓴다. 역할 지침은 할 일·하지 말 일·보고 형식·끝나는 조건이 드러나게 구체적으로 쓴다. 저장·삭제 전에 사람 승인 화면이 뜬다.',
+  '사람이 프리셋(작업 환경: 작업 폴더·함께 연결할 폴더·작업 방식 지침·기본 메인 에이전트)을 만들거나 고치거나 지워 달라고 하면 preset_list / preset_save / preset_delete 를 쓴다. 에이전트와 프리셋은 다른 것이다.',
+  '사람이 프리셋·에이전트·스킬·툴을 "공유 레포에 올려 달라"고 하면 share_push 로 이름을 주어 올린다(사람 승인 후). 목록의 shared=true 는 이미 공유받은 것이라 고칠 수 없다.',
 ].join('\n');
 
 /** 프리셋 목록은 사람이 설정에서 바꾸므로 부를 때마다 새로 만든다 */
@@ -81,6 +83,56 @@ export const PRESET_TOOLS = [
   },
 ];
 
+/** 프리셋(작업 환경)·공유 도구 */
+export const WORK_TOOLS = [
+  {
+    name: 'preset_list',
+    title: '프리셋 목록',
+    description: '지금 있는 프리셋(작업 환경) 전체. 에이전트는 이름으로 보인다. shared=true 는 공유 레포에서 받은 것(고칠 수 없음).',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'preset_save',
+    title: '프리셋 만들기·고치기',
+    description: '프리셋(작업 환경)을 만들거나(id 없이) 고친다(id 또는 이름과 함께, 바꾸지 않는 항목도 모두 다시 준다). 모든 직원이 쓰는 설정이라 저장 전에 사람 승인 화면이 뜬다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '고칠 때만: preset_list 의 id' },
+        name: { type: 'string', description: '프리셋 이름(40자 이내). 예: 견적 작업' },
+        description: { type: 'string', description: '언제 쓰는 프리셋인지 한 줄' },
+        folder: { type: 'string', description: '작업 폴더: 작업 폴더 뿌리 바로 아래 폴더 이름. 비우면 뿌리' },
+        extraDirs: { type: 'array', items: { type: 'string' }, description: '함께 연결할 폴더 이름들(뿌리 바로 아래)' },
+        guidelines: { type: 'string', description: '폴더 구조·작업 방식 지침. 메인과 하위 에이전트의 첫 지시에 붙는다' },
+        mainAgent: { type: 'string', description: '선택: 이 프리셋으로 시작할 때 기본 메인 에이전트 이름' },
+        agents: { type: 'array', items: { type: 'string' }, description: '선택: 이 작업에서 맡길 수 있는 하위 에이전트 이름들. 없으면 전부' },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'preset_delete',
+    title: '프리셋 지우기',
+    description: '프리셋(작업 환경)을 지운다(이름 또는 id). 사람 승인 후에만 지워진다.',
+    inputSchema: { type: 'object', properties: { preset: { type: 'string', description: '지울 프리셋의 이름 또는 id' } }, required: ['preset'], additionalProperties: false },
+  },
+  {
+    name: 'share_push',
+    title: '공유 레포에 올리기',
+    description: '이 PC 의 프리셋·에이전트·스킬·툴 하나를 회사 공유 레포에 올린다(이름으로). 사람 승인 후 올라가고, 올리면 이 PC 것은 공유본(읽기 전용)으로 바뀐다. 키·토큰이 들어 있으면 거절된다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['presets', 'agents', 'skills', 'tools'], description: 'presets=프리셋, agents=에이전트, skills=스킬, tools=툴' },
+        name: { type: 'string', description: '올릴 것의 이름' },
+      },
+      required: ['kind', 'name'],
+      additionalProperties: false,
+    },
+  },
+];
+
 type Rpc = { jsonrpc?: string; id?: number | string | null; method?: string; params?: any };
 
 /** JSON-RPC 메시지 하나 처리. 알림(id 없음)이면 null(→ 202). */
@@ -110,7 +162,7 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
     case 'ping':
       return ok({});
     case 'tools/list':
-      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS] });
+      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS] });
     case 'tools/call': {
       const a = msg.params?.arguments ?? {};
       const text = (t: string, isError = false) => ok({ content: [{ type: 'text', text: t }], isError });
@@ -134,6 +186,30 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
             return text(`지움: "${p.name}"`);
           } catch (err) {
             return text(`지우지 않음: ${(err as Error).message}`, true);
+          }
+        case 'preset_list': {
+          const list = sessions.workPresetList();
+          return ok({ content: [{ type: 'text', text: list.length ? JSON.stringify(list, null, 2) : '프리셋 없음' }], structuredContent: { presets: list } });
+        }
+        case 'preset_save':
+          try {
+            const p = await sessions.workPresetSaveByMain(mainId, a);
+            return text(`저장함: 프리셋 "${p.name}" (id ${p.id}, 폴더 ${p.folder || '뿌리'}). 새 작업 화면에서 고를 수 있다.`);
+          } catch (err) {
+            return text(`저장 안 됨: ${(err as Error).message}`, true);
+          }
+        case 'preset_delete':
+          try {
+            const p = await sessions.workPresetDeleteByMain(mainId, typeof a.preset === 'string' ? a.preset : '');
+            return text(`지움: 프리셋 "${p.name}"`);
+          } catch (err) {
+            return text(`지우지 않음: ${(err as Error).message}`, true);
+          }
+        case 'share_push':
+          try {
+            return text(await sessions.sharePushByMain(mainId, a.kind, typeof a.name === 'string' ? a.name : ''));
+          } catch (err) {
+            return text(`올리지 않음: ${(err as Error).message}`, true);
           }
         default:
           return fail(-32602, `모르는 도구: ${msg.params?.name}`);

@@ -2,6 +2,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { ToolStore } from '../src/tools.ts';
+import { HubSkillStore } from '../src/hubskills.ts';
+import { SharedRepo, sharedId } from '../src/shared.ts';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,6 +109,55 @@ test('대화로 프리셋 만들기: 메인이 agent_save → 사람 승인 카�
   assert.match(reply.text, /저장함: "문서 조사"/);
   assert.equal(presets.find('문서 조사')?.agent, 'gemini');
   assert.ok(events.some((e) => e.type === 'presets.changed'));
+  sessions.stopAll();
+});
+
+test('대화로 프리셋(작업 환경) 만들고 공유 레포에 올리기: 둘 다 사람 승인 후', async () => {
+  const { sessions, events, main, presets, base } = await setup();
+  const wp = new WorkPresetStore(join(base, 'data', 'wp-main.json'));
+  (sessions as any).workPresets = wp;
+  const remote = join(base, 'remote.git');
+  execFileSync('git', ['init', '--bare', '-q', remote]);
+  const shared = new SharedRepo({ file: join(base, 'data', 'shared.json'), dir: join(base, 'data', 'shared', 'repo'), presets, workPresets: wp, tools: new ToolStore(join(base, 'data', 'tools.json')), skills: new HubSkillStore(join(base, 'data', 'skills')), remoteUrl: () => remote, onChange: () => sessions.presetsChanged() });
+  sessions.attachShared(shared);
+  const approve = async (startsWith: string) => {
+    const req = await waitFor(events, (e) => e.type === 'permission.request' && e.sessionId === main.id && e.tool.startsWith(startsWith) && !events.some((x) => x.type === 'permission.resolved' && x.requestId === e.requestId));
+    await sessions.handle({ type: 'permission.respond', sessionId: main.id, requestId: req.requestId, allow: true }, phone);
+    return req;
+  };
+
+  // 프리셋 만들기 — 에이전트는 이름으로
+  const draft = { name: '견적 작업', folder: '견적', guidelines: '결과는 결과 폴더에', mainAgent: '리뷰어', agents: ['리뷰어'] };
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: `@tool preset_save ${JSON.stringify(draft)}` }, phone);
+  const req = await approve('프리셋 만들기 · 견적 작업');
+  assert.match(req.detail, /폴더 견적 — 결과는 결과 폴더에/);
+  await mainReply(events, main.id, '저장함: 프리셋 "견적 작업"');
+  const reviewer = presets.find('리뷰어')!;
+  assert.equal(wp.find('견적 작업')?.mainAgent, reviewer.id);
+
+  // 목록은 에이전트를 이름으로
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@tool preset_list' }, phone);
+  assert.match((await mainReply(events, main.id, '"name": "견적 작업"')).text, /"mainAgent": "리뷰어"/);
+
+  // 공유 레포가 없으면 이유를 돌려준다(묻지 않음)
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@tool share_push {"kind":"presets","name":"견적 작업"}' }, phone);
+  await mainReply(events, main.id, '올리지 않음: 연동에서 공유 레포를 먼저');
+
+  // 정하면 승인 후 올라가고, 이 PC 것은 공유본으로
+  await shared.set({ repo: 'fv/shared' });
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@tool share_push {"kind":"presets","name":"견적 작업"}' }, phone);
+  await approve('공유 레포에 올리기 · 프리셋 견적 작업');
+  await mainReply(events, main.id, 'fv/shared 에 프리셋 "견적 작업" 을 올림');
+  const p = wp.find('견적 작업')!;
+  assert.equal(p.id, sharedId('presets', '견적 작업'));
+  assert.equal(p.shared, true);
+  assert.match(execFileSync('git', ['--git-dir', remote, 'log', '--format=%s'], { encoding: 'utf8' }), /프리셋 공유: 견적 작업/);
+
+  // 이미 공유된 것·공유본 지우기는 거절
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@tool share_push {"kind":"presets","name":"견적 작업"}' }, phone);
+  await mainReply(events, main.id, '올리지 않음: 이미 공유된 프리셋');
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@tool preset_delete {"preset":"견적 작업"}' }, phone);
+  await mainReply(events, main.id, '지우지 않음: 공유받은 프리셋은');
   sessions.stopAll();
 });
 

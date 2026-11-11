@@ -9,6 +9,7 @@ import type { ToolStore } from './tools.ts';
 import type { AuthStore } from './auth.ts';
 import type { HubSkillStore } from './hubskills.ts';
 import { withGuidelines, type WorkPreset, type WorkPresetStore } from './workpresets.ts';
+import { SHARED_KINDS, type SharedRepo, type SharedKind } from './shared.ts';
 import { skillsFor, type SkillInfo } from './skills.ts';
 import type { ScheduleStore } from './schedules.ts';
 
@@ -110,6 +111,7 @@ export class SessionManager {
   private workPresets?: WorkPresetStore;
   private profileDir?: (agent: AgentKind) => string;
   private schedules?: ScheduleStore;
+  private shared?: SharedRepo; // 공유 레포 — 메인이 대화로 올릴 때(사람 승인 후)
   private scheduleRunning = new Set<string>(); // 실행 중인 예약(같은 예약이 겹쳐 돌지 않게)
   private asks = new Map<string, { sessionId: string; resolve: (allow: boolean) => void }>(); // 호스트가 사람에게 묻는 중인 것
   private order = new WeakMap<HostEvent, number>(); // 기록된 이벤트의 순서(다시 보낼 때 정렬)
@@ -293,6 +295,70 @@ export class SessionManager {
     const r = relative(join(live.info.workdir, '첨부'), abs);
     if (r.startsWith('..') || isAbsolute(r) || !existsSync(abs)) return null;
     return abs;
+  }
+
+  /** 공유 레포를 붙인다(만드는 순서상 나중에) */
+  attachShared(shared: SharedRepo) {
+    this.shared = shared;
+  }
+
+  /** 프리셋(작업 환경) 목록 — 메인에게는 에이전트를 id 대신 이름으로 보여 준다 */
+  workPresetList() {
+    const name = (id?: string) => (id ? this.presets?.find(id)?.name ?? id : undefined);
+    return (this.workPresets?.list() ?? []).map((p) => ({ ...p, mainAgent: name(p.mainAgent), agents: p.agents?.map((a) => name(a)!) }));
+  }
+
+  /** 메인이 프리셋(작업 환경)을 만들고 고친다. 에이전트는 이름이나 id 로 받는다. 사람 승인 후 저장 */
+  async workPresetSaveByMain(mainId: string, input: any): Promise<WorkPreset> {
+    if (!this.workPresets) throw new Error('프리셋 저장소가 없음');
+    const agentId = (key: unknown) => {
+      if (typeof key !== 'string' || !key.trim()) return undefined;
+      const p = this.presets?.find(key);
+      if (!p) throw new Error(`없는 에이전트: ${key}`);
+      return p.id;
+    };
+    const draft = { ...input, mainAgent: agentId(input?.mainAgent), agents: Array.isArray(input?.agents) ? input.agents.map(agentId).filter(Boolean) : undefined };
+    if (typeof input?.id === 'string' && !this.workPresets.find(input.id)) {
+      const byName = this.workPresets.find(input.id); // 이름으로 준 경우
+      if (byName) draft.id = byName.id;
+    }
+    this.workPresets.check(draft);
+    const existing = typeof draft.id === 'string' ? this.workPresets.find(draft.id) : undefined;
+    const title = `${existing ? '프리셋 고치기' : '프리셋 만들기'} · ${String(draft.name).trim()}`;
+    const detail = [draft.folder ? `폴더 ${draft.folder}` : '폴더 뿌리', String(draft.guidelines ?? '').slice(0, 300)].filter(Boolean).join(' — ');
+    if (!(await this.askHuman(mainId, title, detail))) throw new Error('사람이 거부함');
+    const saved = this.workPresets.save(draft);
+    this.presetsChanged();
+    return saved;
+  }
+
+  async workPresetDeleteByMain(mainId: string, key: string): Promise<WorkPreset> {
+    const p = this.workPresets?.find(key);
+    if (!p) throw new Error(`없는 프리셋: ${key}`);
+    if (p.shared) throw new Error('공유받은 프리셋은 지울 수 없음 — 공유에서 내리려면 설정 화면에서');
+    if (!(await this.askHuman(mainId, `프리셋 지우기 · ${p.name}`, p.description))) throw new Error('사람이 거부함');
+    this.workPresets!.remove(p.id);
+    this.presetsChanged();
+    return p;
+  }
+
+  /** 메인이 이 PC 의 프리셋·에이전트·스킬·툴을 공유 레포에 올린다(이름으로). 사람 승인 후 */
+  async sharePushByMain(mainId: string, kind: SharedKind, name: string): Promise<string> {
+    if (!this.shared) throw new Error('공유 레포 기능이 없음');
+    const st = this.shared.public();
+    if (!st.repo) throw new Error('연동에서 공유 레포를 먼저 정해야 함');
+    if (!SHARED_KINDS.includes(kind)) throw new Error('kind 는 presets·agents·skills·tools 중 하나');
+    const label = { presets: '프리셋', agents: '에이전트', skills: '스킬', tools: '툴' }[kind];
+    if (!st.kinds[kind]) throw new Error(`${label} 공유가 꺼져 있음(연동에서 켠다)`);
+    const n = name.trim();
+    const list: { id?: string; name: string; shared?: true }[] =
+      kind === 'presets' ? this.workPresets?.list() ?? [] : kind === 'agents' ? this.presets?.list() ?? [] : kind === 'tools' ? this.tools?.list() ?? [] : this.hubSkills?.list() ?? [];
+    const item = list.find((x) => x.name.toLowerCase() === n.toLowerCase() && !x.shared) ?? list.find((x) => x.name.toLowerCase() === n.toLowerCase());
+    if (!item) throw new Error(`없는 ${label}: ${n} (있는 것: ${list.map((x) => x.name).join(', ') || '없음'})`);
+    if (item.shared) throw new Error(`이미 공유된 ${label}: ${item.name}`);
+    if (!(await this.askHuman(mainId, `공유 레포에 올리기 · ${label} ${item.name}`, `${st.repo} 에 올립니다. 모든 PC 가 받아 쓰고, 이 PC 것은 공유본(읽기 전용)으로 바뀝니다`))) throw new Error('사람이 거부함');
+    await this.shared.push(kind, kind === 'skills' ? item.name : item.id!);
+    return `${st.repo} 에 ${label} "${item.name}" 을 올림`;
   }
 
   /** 프리셋이 바뀌었음을 모든 화면에 알린다(설정 화면이 다시 읽음) */

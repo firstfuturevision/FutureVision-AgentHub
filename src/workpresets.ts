@@ -82,6 +82,15 @@ export class WorkPresetStore {
     renameSync(`${this.file}.tmp`, this.file);
   }
 
+  /** 저장하지 않고 형식·이름 중복만 확인(잘못이면 throw) */
+  check(input: unknown) {
+    const id = typeof (input as any)?.id === 'string' ? (input as any).id : '__new__';
+    if (this.isShared(id)) throw new Error(SHARED_READONLY);
+    const p = validate(input, id, true)!;
+    if ([...this.shared, ...this.items].some((x) => x.id !== id && x.name.toLowerCase() === p.name.toLowerCase())) throw new Error(`같은 이름의 프리셋이 있음: ${p.name}`);
+    if (id !== '__new__' && !this.items.some((x) => x.id === id)) throw new Error(`없는 프리셋 id: ${id}`);
+  }
+
   save(input: unknown): WorkPreset {
     if (typeof (input as any)?.id === 'string' && this.isShared((input as any).id)) throw new Error(SHARED_READONLY);
     const existing = typeof (input as any)?.id === 'string' ? this.items.find((p) => p.id === (input as any).id) : undefined;

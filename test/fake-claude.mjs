@@ -71,6 +71,20 @@ async function handle(text) {
     return;
   }
 
+  // "@tool 이름 {json}" — 메인의 MCP 도구를 그대로 부른다(프리셋·공유 도구 시험용)
+  const tm = mcpUrl && text.match(/^@tool (\w+)\s*([\s\S]*)$/);
+  if (tm) {
+    if (turn === 1) await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '0' } });
+    const args = tm[2].trim() ? JSON.parse(tm[2]) : {};
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu_t${turn}`, name: `mcp__hub__${tm[1]}`, input: args }] }, parent_tool_use_id: null, session_id: sid });
+    const r = await rpc('tools/call', { name: tm[1], arguments: args });
+    const t = r.result?.content?.[0]?.text ?? JSON.stringify(r.error ?? r);
+    out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu_t${turn}`, content: t, is_error: !!r.result?.isError }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: `도구 결과: ${t}` }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0.001, session_id: sid });
+    return;
+  }
+
   // "@default 할일" 은 AI 를 지정하지 않고 맡긴다(사람이 고른 기본 작업자)
   const m = mcpUrl && (text.match(/^@(role):(.+?)\s+--\s+([\s\S]+)$/) ?? text.match(/^@(claude|gemini|codex|again|role|default)(?::(\S+))?\s+([\s\S]+)$/));
   if (m) {

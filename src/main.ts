@@ -99,6 +99,7 @@ const shared = new SharedRepo({
   remoteUrl: process.env.AGENT_HUB_SHARED_REMOTE ? () => process.env.AGENT_HUB_SHARED_REMOTE! : undefined,
   onChange: () => sessions.presetsChanged(),
 });
+sessions.attachShared(shared); // 메인이 대화로 공유 레포에 올릴 때
 
 const restored = sessions.restore();
 if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되살림(끝남 상태)`);
