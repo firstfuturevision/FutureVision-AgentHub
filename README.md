@@ -26,7 +26,19 @@
 
 Claude, Codex, Gemini CLI 는 미리 깔지 않아도 됩니다. 없으면 연동 화면에 "설치" 버튼이 나옵니다.
 
-## 설치
+## 바로 실행
+
+폴더를 받은 뒤 운영체제에 맞는 파일을 더블클릭합니다.
+
+| | 실행 파일 |
+|---|---|
+| Windows | `start-windows.cmd` |
+| macOS | `start-mac.command` |
+| 리눅스 | `start-linux.sh` (파일 관리자에서 "실행", 또는 터미널에서 `./start-linux.sh`) |
+
+꺼져 있으면 뒤에서 켜고 브라우저로 http://127.0.0.1:4317 을 엽니다. 이미 켜져 있으면 브라우저만 엽니다. Node.js 가 없거나 오래됐으면 설치 페이지를 알려 줍니다.
+
+## 설치 (아이콘과 자동 시작)
 
 ```bash
 git clone https://github.com/firstfuturevision/FutureVision-AgentHub agent-hub
