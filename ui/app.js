@@ -1169,15 +1169,27 @@ menu.addEventListener('keydown', (e) => {
   bs[(i + (e.key === 'ArrowDown' ? 1 : bs.length - 1)) % bs.length]?.focus();
 });
 
-// ── 선택 상자: 브라우저 기본 목록 대신 직접 그린 메뉴로 연다(마우스일 때. 폰은 기본 목록이 편하다) ──
-const finePointer = matchMedia('(pointer: fine)');
+// ── 선택 상자: 브라우저 기본 목록 대신 직접 그린 메뉴로 연다(마우스일 때. 손가락은 기본 목록이 편하다) ──
+// 화면 전체가 아니라 이번 누름이 마우스인지로 고른다 — 터치 화면 노트북은 (pointer: fine) 이 거짓이라 마우스로 눌러도 기본 목록이 떴다
+let lastPointer = 'mouse';
+document.addEventListener('pointerdown', (e) => { lastPointer = e.pointerType; }, true);
 document.addEventListener('mousedown', (e) => {
   const sel = e.target instanceof Element ? e.target.closest('select') : null;
-  if (!sel || sel.disabled || sel.multiple || e.button !== 0 || !finePointer.matches) return;
+  if (!sel || sel.disabled || sel.multiple || e.button !== 0 || lastPointer === 'touch') return;
   e.preventDefault();
   sel.focus();
   if (menuOwner === sel) return closeMenu();
   openSelectMenu(sel);
+});
+// 키보드로 열 때(스페이스·엔터·Alt+↓)도 같은 메뉴
+document.addEventListener('keydown', (e) => {
+  const sel = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!sel || sel.disabled || sel.multiple || !menu.hidden) return;
+  if (e.key === ' ' || e.key === 'Enter' || (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp'))) {
+    e.preventDefault();
+    openSelectMenu(sel);
+    menu.querySelector('button.on, button')?.focus();
+  }
 });
 function openSelectMenu(sel) {
   closeMenu();
@@ -1420,7 +1432,6 @@ function renderPanel() {
   // 허용: 메인 에이전트와 프리셋(작업 환경)이 정한 하위 에이전트 — 둘 다 정했으면 둘 다 허용한 것만(서버와 같은 규칙) · 툴
   const al = $('p-allow');
   al.replaceChildren();
-  const wp = s.info.workPreset ? workPresetList.find((x) => x.id === s.info.workPreset.id) : undefined;
   const byAgent = liveIds(preset?.agents, presets);
   const byWork = liveIds(wp?.agents, presets);
   const agentsText = allowText(byAgent && byWork ? byAgent.filter((a) => byWork.includes(a)) : byAgent ?? byWork, presets, (x) => x.name);
