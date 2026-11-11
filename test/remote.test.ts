@@ -94,6 +94,22 @@ test('원격 서버: 로그인해야 들어오고, 작업은 되지만 설정은
   // 다른 사이트에서 보낸 요청(Origin 이 다름)은 막는다
   assert.equal((await lan('/info', { cookie, origin: 'http://evil.example' })).status, 403);
 
+  // 기본: 권한 묻지 않기 켜기는 원격에서 안 된다
+  await lan('/cmd', { cookie, body: { type: 'session.configure', sessionId: created.id, autoApprove: true } });
+  await waitFor(events, (e) => e.type === 'error' && e.sessionId === created.id && /PC 앞에서만/.test(e.message));
+  assert.ok(!sessions.info(created.id)?.autoApprove);
+
+  // "PC 앞과 같은 권한"을 켜면: 권한 묻지 않기, 폴더 찾아보기가 된다(설정은 여전히 PC 앞에서만)
+  const full = await (await local('/remote', { full: true })).json();
+  assert.equal(full.full, true);
+  assert.equal((await (await lan('/info', { cookie })).json()).full, true);
+  assert.equal((await lan('/browse', { cookie })).status, 200);
+  await lan('/cmd', { cookie, body: { type: 'session.configure', sessionId: created.id, autoApprove: true } });
+  await waitFor(events, () => sessions.info(created.id)?.autoApprove === true);
+  assert.equal((await lan('/auth', { cookie, body: { agent: 'claude', mode: 'apikey' } })).status, 403);
+  await local('/remote', { full: false });
+  assert.equal((await lan('/browse', { cookie })).status, 403);
+
   // 끄면 원격 포트가 닫히고, 이 PC 화면은 그대로
   await local('/remote', { enabled: false });
   await assert.rejects(lan('/info', { cookie }));

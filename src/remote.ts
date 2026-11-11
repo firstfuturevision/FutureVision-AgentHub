@@ -7,9 +7,10 @@ import { dirname } from 'node:path';
  * 원격 접속(사무실 네트워크만) — 같은 망의 다른 PC·폰에서 공용 비밀번호로 들어온다.
  *  - 끄면(기본) 이 PC 에서만(127.0.0.1). 켜면 사설 주소(192.168·10·172.16-31·169.254, fe80·fc/fd)의 접속만 받는 서버를 하나 더 연다.
  *  - 비밀번호는 scrypt 해시로만 저장(data/remote.json). 로그인하면 이 서버가 기억하는 쿠키(다시 켜면 다시 로그인).
- *  - 원격 사람은 작업만 한다. 설정·키·권한 묻지 않기 켜기·뿌리 밖 폴더·터미널·자동 실행은 PC 앞에서만.
+ *  - 원격 사람은 작업만 한다. 설정·키·자동 실행은 PC 앞에서만.
+ *    권한 묻지 않기 켜기·뿌리 밖 폴더·터미널은 "PC 앞과 같은 권한"(full)을 켰을 때만 원격에도 된다(기본 꺼짐).
  */
-interface Saved { enabled: boolean; port: number; salt?: string; hash?: string }
+interface Saved { enabled: boolean; full: boolean; port: number; salt?: string; hash?: string }
 export interface RemoteSession { name: string; ip: string; at: number }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -42,6 +43,7 @@ export class RemoteAccess {
     const port = Number(v.port);
     this.s = {
       enabled: v.enabled === true && typeof v.hash === 'string',
+      full: v.full === true,
       port: Number.isInteger(port) && port > 1024 && port < 65536 ? port : defaultPort,
       ...(typeof v.salt === 'string' && typeof v.hash === 'string' ? { salt: v.salt, hash: v.hash } : {}),
     };
@@ -49,10 +51,11 @@ export class RemoteAccess {
 
   get enabled() { return this.s.enabled; }
   get port() { return this.s.port; }
+  get full() { return this.s.enabled && this.s.full; }
 
   /** 화면에 보낼 상태(비밀번호는 있는지만) */
   public() {
-    return { enabled: this.s.enabled, port: this.s.port, hasPassword: Boolean(this.s.hash), urls: this.urls(), people: this.sessions.size };
+    return { enabled: this.s.enabled, full: this.s.full, port: this.s.port, hasPassword: Boolean(this.s.hash), urls: this.urls(), people: this.sessions.size };
   }
 
   /** 이 PC 의 사설 주소로 만든 접속 주소들 */
@@ -67,7 +70,8 @@ export class RemoteAccess {
   }
 
   /** 켜기·끄기·비밀번호 바꾸기. 비밀번호를 바꾸거나 끄면 들어와 있던 사람은 모두 나간다 */
-  set(v: { enabled?: unknown; password?: unknown }) {
+  set(v: { enabled?: unknown; password?: unknown; full?: unknown }) {
+    if (typeof v.full === 'boolean') this.s.full = v.full;
     if (typeof v.password === 'string' && v.password !== '') {
       if (v.password.length < 8) throw new Error('비밀번호는 8자 이상');
       const salt = randomBytes(16).toString('hex');

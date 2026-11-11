@@ -41,11 +41,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
    */
   const route = async (req: IncomingMessage, res: ServerResponse, rc: RemoteSession | null) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
-    if (rc && !REMOTE_ALLOWED.has(`${req.method} ${url.pathname}`)) return send(res, 403, '원격에서는 쓸 수 없음 — 이 PC 앞에서 하세요');
+    // 폴더 찾아보기(뿌리 밖 폴더 연결)는 원격에 PC 앞과 같은 권한을 준 때만
+    const remoteOk = REMOTE_ALLOWED.has(`${req.method} ${url.pathname}`) || (req.method === 'GET' && url.pathname === '/browse' && remote?.full);
+    if (rc && !remoteOk) return send(res, 403, '원격에서는 쓸 수 없음 — 이 PC 앞에서 하세요');
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
-      if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, rc ? { ...info, remote: true, user: rc.name } : info);
-      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, rc ? { via: 'dashboard', user: `${rc.name}(원격)` } : { via: 'local', user: 'local' });
+      if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, rc ? { ...info, remote: true, user: rc.name, full: Boolean(remote?.full) } : info);
+      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, rc ? { via: 'dashboard', user: `${rc.name}(원격)`, ...(remote?.full ? { trusted: true } : {}) } : { via: 'local', user: 'local' });
       // 원격 접속 — 켜기·끄기·비밀번호(PC 앞에서만)
       if (url.pathname === '/remote' && remote) {
         if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError });

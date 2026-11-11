@@ -91,6 +91,7 @@ export type ClientCommand =
 export interface CommandOrigin {
   via: 'local' | 'dashboard';
   user: string;
+  trusted?: boolean; // PC 앞과 같은 권한(원격 접속에서 "PC 앞과 같은 권한"을 켰을 때)
 }
 
 export const AGENTS: readonly AgentKind[] = ['claude', 'gemini', 'codex'];

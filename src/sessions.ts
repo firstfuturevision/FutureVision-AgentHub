@@ -873,7 +873,7 @@ export class SessionManager {
     if (cmd.model === undefined && (presetChanged || agent !== info.agent)) model = preset?.model;
     // 권한 묻지 않기: 정했으면 그 값, 에이전트를 새로 고르면 그 에이전트의 값, 아니면 그대로. 켜는 건 PC 앞에서만
     let autoApprove = cmd.autoApprove ?? (presetChanged ? Boolean(preset?.autoApprove) : Boolean(info.autoApprove));
-    if (autoApprove && !info.autoApprove && origin.via !== 'local') return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
+    if (autoApprove && !info.autoApprove && origin.via !== 'local' && !origin.trusted) return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
     if (info.status !== 'ended') live.adapter.stop();
@@ -998,7 +998,7 @@ export class SessionManager {
 
   /** 공용 PC 화면에 터미널 창 띄우기. 창은 PC 앞 사람만 쓸 수 있으므로 대시보드에서는 거부한다. */
   private async terminal(agent: AgentKind, sessionId: string | undefined, workdir: string | undefined, origin: CommandOrigin, profile?: boolean) {
-    if (origin.via !== 'local') {
+    if (origin.via !== 'local' && !origin.trusted) {
       this.publish({ type: 'error', agent, message: '터미널 창은 공용 PC 앞에서만 열 수 있음' });
       return;
     }
@@ -1032,7 +1032,7 @@ export class SessionManager {
    * 드라이브·파일 시스템 뿌리, Agent Hub 기록·키(data) 폴더와 그것을 품은 폴더는 안 된다.
    */
   private outsideDir(d: string, origin: CommandOrigin): string | { error: string } {
-    if (origin.via !== 'local') return { error: `작업 폴더 뿌리 밖의 폴더는 PC 앞에서만 연결할 수 있음: ${d}` };
+    if (origin.via !== 'local' && !origin.trusted) return { error: `작업 폴더 뿌리 밖의 폴더는 PC 앞에서만 연결할 수 있음: ${d}` };
     if (!isAbsolute(d)) return { error: `연결할 수 없는 폴더(작업 폴더 뿌리 밖은 찾아보기로 고르세요): ${d}` };
     const abs = resolve(d);
     if (!existsSync(abs) || !statSync(abs).isDirectory()) return { error: `없는 폴더: ${d}` };

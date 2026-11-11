@@ -608,11 +608,29 @@ function remoteRow() {
   pw.append(inp, save);
   row.append(pw);
 
+  // PC 앞과 같은 권한 — 권한 묻지 않기 켜기·뿌리 밖 폴더·터미널을 원격에도
+  const full = el('div', 'auth-body');
+  const fsw = el('button', `switch${r.full ? ' on' : ''}`);
+  fsw.type = 'button';
+  fsw.setAttribute('role', 'switch');
+  fsw.setAttribute('aria-checked', String(r.full));
+  fsw.setAttribute('aria-label', '원격에도 PC 앞과 같은 권한');
+  fsw.onclick = async () => {
+    if (!r.full && !(await askDialog({ title: '원격에도 PC 앞과 같은 권한', text: '원격으로 들어온 사람도 권한 묻지 않기를 켜고, 작업 폴더 뿌리 밖의 폴더를 연결하고, 터미널을 열 수 있습니다(터미널 창은 이 PC 화면에 뜹니다). 비밀번호를 아는 사람은 이 PC 를 마음대로 쓸 수 있게 됩니다.', ok: '켜기', danger: true }))) return;
+    fsw.disabled = true;
+    const x = await postJson('/remote', { full: !r.full });
+    if (x) { remoteState = x; flash(x.full ? '원격에도 PC 앞과 같은 권한' : '원격은 작업만'); }
+    renderAuth();
+  };
+  full.append(el('span', 'auth-state', 'PC 앞과 같은 권한'), fsw);
+  full.append(el('div', 'hint-inline auth-help', '권한 묻지 않기 켜기, 뿌리 밖 폴더 연결, 터미널. 설정·키는 켜도 PC 앞에서만'));
+  row.append(full);
+
   const body = el('div', 'auth-body');
   if (r.error) body.append(el('span', 'auth-state off', r.error));
   if (r.enabled && r.urls.length) for (const u of r.urls) body.append(el('span', 'auth-code', u));
   body.append(el('div', 'hint-inline auth-help', r.enabled
-    ? '같은 사무실 네트워크의 PC·폰 브라우저에서 위 주소로. 원격은 작업만 하고 설정·키·권한은 바꿀 수 없습니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
+    ? '같은 사무실 네트워크의 PC·폰 브라우저에서 위 주소로. 설정·키는 원격에서 바꿀 수 없습니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
     : '켜면 같은 사무실 네트워크에서 비밀번호로 들어올 수 있습니다. 인터넷에는 열리지 않습니다'));
   row.append(body);
   return row;
