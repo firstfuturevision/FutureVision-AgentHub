@@ -1229,8 +1229,21 @@ $('p-folder-add').onchange = async () => {
 /** 절대 경로 → 작업 폴더 뿌리 아래 이름(뿌리는 '.'). 뿌리 밖이면 절대 경로 그대로 */
 const relFolder = (abs) => { const r = relName(abs); return r === null ? abs : r || '.'; };
 
-/** 폴더 찾아보기 창 — 고른 폴더의 절대 경로, 취소하면 null */
-function pickFolder(start) {
+/** 연결할 폴더 고르기 — 운영체제 폴더 창(탐색기·Finder)을 먼저 띄우고, 못 띄우면 자체 찾아보기 창. 취소하면 null */
+async function pickFolder(start) {
+  try {
+    const r = await fetch('/pick-folder', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ start }) });
+    if (r.ok) {
+      const x = await r.json();
+      if (x.path) return x.path;
+      if (x.cancel || x.busy) return null;
+    }
+  } catch {}
+  return pickFolderWeb(start);
+}
+
+/** 자체 찾아보기 창 — 운영체제 창을 못 띄울 때(화면 없는 리눅스 등) */
+function pickFolderWeb(start) {
   return new Promise((done) => {
     const back = el('div', 'dlg-back');
     const box = el('div', 'dlg fpick');

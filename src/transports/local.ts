@@ -13,6 +13,7 @@ import type { HubSkillStore } from '../hubskills.ts';
 import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
+import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
 
 const TYPES: Record<string, string> = {
@@ -86,6 +87,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         } catch (err) {
           return send(res, 400, (err as Error).message);
         }
+      }
+      // 운영체제 폴더 선택 창(탐색기·Finder) — 이 PC 화면에 뜬다. 못 띄우면 화면이 자체 찾아보기 창을 쓴다
+      if (req.method === 'POST' && url.pathname === '/pick-folder') {
+        const body = (await readJson(req, res)) as any;
+        if (res.writableEnded) return;
+        const start = typeof body?.start === 'string' ? body.start : undefined;
+        return json(res, 200, await pickFolderNative(start));
       }
       // 세션 지침: 그 CLI 가 읽는 스킬 목록(보기 전용)
       if (req.method === 'GET' && url.pathname === '/skills') {
