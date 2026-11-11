@@ -423,7 +423,7 @@ test('MCP: initialize 는 지침을, tools/list 는 clink 와 프리셋 도구�
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.match(init.result.instructions, /메인 에이전트/);
   const list = await call('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push']);
   assert.deepEqual(list.result.tools[0].inputSchema.properties.preset.enum, ['리뷰어']); // 프리셋이 도구에 실린다
   assert.match(init.result.instructions, /맡길 수 있는 하위 에이전트: 리뷰어/);
   assert.ok(events.length > 0);
