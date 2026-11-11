@@ -708,7 +708,7 @@ async function openWpForm(p) {
   // 메인 에이전트: 기본 + 에이전트들
   f.mainAgent.replaceChildren(new Option('기본 (Claude)', ''), ...presets.map((a) => new Option(`${a.name} · ${NAMES[a.agent]}`, a.id)));
   f.mainAgent.value = p?.mainAgent && presets.some((a) => a.id === p.mainAgent) ? p.mainAgent : '';
-  fillAllow('wpagents', presets.map((a) => ({ id: a.id, label: `${a.name} · ${NAMES[a.agent]}` })), p?.agents, wform);
+  fillAllow('wpagents', presets.map((a) => ({ id: a.id, label: `${a.name} · ${NAMES[a.agent]}` })), liveIds(p?.agents, presets), wform);
   wform.hidden = false;
   renderWorkPresets();
   f.name.focus();
@@ -920,7 +920,7 @@ async function openForm(p) {
   f.autoApprove.checked = Boolean(p?.autoApprove);
   if (!toolList.length) await loadTools();
   // 허용 목록: 없으면 "전부", 있으면 "고르기"에 체크
-  fillAllow('agents', presets.filter((x) => x.id !== p?.id).map((x) => ({ id: x.id, label: `${x.name} · ${NAMES[x.agent]}` })), p?.agents);
+  fillAllow('agents', presets.filter((x) => x.id !== p?.id).map((x) => ({ id: x.id, label: `${x.name} · ${NAMES[x.agent]}` })), liveIds(p?.agents, presets));
   fillAllow('tools', toolList.map((t) => ({ id: t.id, label: `${t.name}${t.enabled ? '' : ' (꺼짐)'}` })), p?.tools);
   if (!hubSkillList.length) await loadSkills();
   fillAllow('skills', hubSkillList.map((k) => ({ id: k.name, label: k.name })), p?.skills);
@@ -930,10 +930,19 @@ async function openForm(p) {
 }
 
 /** 허용 목록을 한 줄 글로: 없음=전부, []=없음, 아니면 이름들 */
+/** 허용 목록에서 지워진 항목은 뺀다. 골라 둔 것이 모두 지워졌으면 제한 없음(null) — 서버와 같은 규칙 */
+function liveIds(ids, pool) {
+  if (!ids) return null;
+  if (!ids.length) return ids;
+  const live = ids.filter((id) => pool.some((x) => x.id === id));
+  return live.length ? live : null;
+}
+
 function allowText(ids, pool, name, all = '전부') {
+  ids = liveIds(ids, pool);
   if (!ids) return all;
   if (!ids.length) return '없음';
-  return ids.map((id) => pool.find((x) => x.id === id)).filter(Boolean).map(name).join(', ') || '없음';
+  return ids.map((id) => pool.find((x) => x.id === id)).map(name).join(', ');
 }
 
 /** 허용 칸: 전부 / 고르기 + 체크 목록 */
@@ -1408,10 +1417,13 @@ function renderPanel() {
   ph.hidden = true; // 상자에만 보이고 목록에는 안 나온다
   add.replaceChildren(ph, ...folderList.filter((f) => !used.has(f.path)).map((f) => new Option(f.name || rootName(), f.name || '.')), new Option('다른 폴더 찾기…', '?browse'));
 
-  // 허용: 메인 프리셋이 정한 하위 에이전트 · 툴
+  // 허용: 메인 에이전트와 프리셋(작업 환경)이 정한 하위 에이전트 — 둘 다 정했으면 둘 다 허용한 것만(서버와 같은 규칙) · 툴
   const al = $('p-allow');
   al.replaceChildren();
-  const agentsText = preset ? allowText(preset.agents, presets, (x) => x.name) : '전부';
+  const wp = s.info.workPreset ? workPresetList.find((x) => x.id === s.info.workPreset.id) : undefined;
+  const byAgent = liveIds(preset?.agents, presets);
+  const byWork = liveIds(wp?.agents, presets);
+  const agentsText = allowText(byAgent && byWork ? byAgent.filter((a) => byWork.includes(a)) : byAgent ?? byWork, presets, (x) => x.name);
   const toolsText = preset ? allowText(preset.tools, toolList, (x) => x.name, '켜진 툴 전부') : '켜진 툴 전부';
   for (const [k, v] of [['하위 에이전트', agentsText], ['툴', toolsText]]) {
     const row = el('div', 'p-item col');

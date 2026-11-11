@@ -230,6 +230,27 @@ test('프리셋이 메인·하위 에이전트를 정하면: 메인은 기본으
   sessions.stopAll();
 });
 
+test('프리셋이 골라 둔 하위 에이전트가 모두 지워지면 제한이 풀리고, 처음부터 없음으로 정했으면 이유를 알려 준다', async () => {
+  const { sessions, events, base, presets } = await setup();
+  const wp = new WorkPresetStore(join(base, 'data', 'wp3.json'));
+  (sessions as any).workPresets = wp;
+  const gone = presets.save({ name: '지울 것', agent: 'gemini', instructions: 'x' });
+  wp.save({ name: '관리', agents: [gone.id] });
+  wp.save({ name: '혼자', agents: [] });
+  presets.remove(gone.id);
+
+  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workPreset: '관리' }, phone);
+  const m = (await waitFor(events, (e) => e.type === 'session.created' && e.session.workPreset?.name === '관리')).session;
+  assert.equal(sessions.presetsForMain(m.id).length, presets.list().length); // 전부
+  const r = await sessions.clink(m.id, { prompt: '정리해', cli_name: 'claude' });
+  assert.equal(r.status, 'done');
+
+  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workPreset: '혼자' }, phone);
+  const solo = (await waitFor(events, (e) => e.type === 'session.created' && e.session.workPreset?.name === '혼자')).session;
+  await assert.rejects(sessions.clink(solo.id, { prompt: 'x', cli_name: 'codex' }), /하위 에이전트를 쓰지 않게 정해져 있음/);
+  sessions.stopAll();
+});
+
 test('없는 프리셋이면 메인에게 있는 프리셋 목록과 함께 알려 준다', async () => {
   const { sessions, events, main } = await setup();
   await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@role:디자이너 make a logo' }, phone);

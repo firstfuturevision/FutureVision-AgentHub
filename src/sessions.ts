@@ -253,10 +253,22 @@ export class SessionManager {
   private mainAllowed(mainId: string): string[] | undefined {
     // 메인 에이전트의 허용 목록과 프리셋(작업 환경)의 허용 목록 — 둘 다 있으면 둘 다 허용한 것만
     const info = this.sessions.get(mainId)?.info;
-    const byAgent = info?.preset ? this.presets?.find(info.preset.id)?.agents : undefined;
-    const byPreset = info?.workPreset ? this.workPresets?.find(info.workPreset.id)?.agents : undefined;
+    const byAgent = this.liveAllow(info?.preset ? this.presets?.find(info.preset.id)?.agents : undefined);
+    const byPreset = this.liveAllow(info?.workPreset ? this.workPresets?.find(info.workPreset.id)?.agents : undefined);
     if (byAgent && byPreset) return byAgent.filter((a) => byPreset.includes(a));
     return byAgent ?? byPreset;
+  }
+
+  /**
+   * 허용 목록에서 지워진 에이전트는 뺀다. 골라 둔 에이전트가 모두 지워졌으면 제한도 없앤다(전부) —
+   * 남겨 두면 아무에게도 못 맡기는데, 화면에는 고른 게 안 보여 왜 막혔는지 알 수 없다.
+   * 처음부터 아무것도 안 고른 빈 목록([])은 "하위 에이전트 없음"으로 그대로 둔다.
+   */
+  private liveAllow(ids?: string[]): string[] | undefined {
+    if (!ids) return undefined;
+    if (!ids.length) return ids;
+    const live = ids.filter((id) => this.presets?.find(id));
+    return live.length ? live : undefined;
   }
 
   /** 첨부 저장: 세션 작업 폴더의 첨부/ 에 "날짜시각-이름" 으로. 작업자도 같은 폴더라 그대로 열 수 있다. */
@@ -599,6 +611,7 @@ export class SessionManager {
       const allowed = this.mainAllowed(mainId);
       if (allowed) {
         const names = this.presetsForMain(mainId).map((p) => p.name).join(', ') || '없음';
+        if (!allowed.length) throw new Error('이 작업은 하위 에이전트를 쓰지 않게 정해져 있음 — 바꾸려면 설정에서 에이전트·프리셋의 "하위 에이전트" 허용을 고친다');
         if (!preset) throw new Error(`이 메인은 정해진 하위 에이전트에게만 맡길 수 있음 — preset 으로 고르세요 (허용: ${names})`);
         if (!allowed.includes(preset.id)) throw new Error(`이 메인은 "${preset.name}" 에게 맡길 수 없음 (허용: ${names})`);
       }
