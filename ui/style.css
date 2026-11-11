@@ -24,6 +24,10 @@
   }
 }
 * { box-sizing: border-box; }
+/* 스크롤 막대: 얇게, 바탕에 묻히게. 마우스를 올리면 조금 진하게 */
+:root { color-scheme: light dark; }
+* { scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+*:hover { scrollbar-color: var(--ink-faint) transparent; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--ink); font: 15px/1.7 var(--sans); -webkit-font-smoothing: antialiased; }
