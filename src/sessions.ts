@@ -58,6 +58,7 @@ interface Live {
   merges?: { label: string; text: string }[]; // 포크·분담에서 공유받은 것: 다음 지시에 붙일 내용
   ctx?: { label: string; chars: number }[]; // 이번 CLI 에 이미 넣은 것(앞 대화, 공유) — 다시 띄우면 비운다
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
+  dormant?: boolean; // 호스트를 다시 켜서 CLI 가 아직 없음 — 다음 지시 때 띄운다
 }
 
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -163,8 +164,8 @@ export class SessionManager {
 
   /**
    * 호스트를 다시 켰을 때 기록 파일(data/sessions/*.jsonl)에서 작업 목록·대화를 되살린다.
-   * CLI 프로세스는 이미 없으므로 모두 "끝남"으로 복원한다(이어서 하려면 포크 → 앞 대화를 이어받음).
-   * 삭제한 작업은 되살리지 않는다.
+   * CLI 프로세스는 이미 없으므로 "대기"로 두고, 다음 지시가 오면 CLI 를 다시 띄워 앞 대화를 붙여 이어 간다(wake).
+   * 작업에는 "끝남"이 없다 — 지우기 전까지 언제든 이어 간다. 삭제한 작업은 되살리지 않는다.
    */
   restore(): number {
     let files: string[] = [];
@@ -194,19 +195,15 @@ export class SessionManager {
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
       }
-      const live: Live = { info, adapter: new UnavailableAdapter('끝난 작업'), history: events.slice(-HISTORY_CAP), turn: null };
-      if (!events.some((e) => e.type === 'session.ended')) {
-        const ended: HostEvent = { type: 'session.ended', sessionId: info.id, reason: '호스트를 다시 켜서 끝남. 이어서 하려면 포크' };
-        this.stamp(ended);
-        live.history.push(ended);
-        appendFileSync(join(this.logDir, f), JSON.stringify({ at: new Date().toISOString(), ...ended }) + '\n');
-      }
-      info.status = 'ended';
+      const live: Live = { info, adapter: new UnavailableAdapter('다시 띄우기 전'), history: events.slice(-HISTORY_CAP), turn: null };
+      info.status = 'idle';
+      live.dormant = true;
       restored.push(live);
     }
     // 메인이 작업자보다 먼저 오도록(화면이 카드를 메인에 붙인다), 만든 순서대로
     restored.sort((a, b) => Number(a.info.role === 'worker') - Number(b.info.role === 'worker') || a.info.createdAt.localeCompare(b.info.createdAt));
     for (const l of restored) this.sessions.set(l.info.id, l);
+    for (const l of restored) this.closePerms(l, '호스트를 다시 켬'); // 꺼진 CLI 가 묻던 것은 답할 곳이 없다
     return restored.length;
   }
 
@@ -396,7 +393,7 @@ export class SessionManager {
   /** 세션 대화에 승인 카드를 띄우고 사람의 답을 기다린다. 세션이 끝나면 거부로 본다. */
   private askHuman(sessionId: string, tool: string, detail: string): Promise<boolean> {
     const live = this.sessions.get(sessionId);
-    if (!live || live.info.status === 'ended') return Promise.resolve(false);
+    if (!live || live.dormant) return Promise.resolve(false);
     const requestId = `hub${++this.askSeq}`;
     return new Promise((resolve) => {
       this.asks.set(requestId, { sessionId, resolve });
@@ -443,10 +440,8 @@ export class SessionManager {
       case 'user.message': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
-        if (live.info.status === 'ended') return this.publish({ type: 'error', sessionId: cmd.sessionId, message: '이미 끝난 세션' });
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
         this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}) });
-        this.setStatus(live, 'working');
         // 첨부: 모든 파일은 작업 폴더 경로로 알려 주고(에이전트가 열어 봄), 이미지는 이미지째 함께 보낸다
         let text = cmd.text;
         if (atts.length) {
@@ -456,29 +451,9 @@ export class SessionManager {
         const images = atts
           .filter((a) => IMAGE_MIME.has(a.mime) && a.size <= MAX_INLINE_IMAGE)
           .map((a) => ({ mime: a.mime, data: readFileSync(this.attachmentPath(live, a.path)!).toString('base64') }));
-        // 첫 지시에는 에이전트 역할 지침, 그 바깥에 작업 환경(프리셋) 지침을 붙인다
-        if (live.role) {
-          text = withRole(live.role, text);
-          live.role = undefined;
-        }
-        if (live.guide) {
-          text = withGuidelines(live.guide, text);
-          live.guide = undefined;
-        }
-        // 복제한 작업의 첫 지시에는 원래 작업의 대화를 붙인다(화면·기록에는 사람이 쓴 글만)
-        // 포크에서 공유받은 게 있으면 이번 지시 앞에 붙인다
-        const sent = this.pendingContext(live).map(({ label, chars }) => ({ label, chars }));
-        if (live.merges?.length) {
-          text = `${live.merges.map((m) => m.text).join('\n\n')}\n\n[이어서 할 일]\n${text}`;
-          live.merges = undefined;
-        }
-        const carry = live.carry;
-        live.carry = undefined;
-        if (sent.length) {
-          (live.ctx ??= []).push(...sent);
-          this.publishContext(live);
-        }
-        live.adapter.send(carry ? `[이전 대화 — 이 작업의 앞선 기록. 이어서 진행한다]\n${carry}\n\n[이어서 할 일]\n${text}` : text, images);
+        if (live.dormant && !(await this.wake(live, true))) return;
+        this.setStatus(live, 'working');
+        live.adapter.send(this.compose(live, text), images);
         return;
       }
       case 'permission.respond': {
@@ -500,9 +475,9 @@ export class SessionManager {
       case 'session.stop': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
-        // 메인을 끝내면 그 메인이 맡긴 작업자도 모두 끝낸다
-        for (const w of this.sessions.values()) if (w.info.parentId === live.info.id && w.info.status !== 'ended') w.adapter.stop();
-        live.adapter.stop();
+        // 멈춤(■): 하던 차례만 멈춘다. 메인을 멈추면 그 메인이 맡긴 작업자도 멈춘다. 작업은 대기로 남는다
+        for (const w of this.sessions.values()) if (w.info.parentId === live.info.id) this.halt(w, origin.user);
+        this.halt(live, origin.user);
         return;
       }
       case 'session.rename': {
@@ -533,7 +508,7 @@ export class SessionManager {
         // 작업자까지 끝내고 목록에서 뺀다. 기록 파일(data/sessions/*.jsonl)은 AX 근거라 남긴다.
         const targets = [...this.sessions.values()].filter((w) => w.info.parentId === live.info.id).concat(live);
         for (const t of targets) {
-          if (t.info.status !== 'ended') t.adapter.stop();
+          if (!t.dormant) t.adapter.stop();
           if (t.token) this.tokens.delete(t.token);
           for (const [id, a] of this.asks) if (a.sessionId === t.info.id) { this.asks.delete(id); a.resolve(false); }
           this.publish({ type: 'session.deleted', sessionId: t.info.id });
@@ -573,6 +548,86 @@ export class SessionManager {
         await this.terminal(cmd.agent, cmd.sessionId, cmd.workdir, origin, cmd.profile);
         return;
     }
+  }
+
+  /**
+   * 멈춤: 하던 차례만 멈춘다. 묻던 것은 거부로 정리한다.
+   * 차례만 멈출 수 있는 CLI(Claude interrupt, ACP session/cancel)는 그대로 두고, 아니면(또는 10초 안에 안 멈추면) 끈다 — 다음 지시 때 다시 띄운다.
+   */
+  private halt(live: Live, by: string) {
+    const st = live.info.status;
+    if (live.dormant || (st !== 'working' && st !== 'starting')) return;
+    const id = live.info.id;
+    this.closePerms(live, '멈춤');
+    this.publish({ type: 'session.halted', sessionId: id, by });
+    if (st === 'working' && live.adapter.interrupt) {
+      live.adapter.interrupt();
+      const gen = live.gen;
+      const t = setTimeout(() => { if (live.gen === gen && !live.dormant && live.info.status === 'working') live.adapter.stop(); }, 10_000);
+      t.unref?.();
+    } else live.adapter.stop();
+  }
+
+  /** 아직 답하지 않은 승인 요청을 거부로 정리한다(호스트가 직접 물은 것 포함) — 화면의 허용·거부 버튼이 남지 않게 */
+  private closePerms(live: Live, by: string) {
+    const id = live.info.id;
+    for (const [rid, a] of this.asks) if (a.sessionId === id) { this.asks.delete(rid); a.resolve(false); }
+    const done = new Set(live.history.flatMap((e) => (e.type === 'permission.resolved' ? [e.requestId] : [])));
+    for (const e of [...live.history]) {
+      if (e.type === 'permission.request' && !done.has(e.requestId)) this.publish({ type: 'permission.resolved', sessionId: id, requestId: e.requestId, allow: false, by });
+    }
+  }
+
+  /** 이번 지시에 붙어 갈 것을 붙인다: 역할 지침, 작업 환경 지침, 포크·분담 공유, 앞 대화(화면·기록에는 사람이 쓴 글만) */
+  private compose(live: Live, text: string): string {
+    if (live.role) {
+      text = withRole(live.role, text);
+      live.role = undefined;
+    }
+    if (live.guide) {
+      text = withGuidelines(live.guide, text);
+      live.guide = undefined;
+    }
+    const sent = this.pendingContext(live).map(({ label, chars }) => ({ label, chars }));
+    if (live.merges?.length) {
+      text = `${live.merges.map((m) => m.text).join('\n\n')}\n\n[이어서 할 일]\n${text}`;
+      live.merges = undefined;
+    }
+    const carry = live.carry;
+    live.carry = undefined;
+    if (sent.length) {
+      (live.ctx ??= []).push(...sent);
+      this.publishContext(live);
+    }
+    return carry ? `[이전 대화 — 이 작업의 앞선 기록. 이어서 진행한다]\n${carry}\n\n[이어서 할 일]\n${text}` : text;
+  }
+
+  /**
+   * 끝난 작업이나 호스트를 다시 켜서 쉬는 작업을 같은 작업 그대로(id·기록·하위 작업) 다시 띄운다.
+   * 새 CLI 는 앞 대화를 모르므로 다음 지시에 지금까지의 대화와 역할·작업 환경 지침을 붙인다.
+   * 못 띄웠으면 false(끝남 이유가 기록에 남는다).
+   */
+  private async wake(live: Live, sentNow = false): Promise<boolean> {
+    const info = live.info;
+    live.dormant = false;
+    live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 늦게 보내는 이벤트는 버린다
+    if (live.token) this.tokens.delete(live.token);
+    live.token = undefined;
+    // sentNow: 방금 기록한 이번 지시는 앞 대화에서 뺀다(이번 지시로 따로 간다)
+    const upto = sentNow ? live.history.findLastIndex((e) => e.type === 'user.message') : -1;
+    const said = conversation(upto >= 0 ? live.history.slice(0, upto) : live.history);
+    if (said.length) live.carry = [live.carry, tail(said.join('\n'))].filter(Boolean).join('\n');
+    live.merges = undefined;
+    live.ctx = [];
+    live.role = info.preset ? this.presets?.find(info.preset.id) : undefined;
+    live.guide = info.workPreset ? this.workPresets?.find(info.workPreset.id) : undefined;
+    info.status = 'starting';
+    this.publish({ type: 'session.status', sessionId: info.id, status: 'starting' });
+    this.publish({ type: 'context.usage', sessionId: info.id, used: 0, window: null });
+    this.publishContext(live);
+    live.adapter = this.makeAdapter(info.agent);
+    await this.launch(live);
+    return !live.dormant;
   }
 
   /**
@@ -639,30 +694,25 @@ export class SessionManager {
     }
   }
 
-  /** 진행 중인 작업이면 그대로 보내고, 끝난 작업이면 포크해서 보낸다. */
+  /** 같은 작업에 보낸다. 끝났거나 호스트를 다시 켜서 쉬는 작업이면 다시 띄워 앞 대화를 붙여 이어 간다. */
   private async runScheduled(sessionId: string, prompt: string): Promise<{ result: string; sessionId?: string }> {
     const live = this.sessions.get(sessionId);
     if (!live) return { result: '작업이 없어 건너뜀' };
-    const origin: CommandOrigin = { via: 'local', user: '예약' };
-    if (live.info.status !== 'ended') {
-      await this.handle({ type: 'user.message', sessionId, text: prompt }, origin);
-      return { result: '보냄' };
-    }
-    const copy = await this.forkLive(live, origin, '');
-    if (copy.info.status === 'ended') return { result: '새 작업을 시작하지 못함', sessionId: copy.info.id };
-    await this.handle({ type: 'user.message', sessionId: copy.info.id, text: prompt }, origin);
-    return { result: '끝난 작업이라 이어서 새로 시작', sessionId: copy.info.id };
+    const woke = live.dormant;
+    await this.handle({ type: 'user.message', sessionId, text: prompt }, { via: 'local', user: '예약' });
+    if (live.dormant) return { result: '작업을 다시 띄우지 못함' };
+    return { result: woke ? '쉬던 작업을 다시 띄워 보냄' : '보냄' };
   }
 
   stopAll() {
-    for (const live of this.sessions.values()) if (live.info.status !== 'ended') live.adapter.stop();
+    for (const live of this.sessions.values()) if (!live.dormant) live.adapter.stop();
   }
 
   // ── clink: 메인 에이전트가 작업자에게 일을 맡긴다 (설계: docs/DESIGN.md §5-1) ──
 
   async clink(mainId: string, args: ClinkArgs): Promise<ClinkResult> {
     const main = this.sessions.get(mainId);
-    if (!main || main.info.role !== 'main' || main.info.status === 'ended') throw new Error('메인 세션이 없거나 끝났음');
+    if (!main || main.info.role !== 'main' || main.dormant) throw new Error('메인 세션이 없거나 쉬는 중');
     const prompt = (args.prompt ?? '').trim();
 
     let worker: Live | undefined;
@@ -717,10 +767,15 @@ export class SessionManager {
     const busy = worker.turn && !worker.turn.done && !worker.turn.ended;
     if (prompt) {
       if (busy) throw new Error('작업자가 아직 앞 지시를 처리 중 — prompt 없이 같은 continuation_id 로 부르면 이어서 기다린다');
-      if (worker.info.status === 'ended') {
-        const end = worker.history.findLast((e) => e.type === 'session.ended');
-        return this.result(worker, 'ended', end?.type === 'session.ended' ? `작업자 시작 실패: ${end.reason}` : '작업자가 끝났음', 0);
+      if (worker.dormant) {
+        // 앞서 맡긴 작업자의 CLI 가 꺼졌으면(호스트 재시작 등) 같은 작업자를 다시 띄워 앞 대화를 붙여 이어 간다
+        const woke = args.continuation_id ? await this.wake(worker) : false;
+        if (!woke) {
+          const end = worker.history.findLast((e) => e.type === 'session.ended');
+          return this.result(worker, 'ended', end?.type === 'session.ended' ? `작업자 시작 실패: ${end.reason}` : '작업자가 끝났음', 0);
+        }
       }
+      if (args.continuation_id) firstPrompt = this.compose(worker, prompt);
       worker.turn = { texts: [], errors: [], done: null, ended: null, startedAt: Date.now(), waiters: new Set() };
       this.publish({ type: 'user.message', sessionId: worker.info.id, text: prompt, from: `메인 · ${main.info.agent}` });
       this.setStatus(worker, 'working');
@@ -876,7 +931,8 @@ export class SessionManager {
     if (autoApprove && !info.autoApprove && origin.via !== 'local' && !origin.trusted) return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
-    if (info.status !== 'ended') live.adapter.stop();
+    if (!live.dormant) live.adapter.stop();
+    live.dormant = false;
     if (live.token) this.tokens.delete(live.token);
     live.token = undefined;
     for (const [id, a] of this.asks) if (a.sessionId === info.id) { this.asks.delete(id); a.resolve(false); }
@@ -902,7 +958,7 @@ export class SessionManager {
   }
 
   private fromAdapter(live: Live, ev: AdapterEvent) {
-    if (live.info.status === 'ended') return;
+    if (live.dormant) return;
     const full = { ...ev, sessionId: live.info.id } as HostEvent;
     this.publish(full);
     // 권한 묻지 않기: 요청과 허용을 기록에만 남기고 바로 허용한다
@@ -923,10 +979,15 @@ export class SessionManager {
       this.share(live);
     }
     if (ev.type === 'session.ended') {
-      live.info.status = 'ended';
+      // CLI 가 꺼짐: 작업은 대기로 남기고 다음 지시 때 다시 띄운다(wake)
+      live.dormant = true;
       if (live.token) this.tokens.delete(live.token);
-      // 끝난 세션에서 묻던 것은 거부로 정리
-      for (const [id, a] of this.asks) if (a.sessionId === live.info.id) { this.asks.delete(id); a.resolve(false); }
+      live.token = undefined;
+      this.closePerms(live, 'CLI 꺼짐'); // 꺼진 CLI 에서 묻던 것은 거부로 정리
+      if (live.info.status !== 'idle') {
+        live.info.status = 'idle';
+        this.publish({ type: 'session.status', sessionId: live.info.id, status: 'idle' });
+      }
     }
   }
 
@@ -962,7 +1023,6 @@ export class SessionManager {
     const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : kind === 'split' ? '분담' : '포크');
     const text = tail(fresh.join('\n'));
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: lines.length, ...(kind === 'split' ? { kind } : {}) });
-    if (target.info.status === 'ended') return;
     const head = kind === 'split'
       ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 진행한 대화. 겹치지 않게 반영한다]`
       : `[포크 공유: ${title} — 원본에서 갈라져 따로 진행한 대화. 결과를 반영한다]`;

@@ -119,7 +119,7 @@ input.addEventListener('blur', () => setTimeout(hideSuggest, 150));
 let sug = { items: [], index: 0, start: 0, end: 0 };
 const COMMANDS = [
   { label: '/새 작업', hint: '새 작업 화면으로', run: () => $('new-task').click() },
-  { label: '/끝내기', hint: '지금 작업을 멈춤', run: () => viewId && send({ type: 'session.stop', sessionId: viewId }) },
+  { label: '/멈추기', hint: '하던 일을 멈춤', run: () => viewId && send({ type: 'session.stop', sessionId: viewId }) },
   { label: '/에이전트 만들기', hint: '메인에게 부탁', insert: '새 에이전트를 만들어 줘. 이름: , AI: , 하는 일: ' },
   { label: '/에이전트', hint: '설정 열기', run: () => { showNav('settings'); showSetTab('presets'); } },
   { label: '/프리셋', hint: '설정 열기', run: () => { showNav('settings'); showSetTab('workpresets'); } },
@@ -200,7 +200,8 @@ $('composer').onsubmit = (e) => {
   if (!text && !files.length) return;
   renderAttachments();
   const s = viewId && sessions.get(viewId);
-  if (s && s.info.status !== 'ended') {
+  if (s) {
+    // 끝난 작업도 같은 작업에 보낸다(호스트가 다시 띄워 앞 대화를 붙여 이어 간다)
     void sendWithFiles(viewId, text, files);
   } else {
     // 새 작업: 메인을 만들고, 만들어지면 첫 마디(와 첨부)를 보낸다
@@ -302,7 +303,15 @@ function showNav(nav) {
 for (const b of document.querySelectorAll('[data-nav]')) b.onclick = () => showNav(b.dataset.nav);
 
 $('new-task').onclick = () => { viewId = null; showNav('sessions'); render(); input.focus(); };
-$('stop').onclick = () => viewId && send({ type: 'session.stop', sessionId: viewId });
+$('halt').onclick = () => viewId && send({ type: 'session.stop', sessionId: viewId });
+/** 하던 일이 있으면 ■(멈추기). 글을 쓰기 시작하면 보내기도 함께 */
+function syncSend() {
+  const s = viewId && sessions.get(viewId);
+  const busy = Boolean(s && isBusy(s));
+  $('halt').hidden = !busy;
+  $('send').hidden = busy && !input.value.trim() && !pendingFiles.length;
+}
+input.addEventListener('input', syncSend);
 // 터미널: 보고 있던 작업이 있으면 그 작업 폴더에서, 없으면 뿌리에서
 for (const b of document.querySelectorAll('[data-term]')) {
   b.onclick = () => send({ type: 'terminal.open', agent: b.dataset.term, sessionId: viewId ?? undefined });
@@ -628,10 +637,12 @@ function remoteRow() {
 
   const body = el('div', 'auth-body');
   if (r.error) body.append(el('span', 'auth-state off', r.error));
-  if (r.enabled && r.urls.length) for (const u of r.urls) body.append(el('span', 'auth-code', u));
+  // 다른 PC·폰에서 들어올 주소(이 PC 의 사무실 네트워크 주소). 이 PC 자신은 그대로 127.0.0.1
+  for (const u of r.urls) body.append(el('span', `auth-code${r.enabled ? '' : ' off'}`, u));
+  if (!r.urls.length) body.append(el('span', 'auth-state off', '사무실 네트워크 주소를 찾지 못함(Wi-Fi·랜 연결 확인)'));
   body.append(el('div', 'hint-inline auth-help', r.enabled
     ? '같은 사무실 네트워크의 PC·폰 브라우저에서 위 주소로. 설정·키는 원격에서 바꿀 수 없습니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
-    : '켜면 같은 사무실 네트워크에서 비밀번호로 들어올 수 있습니다. 인터넷에는 열리지 않습니다'));
+    : '켜면 다른 PC·폰에서 위 주소로 비밀번호를 넣고 들어옵니다. 인터넷에는 열리지 않습니다'));
   row.append(body);
   return row;
 }
@@ -1253,7 +1264,12 @@ function onEvent(ev) {
     case 'context.usage': s.usage = ev.used ? { used: ev.used, window: ev.window } : null; break;
     case 'context.items': s.ctxItems = ev.items; break;
     case 'session.merged': s.items.push({ k: 'merged', t: ev.title, text: ev.text, fromId: ev.fromId, split: ev.kind === 'split' }); break;
-    case 'session.ended': s.info.status = 'ended'; s.draft = null; s.items.push({ k: 'line err', t: `끝남: ${ev.reason}` }); break;
+    case 'session.ended':
+      // CLI 가 꺼짐 — 작업은 대기로 남고 다음 지시 때 다시 띄운다. 멈춤·호스트 재시작은 따로 적지 않는다
+      s.draft = null;
+      if (ev.reason !== '사용자가 종료함' && !ev.reason.startsWith('호스트를 다시 켜서')) s.items.push({ k: 'line err', t: `${ev.reason}. 다음 지시 때 다시 띄워요` });
+      break;
+    case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
     case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = Date.now(); break;
     case 'agent.text':
       if (ev.partial) s.draft = ev.text;
@@ -1751,7 +1767,7 @@ function renderLinks(s) {
 function workerState(w) {
   if (pendingPerm(w)) return '승인 대기';
   if (w.info.status === 'working' || w.info.status === 'starting') return '작업 중';
-  const failed = w.info.status === 'ended' && w.items.some((it) => it.k === 'line err') && !w.items.some((it) => it.k === 'line meta');
+  const failed = (w.info.status === 'idle' || w.info.status === 'ended') && w.items.some((it) => it.k === 'line err') && !w.items.some((it) => it.k === 'line meta');
   if (failed) return '실패';
   return w.items.some((it) => it.k === 'line meta') ? '끝남' : STATUS[w.info.status];
 }
@@ -1774,7 +1790,7 @@ function fillLinks(box, links) {
   }
 }
 
-// ── 예약: 이 작업에 정한 시각마다 지시를 보낸다(끝난 작업이면 이어서 새로 시작) ──
+// ── 예약: 이 작업에 정한 시각마다 지시를 보낸다(CLI 가 꺼져 있으면 다시 띄워 이어서) ──
 const scheduleCache = new Map(); // 세션 id → 예약 목록
 let schedForm = null; // 열린 입력 창 { sessionId }
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
@@ -2021,15 +2037,15 @@ function renderChat() {
   const wait = s && waitingIn(s);
   $('chat-status').textContent = s ? (wait ? '승인 대기' : STATUS[s.info.status]) : '';
   $('chat-status').classList.toggle('wait', Boolean(wait));
-  $('stop').hidden = !live;
+  syncSend();
 
   // 메인 AI·모델은 새 작업을 시작할 때만 고른다. 진행 중인 작업은 정해진 값을 보여 준다.
   // 진행 중인 작업에서는 메인 선택을 숨긴다(이미 정해졌고, 목록에 표시됨)
-  const fixed = Boolean(s && live);
+  const fixed = Boolean(s);
   $('folder-pick').hidden = fixed || Boolean($('wp-select').value); // 폴더는 시작할 때만, 프리셋을 고르면 프리셋이 정한다
   $('chat-folder').textContent = s ? folderName(s.info.workdir) : '';
   $('chat-folder').title = s ? s.info.workdir : '';
-  input.placeholder = s && !live ? '끝난 작업. 보내면 새 작업으로 시작' : '맡길 일  (@ 에이전트, / 명령)';
+  input.placeholder = s && !live ? '보내면 이어서 해요' : '맡길 일  (@ 에이전트, / 명령)';
 
   const scroll = $('scroll');
   const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
@@ -2082,6 +2098,7 @@ function renderItems(s, live, into, skip) {
     }
     if (it.k === 'perm') into.append(permItem(s, it, live));
     else if (it.k === 'line err') into.append(el('div', 'err-line', it.t));
+    else if (it.k === 'line halt') into.append(el('div', 'halt-line', it.t));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
     else into.append(item(it));
@@ -2108,7 +2125,7 @@ function foldGroup(run, key) {
 function tasksCard(ws) {
   const card = el('div', 'tasks');
   for (const w of ws) {
-    const ended = w.info.status === 'ended';
+    const ended = w.info.status === 'idle' || w.info.status === 'ended';
     const failed = ended && w.items.some((it) => it.k === 'line err') && !w.items.some((it) => it.k === 'line meta');
     const done = w.items.some((it) => it.k === 'line meta');
     const state = pendingPerm(w) ? ['wait', '!'] : w.info.status === 'working' || w.info.status === 'starting' ? ['spin', ''] : failed ? ['fail', '×'] : done ? ['done', '✓'] : ['idle', ''];
@@ -2124,7 +2141,7 @@ function tasksCard(ws) {
     card.append(row);
     if (open) {
       const body = el('div', 'tbody');
-      renderItems(w, !ended, body, ask);
+      renderItems(w, true, body, ask);
       if (w.draft) body.append(item({ k: 'agent', t: w.draft }));
       card.append(body);
     }

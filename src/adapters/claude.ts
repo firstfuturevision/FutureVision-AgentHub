@@ -26,6 +26,7 @@ export class ClaudeAdapter implements AgentAdapter {
   private stderrTail: string[] = [];
   private partialText = '';
   private permSeq = 0;
+  private interrupting = false; // 멈춤을 보냈음 — 그 차례의 끝(error_during_execution)은 오류가 아니다
   private lastUsed = 0; // 메인 줄기의 마지막 응답이 받은 입력 토큰 — 지금 컨텍스트에 든 양
   private permissions = new Map<string, { requestId: string; input: unknown }>(); // 화면 요청 id → CLI 요청
   claudeSessionId: string | null = null; // 나중에 --resume 으로 이어 가기용
@@ -106,6 +107,14 @@ export class ClaudeAdapter implements AgentAdapter {
     // 허용은 이번 한 번만(같은 폴더라도 다음에 또 묻는다) — 화면 버튼이 "허용"·"거부" 둘뿐이라서
     const response = allow ? { behavior: 'allow', updatedInput: p.input } : { behavior: 'deny', message: '사람이 거부함' };
     this.write({ type: 'control_response', response: { subtype: 'success', request_id: p.requestId, response } });
+  }
+
+  /** 멈춤: stdin 의 control_request(interrupt). 이 차례는 result 로 끝나고 같은 프로세스가 다음 지시를 받는다(2.1.283 확인) */
+  interrupt() {
+    if (!this.proc?.stdin?.writable) return;
+    for (const id of [...this.permissions.keys()]) this.respondPermission(id, false);
+    this.interrupting = true;
+    this.write({ type: 'control_request', request_id: `int${++this.permSeq}`, request: { subtype: 'interrupt' } });
   }
 
   private write(msg: unknown) {
@@ -203,8 +212,9 @@ export class ClaudeAdapter implements AgentAdapter {
           type: 'turn.done',
           durationMs: Number(ev.duration_ms ?? 0),
           costUsd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : null,
-          isError: Boolean(ev.is_error),
+          isError: Boolean(ev.is_error) && !this.interrupting,
         });
+        this.interrupting = false;
         return;
       }
     }

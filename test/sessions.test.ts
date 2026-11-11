@@ -50,14 +50,42 @@ test('Claude 세션: 실시간 조각 → 완성 → 차례 끝, 두 번째 질�
   assert.ok(events.some((e) => e.type === 'agent.tool_result' && e.ok && e.summary === '파일 내용 한 줄'));
   assert.ok(events.some((e) => e.type === 'session.status' && e.status === 'idle'));
 
-  sessions.handle({ type: 'session.stop', sessionId: id }, local);
-  await waitFor(events, (e) => e.type === 'session.ended');
+  // 멈춤(■): 하던 차례만 멈추고 작업은 대기로. 같은 프로세스가 다음 지시를 받는다(차례 번호가 이어짐)
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'slow job' }, local);
+  await waitFor(events, () => sessions.info(id)?.status === 'working');
+  await sessions.handle({ type: 'session.stop', sessionId: id }, local);
+  await waitFor(events, (e) => e.type === 'session.halted' && e.sessionId === id);
+  const stopped = await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === id && events.indexOf(e) > events.findIndex((x) => x.type === 'session.halted'));
+  assert.equal(stopped.isError, false); // 멈춤은 오류가 아니다
+  assert.equal(sessions.info(id)?.status, 'idle');
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'next' }, local);
+  await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.text === 'turn 4: next');
+  assert.ok(!events.some((e) => e.type === 'session.ended'));
+  sessions.stopAll();
 
   // 기록: 조각 글은 빠지고 완성본·사용자 말·비용이 남는다
   const log = readFileSync(join(base, 'data', 'sessions', `${id}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.ok(log.some((e) => e.type === 'user.message' && e.text === 'hello' && e.from === 'local'));
   assert.ok(log.some((e) => e.type === 'turn.done'));
   assert.ok(!log.some((e) => e.type === 'agent.text' && e.partial));
+});
+
+test('CLI 가 꺼져도 작업은 대기로 남고, 다음 지시에 다시 띄워 앞 대화를 붙여 이어 간다', async () => {
+  const { sessions, events } = setup();
+  await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);
+  const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+  await sessions.handle({ type: 'user.message', sessionId: id, text: '견적 정리' }, local);
+  await waitFor(events, (e) => e.type === 'turn.done');
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'exit!' }, local);
+  await waitFor(events, (e) => e.type === 'session.ended' && e.sessionId === id);
+  await waitFor(events, () => sessions.info(id)?.status === 'idle');
+  await sessions.handle({ type: 'user.message', sessionId: id, text: '이어서' }, local);
+  const reply = await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.sessionId === id && e.text.includes('이어서'));
+  assert.match(reply.text, /^turn 1: /); // 새 CLI
+  assert.match(reply.text, /사람\(local\): 견적 정리/); // 앞 대화를 이어받음
+  assert.doesNotMatch(reply.text, /사람\(local\): 이어서/); // 이번 지시는 앞 대화에 겹쳐 넣지 않는다
+  assert.equal(sessions.info(id)?.status, 'idle');
+  sessions.stopAll();
 });
 
 test('Claude 승인: 물어야 하는 도구는 허용·거부 카드로 오고, 답이 CLI 로 간다', async () => {

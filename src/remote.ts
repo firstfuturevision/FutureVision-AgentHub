@@ -16,6 +16,8 @@ export interface RemoteSession { name: string; ip: string; at: number }
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_FAILS = 5;
 const LOCK_MS = 60_000;
+/** 가상 네트워크 어댑터 이름(VMware·VirtualBox·Hyper-V·WSL·Docker·VPN) */
+const VIRTUAL_NIC = /vmware|virtualbox|vbox|vethernet|hyper-v|wsl|docker|hamachi|tailscale|zerotier|wireguard|tap-|tun\d|utun|loopback/i;
 
 /** 사설·자기 주소인가(인터넷 주소는 받지 않는다) */
 export function isPrivateAddress(addr: string | undefined): boolean {
@@ -58,10 +60,11 @@ export class RemoteAccess {
     return { enabled: this.s.enabled, full: this.s.full, port: this.s.port, hasPassword: Boolean(this.s.hash), urls: this.urls(), people: this.sessions.size };
   }
 
-  /** 이 PC 의 사설 주소로 만든 접속 주소들 */
+  /** 이 PC 의 사설 주소로 만든 접속 주소들(가상 머신·VPN 용 가상 네트워크는 빼고 — 사무실 PC·폰은 그 주소로 못 들어온다) */
   urls(): string[] {
     const out: string[] = [];
-    for (const list of Object.values(networkInterfaces())) {
+    for (const [name, list] of Object.entries(networkInterfaces())) {
+      if (VIRTUAL_NIC.test(name)) continue;
       for (const n of list ?? []) {
         if (n.family === 'IPv4' && !n.internal && isPrivateAddress(n.address)) out.push(`http://${n.address}:${this.s.port}`);
       }

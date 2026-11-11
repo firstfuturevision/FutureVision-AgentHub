@@ -115,30 +115,29 @@ test('예약 실행: 진행 중인 작업이면 그 작업에 보낸다', async 
   sessions.stopAll();
 });
 
-test('예약 실행: 끝난 작업이면 이어서 새로 시작하고 예약도 옮겨 간다 · 에이전트 설정을 이어받는다', async () => {
+test('예약 실행: CLI 가 꺼진 작업이면 같은 작업을 다시 띄워 보낸다 · 에이전트 지침·앞 대화를 이어받는다', async () => {
   const { sessions, events, schedules, presets } = setup();
   const p = presets.save({ name: '메일 담당', agent: 'claude', description: '', instructions: '메일만 정리한다' });
   await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', preset: p.id, workdir: 'proj' }, local);
   const orig = (await waitFor(events, (e) => e.type === 'session.created')).session;
   await sessions.handle({ type: 'user.message', sessionId: orig.id, text: 'hi' }, local);
   await waitFor(events, (e) => e.type === 'turn.done');
-  await sessions.handle({ type: 'session.stop', sessionId: orig.id }, local);
+  await sessions.handle({ type: 'user.message', sessionId: orig.id, text: 'exit!' }, local);
   await waitFor(events, (e) => e.type === 'session.ended' && e.sessionId === orig.id);
   schedules.save({ sessionId: orig.id, prompt: '오늘 메일', repeat: 'daily', time: '10:30' }, TUE10);
 
   await sessions.runSchedules(new Date(2026, 10, 10, 10, 30, 5));
-  const copy = (await waitFor(events, (e) => e.type === 'session.created' && e.session.forkedFrom === orig.id)).session;
-  assert.equal(copy.preset?.id, p.id); // 에이전트(전용 프로필·역할)를 이어받는다
-  const reply = await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.sessionId === copy.id);
+  const reply = await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.sessionId === orig.id && e.text.includes('오늘 메일'));
   assert.match(reply.text, /메일만 정리한다/); // 역할 지침
   assert.match(reply.text, /사람\(local\): hi/); // 앞 대화
   assert.match(reply.text, /오늘 메일$/);
+  assert.equal(events.filter((e) => e.type === 'session.created').length, 1); // 새 작업을 만들지 않는다
   const s = schedules.list()[0];
-  assert.equal(s.sessionId, copy.id);
-  assert.match(s.lastResult ?? '', /새로 시작/);
+  assert.equal(s.sessionId, orig.id);
+  assert.match(s.lastResult ?? '', /다시 띄워/);
 
   // 작업을 지우면 그 작업의 예약도 지운다
-  await sessions.handle({ type: 'session.delete', sessionId: copy.id }, local);
+  await sessions.handle({ type: 'session.delete', sessionId: orig.id }, local);
   assert.equal(schedules.list().length, 0);
   sessions.stopAll();
 });

@@ -107,23 +107,21 @@ test('포크 공유: 포크의 답이 끝날 때마다 새 대화만 원본에 �
   sessions.stopAll();
 });
 
-test('포크 공유: 끝난 원본은 기록에 남고, 원본을 다시 포크하면 공유받은 내용도 이어받는다', async () => {
+test('포크 공유: CLI 가 꺼진 원본도 공유를 받고, 다음 지시에 다시 떠서 앞 대화와 공유를 한 번씩 이어받는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획');
   await sessions.handle({ type: 'session.fork', sessionId: orig.id }, local);
   const fork = (await waitFor(events, (e) => e.type === 'session.created' && e.session.forkedFrom === orig.id)).session;
-  await sessions.handle({ type: 'session.stop', sessionId: orig.id }, local);
+  await sessions.handle({ type: 'user.message', sessionId: orig.id, text: 'exit!' }, local);
   await waitFor(events, (e) => e.type === 'session.ended' && e.sessionId === orig.id);
   await say(sessions, events, fork.id, '조사 결과 정리');
   await waitFor(events, (e) => e.type === 'session.merged' && e.sessionId === orig.id);
 
-  await sessions.handle({ type: 'session.fork', sessionId: orig.id }, local);
-  const again = (events.filter((e) => e.type === 'session.created' && e.session.forkedFrom === orig.id).at(-1) as any).session;
-  assert.notEqual(again.id, fork.id);
-  const reply = await say(sessions, events, again.id, '다음');
+  const reply = await say(sessions, events, orig.id, '다음');
   assert.match(reply.text, /사람\(local\): 계획/);
-  assert.match(reply.text, /\[포크 공유: 조사 결과 정리\]/);
+  assert.equal(reply.text.split('[포크 공유: 조사 결과 정리').length - 1, 1); // 공유는 한 번만
+  assert.match(reply.text, /다음$/);
   sessions.stopAll();
 });
 

@@ -29,9 +29,15 @@ let busy = false;
 // 승인: --permission-prompt-tool stdio 면 "perm " 으로 시작하는 지시에 control_request 를 보내고 control_response 를 기다린다
 const askTool = argv.includes('--permission-prompt-tool') ? argv[argv.indexOf('--permission-prompt-tool') + 1] : null;
 const waiting = new Map();
+let abortTurn = null; // "slow " 차례를 멈춤(interrupt)으로 끝낸다
 createInterface({ input: process.stdin }).on('line', (line) => {
   let msg = null;
   try { msg = JSON.parse(line); } catch {}
+  if (msg?.type === 'control_request' && msg.request?.subtype === 'interrupt') {
+    out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { still_queued: [] } } });
+    abortTurn?.();
+    return;
+  }
   if (msg?.type === 'control_response') { waiting.get(msg.response?.request_id)?.(msg.response.response); waiting.delete(msg.response?.request_id); return; }
   queue.push(line);
   pump();
@@ -124,6 +130,15 @@ async function handle(text) {
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, total_cost_usd: 0, session_id: sid });
     return;
   }
+
+  // 멈춤 시험: 멈출 때까지 기다렸다가 실제 CLI 처럼 error_during_execution 으로 끝난다
+  if (/^slow /.test(text)) {
+    await new Promise((done) => { abortTurn = done; });
+    abortTurn = null;
+    out({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 3, total_cost_usd: 0, session_id: sid });
+    return;
+  }
+  if (text === 'exit!') process.exit(3); // CLI 가 꺼짐
 
   if (/^perm /.test(text)) { // 앞 대화에 붙은 "--permission-mode" 같은 글에는 반응하지 않게 맨 앞만
     const input = { file_path: 'C:/밖/a.txt' };

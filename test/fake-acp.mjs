@@ -10,6 +10,7 @@ let turn = 0;
 let mcpNames = []; // session/new 로 받은 MCP 서버(시험 확인용)
 let nextId = 1000;
 const waiting = new Map();
+let cancelTurn = null;
 
 const ask = (method, params) => new Promise((ok) => {
   const id = nextId++;
@@ -26,6 +27,9 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   }
   if (mode === 'silent') return;
   switch (m.method) {
+    case 'session/cancel':
+      cancelTurn?.();
+      return;
     case 'initialize':
       out({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: {} } });
       return;
@@ -42,6 +46,12 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       const sid = m.params.sessionId;
       const imgs = m.params.prompt.filter((c) => c.type === 'image').length; const txt0 = m.params.prompt.find((c) => c.type === 'text')?.text ?? ''; const text = imgs ? `[이미지 ${imgs}] ${txt0}` : txt0;
       turn += 1;
+      if (text.includes('slow')) {
+        await new Promise((done) => { cancelTurn = done; });
+        cancelTurn = null;
+        out({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'cancelled' } });
+        return;
+      }
       if (text.includes('write')) {
         const r = await ask('session/request_permission', {
           sessionId: sid,

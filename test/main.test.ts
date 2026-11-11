@@ -67,7 +67,7 @@ async function setup(clinkWaitMs = 5000, defaultWorker?: { agent: string; model?
   return { port, sessions, events, main, presets, base };
 }
 
-test('호스트를 다시 켜면 기록에서 작업·대화를 되살리고(끝남), 작업자 카드는 제자리 순서로, 지운 작업은 빼고', async () => {
+test('호스트를 다시 켜면 기록에서 작업·대화를 되살리고(대기, CLI 는 다음 지시 때), 작업자 카드는 제자리 순서로, 지운 작업은 빼고', async () => {
   const { sessions, events, main, base } = await setup();
   await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@codex hello' }, phone);
   await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === main.id);
@@ -81,7 +81,7 @@ test('호스트를 다시 켜면 기록에서 작업·대화를 되살리고(끝
   const again = new SessionManager({ workspaceRoot: join(base, 'ws'), dataDir: join(base, 'data'), makeAdapter: () => { throw new Error('되살린 작업은 CLI 를 띄우지 않음'); } });
   assert.equal(again.restore(), 2); // 메인 + 작업자, 지운 것은 빠짐
   const m = again.info(main.id)!;
-  assert.equal(m.status, 'ended');
+  assert.equal(m.status, 'idle');
   assert.equal(m.customTitle, '인사 작업');
   const replay: HostEvent[] = [];
   again.subscribe((e) => replay.push(e));
@@ -383,17 +383,58 @@ test('작업자 승인 대기 중에는 clink 가 working 으로 돌아오고, �
   sessions.stopAll();
 });
 
-test('메인을 끝내면 작업자도 끝나고, MCP 주소도 닫힌다', async () => {
-  const { port, sessions, events, main } = await setup();
-  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@codex hello' }, phone);
-  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === main.id);
-  const worker = created(events).find((s) => s.role === 'worker');
+test('메인을 멈추면 일하던 작업자도 멈추고(session/cancel), 둘 다 대기로 남아 다음 지시를 받는다', async () => {
+  const { sessions, events, main } = await setup();
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@codex slow job' }, phone);
+  const w = await waitFor(events, (e) => e.type === 'session.created' && e.session.role === 'worker');
+  await waitFor(events, () => sessions.info(w.session.id)?.status === 'working');
 
   await sessions.handle({ type: 'session.stop', sessionId: main.id }, phone);
-  await waitFor(events, (e) => e.type === 'session.ended' && e.sessionId === worker.id);
-  await waitFor(events, (e) => e.type === 'session.ended' && e.sessionId === main.id);
-  const res = await fetch(`http://127.0.0.1:${port}/mcp/whatever`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  assert.equal(res.status, 404);
+  await waitFor(events, (e) => e.type === 'session.halted' && e.sessionId === w.session.id);
+  await waitFor(events, (e) => e.type === 'session.halted' && e.sessionId === main.id);
+  await waitFor(events, () => sessions.info(main.id)?.status === 'idle' && sessions.info(w.session.id)?.status === 'idle');
+  assert.ok(!events.some((e) => e.type === 'session.ended'));
+
+  // 같은 메인·같은 작업자가 이어서 받는다
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@again 다시 해' }, phone);
+  await mainReply(events, main.id, 'again 에게 맡긴 결과');
+  assert.equal(created(events).filter((s) => s.role === 'worker').length, 1);
+  sessions.stopAll();
+});
+
+test('호스트를 다시 켠 뒤: 쉬던 메인은 다음 지시 때 다시 떠서 앞 대화를 이어받고, 앞서 맡긴 작업자도 다시 띄워 이어 간다', async () => {
+  const { sessions, events, main, base, presets } = await setup();
+  await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@codex 첫 일' }, phone);
+  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === main.id);
+  sessions.stopAll();
+  await new Promise((r) => setTimeout(r, 300));
+
+  const port = await freePort();
+  const again = new SessionManager({
+    workspaceRoot: join(base, 'ws'), dataDir: join(base, 'data'), presets, mcpBaseUrl: `http://127.0.0.1:${port}/mcp`, clinkWaitMs: 5000,
+    makeAdapter: (agent) => agent === 'claude'
+      ? new ClaudeAdapter({ command: process.execPath, extraArgs: [join(here, 'fake-claude.mjs')], permissionMode: 'default' })
+      : new AcpAdapter({ label: agent, command: process.execPath, args: [join(here, 'fake-acp.mjs'), 'normal'] }),
+  });
+  managers.push(again);
+  servers.push(await startLocalServer({ port, uiDir: here, sessions: again, info: {} }));
+  again.restore();
+  const ev2: HostEvent[] = [];
+  again.subscribe((e) => ev2.push(e));
+  const worker = created(events).find((s) => s.role === 'worker');
+  assert.equal(again.info(worker.id)?.status, 'idle');
+
+  // 메인: 다시 떠서 앞 대화를 받는다. 앞서 맡긴 작업자(continuation_id)도 다시 띄워 앞 대화를 붙여 보낸다
+  const r = await again.clink(main.id, { prompt: 'x', continuation_id: worker.id }).catch((e) => e.message);
+  assert.match(String(r), /쉬는 중/); // 메인 CLI 가 아직 없으면 MCP 로 부를 수 없다
+  await again.handle({ type: 'user.message', sessionId: main.id, text: '이어서' }, phone);
+  const reply = await waitFor(ev2, (e) => e.type === 'agent.text' && !e.partial && e.sessionId === main.id && e.text.includes('이어서'));
+  assert.match(reply.text, /사람\(김범무\): @codex 첫 일/);
+  const res = await again.clink(main.id, { prompt: '두 번째 일', continuation_id: worker.id });
+  assert.equal(res.status, 'done');
+  assert.match(res.content, /turn 1: \[이전 대화/); // 새 CLI, 앞 대화를 붙여 받음
+  assert.match(res.content, /두 번째 일/);
+  again.stopAll();
 });
 
 test('작업자는 다시 맡길 수 없고(깊이 1), 다른 메인의 작업도 건드릴 수 없다', async () => {

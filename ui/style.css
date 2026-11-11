@@ -224,6 +224,9 @@ select:disabled { opacity: .45; cursor: default; }
 .main-pick { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .send { width: 32px; height: 32px; padding: 0; border-radius: 10px; background: var(--accent); color: #fff; font-size: 16px; margin-left: 4px; }
 .send:hover { background: var(--accent); opacity: .88; }
+.send.halt { background: var(--ink); color: var(--bg); display: inline-grid; place-items: center; }
+.send.halt:hover { background: var(--ink); }
+.halt-line { font-size: 13px; color: var(--ink-faint); }
 
 /* ── 설정 ── */
 .settings { max-width: 720px; width: 100%; margin: 0 auto; padding: 4px 20px 40px; display: flex; flex-direction: column; gap: 16px; }
@@ -276,6 +279,7 @@ select:disabled { opacity: .45; cursor: default; }
 .auth-state.off { color: var(--warn); }
 .auth-state.on { color: var(--ok); }
 .auth-code { font: 600 16px/1 ui-monospace, Consolas, monospace; letter-spacing: 1px; padding: 6px 10px; border: 1px dashed var(--rule); border-radius: 8px; user-select: all; }
+.auth-code.off { color: var(--ink-faint); }
 .preset-allow { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
 /* 허용 칸: 제목 + [전부|고르기] 세그먼트 + 고르는 칩 */
 .allow { border: 0; padding: 0; margin: 0; min-width: 0; }

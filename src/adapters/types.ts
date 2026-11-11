@@ -37,6 +37,8 @@ export interface AgentAdapter {
   /** 사람(또는 메인)의 말. images 는 붙여 넣은 이미지(base64) — 세 CLI 모두 이미지 입력을 받는다 */
   send(text: string, images?: ImagePart[]): void;
   respondPermission(requestId: string, allow: boolean): void;
+  /** 하던 차례만 멈춘다(CLI 는 그대로, 다음 지시를 받는다). 없으면 멈춤 때 CLI 를 끈다 */
+  interrupt?(): void;
   stop(): void;
 }
 

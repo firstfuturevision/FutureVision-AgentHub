@@ -128,6 +128,13 @@ export class AcpAdapter implements AgentAdapter {
     this.write({ jsonrpc: '2.0', id: p.rpcId, result: { outcome } });
   }
 
+  /** 멈춤: session/cancel — 하던 prompt 가 stopReason 'cancelled' 로 끝나고 세션은 그대로 */
+  interrupt() {
+    this.queue.length = 0;
+    for (const id of [...this.permissions.keys()]) this.respondPermission(id, false);
+    if (this.busy && this.acpSessionId) this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.acpSessionId } });
+  }
+
   stop() {
     this.stopped = true;
     if (this.busy && this.acpSessionId) this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.acpSessionId } });

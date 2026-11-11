@@ -104,8 +104,9 @@ const shared = new SharedRepo({
 sessions.attachShared(shared); // 메인이 대화로 공유 레포에 올릴 때
 
 const restored = sessions.restore();
-if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되살림(끝남 상태)`);
+if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되살림(대기 — 다음 지시 때 CLI 를 다시 띄움)`);
 
+const remote = new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2); // 원격 접속(사무실 네트워크만)
 const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,
     platform: process.platform,
@@ -133,7 +134,7 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   // 연동의 자동 실행(로그인하면 뒤에서 켜기). 시험용: AGENT_HUB_STARTUP_DIR 로 시작프로그램 폴더를 바꾼다
   autostart: new AutoStart({ root, startupDir: process.env.AGENT_HUB_STARTUP_DIR || undefined }),
   // 원격 접속(사무실 네트워크만, 공용 비밀번호). 끄면 이 PC 에서만. 원격 포트 기본 = 화면 포트 + 2
-  remote: new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2),
+  remote,
 });
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);
@@ -145,6 +146,7 @@ const firstShared = setTimeout(() => void shared.tick(), 15_000);
 const sharedTimer = setInterval(() => void shared.tick(), 6 * 60 * 60 * 1000);
 const stopDashboard = startDashboardLink(cfg.dashboard, sessions);
 console.log(`[agent-hub] 직접 작업 화면: http://127.0.0.1:${cfg.port}`);
+if (remote.enabled) for (const u of remote.urls()) console.log(`[agent-hub] 원격 접속(같은 사무실 네트워크): ${u}`);
 console.log(`[agent-hub] 작업 폴더 뿌리: ${cfg.workspaceRoot}`);
 
 /** 끄기. code 75 = 업데이트를 받아 다시 켜기(실행기가 다시 띄움) */

@@ -41,7 +41,8 @@ export interface SessionInfo {
 export type HostEvent =
   | { type: 'session.created'; session: SessionInfo }
   | { type: 'session.status'; sessionId: string; status: SessionInfo['status'] }
-  | { type: 'session.ended'; sessionId: string; reason: string }
+  | { type: 'session.ended'; sessionId: string; reason: string } // CLI 가 꺼짐. 작업은 대기로 남고 다음 지시 때 다시 띄운다
+  | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
   | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[] }
   | { type: 'agent.text'; sessionId: string; text: string; partial: boolean }
   // CLI 가 알려 준 쓸 수 있는 모델 목록 (ACP session/new 의 models) — 화면 드롭다운을 실제 목록으로 바꾼다
