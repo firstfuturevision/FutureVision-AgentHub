@@ -62,7 +62,13 @@ export type HostEvent =
   // 포크 공유: 포크의 답이 끝날 때마다 새로 생긴 대화를 원본 기록에 남긴다. 원본이 진행 중이면 다음 지시에 붙어 간다.
   // lines = 지금까지 공유한 포크 대화 줄 수(다음엔 그 뒤만). 이름은 기록 파일과 맞추려고 merged 그대로
   | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split' } // kind 없으면 포크 공유
+  // 컨텍스트: 에이전트가 지금 들고 있는 양(used 토큰 / window 컨텍스트 창). 모르면 window 는 null. used 0 은 새로 띄워 아직 없음
+  | { type: 'context.usage'; sessionId: string; used: number; window: number | null }
+  // 컨텍스트에 호스트가 넣은 것: 앞 대화, 포크·분담 공유. pending 이면 다음 지시에 붙어 간다. 바뀔 때마다 전체 목록
+  | { type: 'context.items'; sessionId: string; items: ContextItem[] }
   | { type: 'error'; sessionId?: string; agent?: AgentKind; message: string };
+
+export interface ContextItem { label: string; chars: number; pending: boolean }
 
 // 화면 → 호스트
 export type ClientCommand =

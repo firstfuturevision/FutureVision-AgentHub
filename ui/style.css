@@ -327,6 +327,15 @@ select:disabled { opacity: .45; cursor: default; }
 .panel-btn:hover { background: var(--hover, rgba(255,255,255,.06)); color: var(--ink); }
 .panel-btn[hidden] { display: none; }
 #stop:not([hidden]) + .panel-btn { margin-left: 0; }
+.pgroup { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: -6px; }
+.pgroup.sep { border-top: 1px solid var(--rule); padding-top: 16px; }
+.p-usage-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+.p-usage-head b { font-weight: 600; }
+.p-usage-head span { font-size: 12px; color: var(--ink-faint); }
+.p-bar { height: 4px; border-radius: 2px; background: var(--rule); margin-top: 6px; overflow: hidden; }
+.p-bar[hidden] { display: none; }
+.p-bar i { display: block; height: 100%; background: var(--ink-soft); border-radius: 2px; }
+.p-bar i.high { background: var(--warn); }
 .psec h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--ink-faint); letter-spacing: .02em; }
 .p-sub.first { margin-top: 4px; }
 .p-meta.fail { color: var(--warn); }

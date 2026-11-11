@@ -47,6 +47,8 @@
 - `agent.text {sessionId, text, partial}` — 에이전트의 말
 - `agent.tool {sessionId, toolId, name, input}` / `agent.tool_result {sessionId, toolId, ok, summary}` — 지금 하는 행동
 - `permission.request {sessionId, requestId, tool, detail}` — 승인 대기
+- `context.usage {sessionId, used, window}` — 컨텍스트 사용량(토큰, 창 크기 모르면 null)
+- `context.items {sessionId, items: [{label, chars, pending}]}` — 호스트가 컨텍스트에 넣은 것·넣을 것 전체 목록
 - `turn.done {sessionId, durationMs, costUsd?}` — 한 차례 끝, 기록용 수치
 - `error {sessionId?, message}`
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { AGENTS, MODEL_RE } from './protocol.ts';
-import type { AgentKind, Attachment, ClientCommand, CommandOrigin, HostEvent, SessionInfo, SessionRole } from './protocol.ts';
+import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
 import type { ToolStore } from './tools.ts';
@@ -54,7 +54,8 @@ interface Live {
   carry?: string; // 복제한 작업: 첫 지시에 붙일 원래 대화
   role?: Preset; // 에이전트로 시작한 세션: 첫 지시에 붙일 역할 지침
   guide?: WorkPreset; // 프리셋(작업 환경)으로 시작한 세션: 첫 지시에 붙일 지침
-  merges?: string[]; // 포크에서 공유받은 것: 다음 지시에 붙일 내용
+  merges?: { label: string; text: string }[]; // 포크·분담에서 공유받은 것: 다음 지시에 붙일 내용
+  ctx?: { label: string; chars: number }[]; // 이번 CLI 에 이미 넣은 것(앞 대화, 공유) — 다시 띄우면 비운다
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
 }
 
@@ -388,12 +389,17 @@ export class SessionManager {
         }
         // 복제한 작업의 첫 지시에는 원래 작업의 대화를 붙인다(화면·기록에는 사람이 쓴 글만)
         // 포크에서 공유받은 게 있으면 이번 지시 앞에 붙인다
+        const sent = this.pendingContext(live).map(({ label, chars }) => ({ label, chars }));
         if (live.merges?.length) {
-          text = `${live.merges.join('\n\n')}\n\n[이어서 할 일]\n${text}`;
+          text = `${live.merges.map((m) => m.text).join('\n\n')}\n\n[이어서 할 일]\n${text}`;
           live.merges = undefined;
         }
         const carry = live.carry;
         live.carry = undefined;
+        if (sent.length) {
+          (live.ctx ??= []).push(...sent);
+          this.publishContext(live);
+        }
         live.adapter.send(carry ? `[이전 대화 — 이 작업의 앞선 기록. 이어서 진행한다]\n${carry}\n\n[이어서 할 일]\n${text}` : text, images);
         return;
       }
@@ -520,6 +526,7 @@ export class SessionManager {
     if (guide) copy.guide = guide;
     // 새 CLI 는 앞 대화를 모르므로, 첫 지시에 지금까지의 대화를 붙여 이어받게 한다(모든 CLI 에 똑같이 통하는 방법)
     copy.carry = transcript(live.history, upTo);
+    this.publishContext(copy);
     return copy;
   }
 
@@ -790,6 +797,10 @@ export class SessionManager {
     // 새 CLI 에게 넘길 것: 지금까지의 대화(아직 못 보낸 이어받기가 있으면 그것도), 역할·작업 환경 지침
     const said = conversation(live.history);
     if (said.length) live.carry = [live.carry, tail(said.join('\n'))].filter(Boolean).join('\n');
+    // 새 CLI 는 빈 컨텍스트에서 시작한다: 넣었던 것은 앞 대화에 담겨 다시 간다
+    live.ctx = [];
+    this.publish({ type: 'context.usage', sessionId: info.id, used: 0, window: null });
+    this.publishContext(live);
     live.role = preset;
     live.guide = wp;
     info.agent = agent;
@@ -869,7 +880,22 @@ export class SessionManager {
     const head = kind === 'split'
       ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 진행한 대화. 겹치지 않게 반영한다]`
       : `[포크 공유: ${title} — 원본에서 갈라져 따로 진행한 대화. 결과를 반영한다]`;
-    (target.merges ??= []).push(`${head}\n${text}`);
+    (target.merges ??= []).push({ label: `${kind === 'split' ? '분담' : '포크'} 공유 · ${title}`, text: `${head}\n${text}` });
+    this.publishContext(target);
+  }
+
+  /** 다음 지시에 붙어 갈 것 */
+  private pendingContext(live: Live): ContextItem[] {
+    const out: ContextItem[] = [];
+    if (live.carry) out.push({ label: '앞 대화', chars: live.carry.length, pending: true });
+    for (const m of live.merges ?? []) out.push({ label: m.label, chars: m.text.length, pending: true });
+    return out;
+  }
+
+  /** 컨텍스트에 넣은 것·넣을 것 목록을 화면에 알린다 */
+  private publishContext(live: Live) {
+    const items = [...(live.ctx ?? []).map((c) => ({ ...c, pending: false })), ...this.pendingContext(live)];
+    this.publish({ type: 'context.items', sessionId: live.info.id, items });
   }
 
   private setStatus(live: Live, status: SessionInfo['status']) {

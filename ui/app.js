@@ -1050,6 +1050,8 @@ function onEvent(ev) {
       s.items.push({ k: 'line meta', t: `설정 바꿈: ${what}. 다음 지시에 앞 대화를 붙여 이어갑니다` });
       break;
     }
+    case 'context.usage': s.usage = ev.used ? { used: ev.used, window: ev.window } : null; break;
+    case 'context.items': s.ctxItems = ev.items; break;
     case 'session.merged': s.items.push({ k: 'merged', t: ev.title, text: ev.text, fromId: ev.fromId, split: ev.kind === 'split' }); break;
     case 'session.ended': s.info.status = 'ended'; s.draft = null; s.items.push({ k: 'line err', t: `끝남: ${ev.reason}` }); break;
     case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = Date.now(); break;
@@ -1319,6 +1321,7 @@ function renderPanel() {
   if (!show || !panelOpen) return;
   const preset = s.info.preset ? presets.find((p) => p.id === s.info.preset.id) : undefined;
 
+  renderContext(s);
   renderLinks(s);
   renderSchedules(s); // 예약은 설정이 아니라 일정 — 늘 보인다
   $('p-settings').hidden = !settingsOpen;
@@ -1486,6 +1489,32 @@ function configForm(s) {
   f.append(foot);
   return f;
 }
+
+/** 컨텍스트: 사용량 막대, 호스트가 넣은 것(앞 대화, 포크·분담 공유) */
+function renderContext(s) {
+  const u = s.usage;
+  $('p-usage').hidden = !u;
+  if (u) {
+    const pct = u.window ? Math.min(100, (u.used / u.window) * 100) : null;
+    $('p-usage-pct').textContent = pct == null ? '사용 중' : `${pct < 1 ? pct.toFixed(1) : Math.round(pct)}% 사용됨`;
+    $('p-usage-num').textContent = u.window ? `${tokens(u.used)} / ${tokens(u.window)}` : tokens(u.used);
+    $('p-usage-bar').style.width = `${pct ?? 0}%`;
+    $('p-usage-bar').parentElement.hidden = pct == null;
+    $('p-usage-bar').classList.toggle('high', (pct ?? 0) >= 80);
+  }
+  const box = $('p-ctx');
+  box.replaceChildren();
+  const items = s.ctxItems ?? [];
+  box.closest('.psec').hidden = !items.length;
+  for (const it of items) {
+    const row = el('div', 'p-item');
+    row.append(el('span', 'p-name', it.label), el('span', 'p-meta', it.pending ? `${chars(it.chars)} · 다음 지시에` : chars(it.chars)));
+    row.title = it.pending ? '다음 지시에 붙어 에이전트에게 갑니다' : '에이전트에게 넣었습니다';
+    box.append(row);
+  }
+}
+const tokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
+const chars = (n) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k자` : `${n}자`);
 
 /** 연결된 세션(포크 관계) · 백그라운드(지금 도는 하위 에이전트) · 하위 작업(끝났거나 쉬는 하위 에이전트 일) */
 function renderLinks(s) {

@@ -163,3 +163,34 @@ test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 
   assert.match(r3.text, /\[분담 공유: 계획 세우기/); // 원본이 그사이 한 일이 분담의 다음 지시에 붙었다
   sessions.stopAll();
 });
+
+test('컨텍스트: 사용량과, 앞 대화·공유가 다음 지시에 붙을 때까지 대기로 보인다', async () => {
+  const { sessions, events } = setup();
+  const lastItems = (id: string) => (events.filter((e) => e.type === 'context.items' && e.sessionId === id).at(-1) as any)?.items ?? [];
+  const orig = await newMain(sessions, events);
+  await say(sessions, events, orig.id, '계획');
+  const u = events.filter((e) => e.type === 'context.usage' && e.sessionId === orig.id).at(-1) as any;
+  assert.ok(u.used > 1000);
+  assert.equal(u.window, 200000);
+
+  await sessions.handle({ type: 'session.fork', sessionId: orig.id }, local);
+  const fork = (await waitFor(events, (e) => e.type === 'session.created' && e.session.forkedFrom === orig.id)).session;
+  assert.deepEqual(lastItems(fork.id).map((i: any) => [i.label, i.pending]), [['앞 대화', true]]);
+  await say(sessions, events, fork.id, '대안 A');
+  assert.deepEqual(lastItems(fork.id).map((i: any) => [i.label, i.pending]), [['앞 대화', false]]);
+
+  // 포크의 답이 끝나면 원본에 공유가 대기로 생기고, 원본의 다음 지시에 넣으면 대기가 풀린다
+  const shared = lastItems(orig.id);
+  assert.equal(shared.length, 1);
+  assert.match(shared[0].label, /^포크 공유 · 대안 A/);
+  assert.equal(shared[0].pending, true);
+  assert.ok(shared[0].chars > 0);
+  await say(sessions, events, orig.id, '이어서');
+  assert.equal(lastItems(orig.id)[0].pending, false);
+
+  // 설정을 바꿔 다시 띄우면 사용량은 비고, 넣었던 것은 앞 대화에 담겨 다시 대기
+  await sessions.handle({ type: 'session.configure', sessionId: orig.id, model: 'sonnet' }, local);
+  await waitFor(events, (e) => e.type === 'context.usage' && e.sessionId === orig.id && e.used === 0);
+  assert.deepEqual(lastItems(orig.id).map((i: any) => [i.label, i.pending]), [['앞 대화', true]]);
+  sessions.stopAll();
+});

@@ -26,6 +26,7 @@ export class ClaudeAdapter implements AgentAdapter {
   private stderrTail: string[] = [];
   private partialText = '';
   private permSeq = 0;
+  private lastUsed = 0; // 메인 줄기의 마지막 응답이 받은 입력 토큰 — 지금 컨텍스트에 든 양
   private permissions = new Map<string, { requestId: string; input: unknown }>(); // 화면 요청 id → CLI 요청
   claudeSessionId: string | null = null; // 나중에 --resume 으로 이어 가기용
 
@@ -157,6 +158,8 @@ export class ClaudeAdapter implements AgentAdapter {
 
       case 'assistant': {
         if (ev.parent_tool_use_id) return; // 하위 에이전트 내부 대화는 화면에 올리지 않는다
+        const u = ev.message?.usage;
+        if (u) this.lastUsed = num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens) + num(u.output_tokens);
         if (ev.error) {
           const msg = ev.message?.content?.find((b: any) => b.type === 'text')?.text ?? String(ev.error);
           this.partialText = '';
@@ -191,8 +194,11 @@ export class ClaudeAdapter implements AgentAdapter {
         return;
       }
 
-      case 'result':
+      case 'result': {
         this.partialText = '';
+        // 컨텍스트 창: 이 차례에 쓴 모델 중 가장 큰 것(하위 에이전트가 작은 모델을 썼을 수 있다)
+        const windows = Object.values(ev.modelUsage ?? {}).map((m: any) => num(m?.contextWindow)).filter((n) => n > 0);
+        if (this.lastUsed) this.emit({ type: 'context.usage', used: this.lastUsed, window: windows.length ? Math.max(...windows) : null });
         this.emit({
           type: 'turn.done',
           durationMs: Number(ev.duration_ms ?? 0),
@@ -200,9 +206,12 @@ export class ClaudeAdapter implements AgentAdapter {
           isError: Boolean(ev.is_error),
         });
         return;
+      }
     }
   }
 }
+
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 function brief(input: any): string {
   if (!input || typeof input !== 'object') return '';

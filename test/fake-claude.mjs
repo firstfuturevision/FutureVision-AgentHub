@@ -135,6 +135,8 @@ async function handle(text) {
   for (const piece of [reply.slice(0, 4), reply.slice(4)]) {
     out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }, session_id: sid });
   }
-  out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] }, parent_tool_use_id: null, session_id: sid });
-  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 12, total_cost_usd: 0.001, session_id: sid });
+  // 컨텍스트 사용량: 받은 글이 길수록 많이(차례마다 1000 + 글자 수), 창은 20만
+  const usage = { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 1000 * turn + text.length - 10, output_tokens: 0 };
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }], usage }, parent_tool_use_id: null, session_id: sid });
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 12, total_cost_usd: 0.001, session_id: sid, modelUsage: { 'fake-model': { contextWindow: 200000 } } });
 }

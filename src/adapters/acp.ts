@@ -224,6 +224,10 @@ export class AcpAdapter implements AgentAdapter {
         this.flushText();
         this.emit({ type: 'agent.tool', toolId: u.toolCallId, name: u.title ?? u.kind ?? '도구', input: { kind: u.kind, locations: u.locations } });
         return;
+      case 'usage_update':
+        // ACP 의 컨텍스트 사용량(used 토큰 / size 컨텍스트 창). 보내 주는 CLI 만 막대가 뜬다
+        if (typeof u.used === 'number') this.emit({ type: 'context.usage', used: u.used, window: typeof u.size === 'number' ? u.size : null });
+        return;
       case 'tool_call_update':
         if (u.status === 'completed' || u.status === 'failed') {
           this.emit({ type: 'agent.tool_result', toolId: u.toolCallId, ok: u.status === 'completed', summary: summarizeContent(u.content) });
