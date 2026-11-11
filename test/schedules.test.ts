@@ -142,3 +142,29 @@ test('예약 실행: 끝난 작업이면 이어서 새로 시작하고 예약도
   assert.equal(schedules.list().length, 0);
   sessions.stopAll();
 });
+
+test('간격 예약: N분마다, 5분 미만은 안 되고, 작업이 일하는 중이면 그 차례는 건너뛴다', async () => {
+  const st = new ScheduleStore(tmpFile());
+  assert.throws(() => st.save({ sessionId: 'x', prompt: 'p', repeat: 'interval', every: 3 }, TUE10), /5분 이상/);
+  const s = st.save({ sessionId: 'x', prompt: '상태 확인', repeat: 'interval', every: 90 }, TUE10);
+  assert.equal(new Date(s.nextAt!).getTime(), TUE10.getTime() + 90 * 60_000);
+  assert.equal(nextRun(s, new Date(2026, 10, 10, 12, 0))?.getTime(), new Date(2026, 10, 10, 13, 30).getTime());
+
+  const { sessions, events, schedules } = setup();
+  await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);
+  const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+  schedules.save({ sessionId: id, prompt: '확인', repeat: 'interval', every: 30 }, TUE10);
+  (sessions as any).sessions.get(id).info.status = 'working'; // 앞 일이 아직 안 끝남
+  await sessions.runSchedules(new Date(2026, 10, 10, 10, 30, 5));
+  let x = schedules.forSession(id)[0];
+  assert.equal(x.lastResult, '작업 중이라 건너뜀');
+  assert.ok(!events.some((e) => e.type === 'user.message'));
+  assert.equal(new Date(x.nextAt!).getTime(), new Date(2026, 10, 10, 11, 0, 5).getTime());
+
+  (sessions as any).sessions.get(id).info.status = 'idle';
+  await sessions.runSchedules(new Date(2026, 10, 10, 11, 0, 10));
+  await waitFor(events, (e) => e.type === 'user.message' && e.sessionId === id && e.text === '확인');
+  x = schedules.forSession(id)[0];
+  assert.equal(x.lastResult, '보냄');
+  sessions.stopAll();
+});

@@ -1680,11 +1680,13 @@ function fillLinks(box, links) {
 const scheduleCache = new Map(); // 세션 id → 예약 목록
 let schedForm = null; // 열린 입력 창 { sessionId }
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
-const REPEAT_NAMES = { once: '한 번', daily: '매일', weekdays: '평일', weekly: '매주' };
+const REPEAT_NAMES = { once: '한 번', daily: '매일', weekdays: '평일', weekly: '매주', interval: '간격' };
+const everyText = (m) => (m % 60 === 0 ? `${m / 60}시간마다` : `${m}분마다`);
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
 
 function whenText(x) {
+  if (x.repeat === 'interval') return everyText(x.every);
   if (x.repeat === 'once') return Number(x.date.slice(5, 7)) + '/' + Number(x.date.slice(8)) + ' ' + x.time;
   if (x.repeat === 'weekly') return '매주 ' + WEEK[x.weekday] + ' ' + x.time;
   return REPEAT_NAMES[x.repeat] + ' ' + x.time;
@@ -1757,6 +1759,7 @@ function openSchedForm(s, x) {
   const d = x ? { ...x } : { prompt: '', repeat: 'daily', time: '09:00', enabled: true };
   d.date ??= ymd(now);
   d.weekday ??= now.getDay();
+  d.every ??= 60;
   schedForm = { sessionId: s.info.id };
   const f = $('p-sched-form');
   f.replaceChildren();
@@ -1782,6 +1785,24 @@ function openSchedForm(s, x) {
       date.min = ymd(now);
       date.onchange = () => { d.date = date.value; };
       line.append(date);
+    }
+    if (d.repeat === 'interval') {
+      // N 분 / N 시간마다 — 저장한 때부터 센다
+      const hours = d.every % 60 === 0;
+      const n = el('input', 'sched-field sched-num');
+      n.type = 'number';
+      n.min = '1';
+      n.max = hours ? '168' : '1440';
+      n.value = String(hours ? d.every / 60 : d.every);
+      n.setAttribute('aria-label', '간격');
+      const unit = el('select', 'sched-field');
+      unit.append(new Option('분마다', '1'), new Option('시간마다', '60'));
+      unit.value = hours ? '60' : '1';
+      const sync = () => { d.every = Math.round(Number(n.value) || 0) * Number(unit.value); };
+      n.oninput = sync;
+      unit.onchange = sync;
+      line.append(n, unit);
+      return;
     }
     if (d.repeat === 'weekly') {
       const wd = el('select', 'sched-field');
@@ -1813,7 +1834,8 @@ function openSchedForm(s, x) {
   ok.type = 'button';
   ok.onclick = async () => {
     if (!d.prompt.trim()) return flash('보낼 지시를 적어 주세요', true);
-    const body = { id: x?.id, prompt: d.prompt, repeat: d.repeat, time: d.time, enabled: x ? d.enabled : true, ...(d.repeat === 'once' ? { date: d.date } : {}), ...(d.repeat === 'weekly' ? { weekday: d.weekday } : {}) };
+    if (d.repeat === 'interval' && !(d.every >= 5)) return flash('간격은 5분 이상', true);
+    const body = { id: x?.id, prompt: d.prompt, repeat: d.repeat, time: d.repeat === 'interval' ? '' : d.time, enabled: x ? d.enabled : true, ...(d.repeat === 'once' ? { date: d.date } : {}), ...(d.repeat === 'weekly' ? { weekday: d.weekday } : {}), ...(d.repeat === 'interval' ? { every: d.every } : {}) };
     if (!(await saveSchedule(s, body))) return;
     closeSchedForm();
     flash('예약 저장');

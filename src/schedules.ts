@@ -9,11 +9,12 @@ import { randomUUID } from 'node:crypto';
  *  - daily    : 매일 그 시각
  *  - weekdays : 월~금 그 시각
  *  - weekly   : 매주 그 요일 그 시각
+ *  - interval : 저장한 때부터 N분마다(5분~7일). 그때 작업이 아직 일하는 중이면 그 차례는 건너뛴다(지시가 쌓이지 않게)
  * 실행할 때 작업이 진행 중이면 그 작업에 보내고, 끝났으면 포크해서(앞 대화 이어받음) 보낸다.
  * 포크했으면 예약도 새 작업으로 옮겨 간다 — 예약은 작업을 따라간다.
  * 호스트가 꺼져 있던 동안 지난 시각은 몰아서 실행하지 않고 건너뛴다.
  */
-export type Repeat = 'once' | 'daily' | 'weekdays' | 'weekly';
+export type Repeat = 'once' | 'daily' | 'weekdays' | 'weekly' | 'interval';
 
 export interface Schedule {
   id: string;
@@ -23,6 +24,7 @@ export interface Schedule {
   time: string; // HH:MM
   date?: string; // once: YYYY-MM-DD
   weekday?: number; // weekly: 0=일 … 6=토
+  every?: number; // interval: 몇 분마다
   enabled: boolean;
   nextAt: string | null; // 다음 실행 시각(ISO). 없으면 더 실행하지 않음
   lastAt?: string;
@@ -31,10 +33,13 @@ export interface Schedule {
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const REPEATS: Repeat[] = ['once', 'daily', 'weekdays', 'weekly'];
+const REPEATS: Repeat[] = ['once', 'daily', 'weekdays', 'weekly', 'interval'];
+export const MIN_EVERY = 5; // 분 — 이보다 잦으면 에이전트에게 지시가 쌓인다
+const MAX_EVERY = 7 * 24 * 60;
 
 /** from 보다 뒤의 다음 실행 시각. 없으면 null(지난 한 번짜리) */
-export function nextRun(s: Pick<Schedule, 'repeat' | 'time' | 'date' | 'weekday'>, from: Date): Date | null {
+export function nextRun(s: Pick<Schedule, 'repeat' | 'time' | 'date' | 'weekday' | 'every'>, from: Date): Date | null {
+  if (s.repeat === 'interval') return new Date(from.getTime() + (s.every ?? 60) * 60_000);
   const [h, m] = s.time.split(':').map(Number);
   if (s.repeat === 'once') {
     const [y, mo, d] = (s.date ?? '').split('-').map(Number);
@@ -149,14 +154,15 @@ function validate(v: any, id: string, strict = false): Schedule | null {
   if (!sessionId) return fail('작업이 없음');
   const prompt = typeof v.prompt === 'string' ? v.prompt.trim().slice(0, 4000) : '';
   if (!prompt) return fail('보낼 지시를 적어 주세요');
-  if (!REPEATS.includes(v.repeat)) return fail('반복은 한 번·매일·평일·매주 중 하나');
-  if (typeof v.time !== 'string' || !TIME_RE.test(v.time)) return fail('시각은 HH:MM');
+  if (!REPEATS.includes(v.repeat)) return fail('반복은 한 번·매일·평일·매주·간격 중 하나');
+  const interval = v.repeat === 'interval';
+  if (!interval && (typeof v.time !== 'string' || !TIME_RE.test(v.time))) return fail('시각은 HH:MM');
   const out: Schedule = {
     id,
     sessionId,
     prompt,
     repeat: v.repeat,
-    time: v.time,
+    time: interval ? '' : v.time,
     enabled: v.enabled !== false,
     nextAt: typeof v.nextAt === 'string' ? v.nextAt : null,
     ...(typeof v.lastAt === 'string' ? { lastAt: v.lastAt } : {}),
@@ -165,6 +171,11 @@ function validate(v: any, id: string, strict = false): Schedule | null {
   if (v.repeat === 'once') {
     if (typeof v.date !== 'string' || !DATE_RE.test(v.date) || Number.isNaN(Date.parse(v.date))) return fail('날짜는 YYYY-MM-DD');
     out.date = v.date;
+  }
+  if (interval) {
+    const every = Number(v.every);
+    if (!Number.isInteger(every) || every < MIN_EVERY || every > MAX_EVERY) return fail(`간격은 ${MIN_EVERY}분 이상, 7일 이하`);
+    out.every = every;
   }
   if (v.repeat === 'weekly') {
     const wd = Number(v.weekday);

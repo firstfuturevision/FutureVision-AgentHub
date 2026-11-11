@@ -247,6 +247,7 @@ select:disabled { opacity: .45; cursor: default; }
 .preset-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .preset-head .ghost { font-size: 12px; padding: 2px 8px; color: var(--ink-soft); }
 .preset-head .ghost:first-of-type { margin-left: auto; }
+.sched-num { width: 64px; }
 .shared-badge { font-size: 11px; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 0 6px; line-height: 18px; }
 .preset-head .shared-badge + .ghost { margin-left: 0; }
 .preset-head .shared-badge { margin-left: auto; }

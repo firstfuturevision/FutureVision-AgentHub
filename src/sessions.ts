@@ -553,6 +553,13 @@ export class SessionManager {
     if (!this.schedules) return;
     for (const s of this.schedules.due(now)) {
       if (this.scheduleRunning.has(s.id)) continue;
+      // 간격 예약: 앞 차례의 일이 아직 안 끝났으면 이번 차례는 건너뛴다(지시가 쌓이지 않게)
+      const st = this.sessions.get(s.sessionId)?.info.status;
+      if (s.repeat === 'interval' && (st === 'working' || st === 'starting')) {
+        this.schedules.markRun(s.id, now, '작업 중이라 건너뜀');
+        this.schedulesChanged();
+        continue;
+      }
       this.scheduleRunning.add(s.id);
       try {
         const r = await this.runScheduled(s.sessionId, s.prompt);
