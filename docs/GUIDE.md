@@ -85,6 +85,8 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 - **하위 작업**: 끝났거나 쉬고 있는 하위 에이전트 일(끝남·실패). 누르면 대화의 체크리스트 카드에서 펼친다.
 - **예약**: 이 작업에 정해 둔 시각의 지시(아래). 설정이 아니라 일정이라 늘 보인다.
 
+**원격 접속**(`src/remote.ts`, `GET/POST /remote`): 연동에서 공용 비밀번호를 정하고 켜면 사무실 네트워크용 서버를 `0.0.0.0:<화면 포트+2>`(기본 4319)에 연다. 화면에 이 PC 의 사설 주소로 만든 접속 주소가 나온다. 로그인 전에는 로그인 창만, 들어오면 같은 화면에서 작업한다(설정 버튼은 숨기고 "나가기"). 원격 명령은 대시보드와 같은 권한(`via: 'dashboard'`)이라 권한 묻지 않기 켜기·뿌리 밖 폴더·터미널이 막히고, 설정 경로는 403. 비밀번호를 바꾸거나 끄면 들어와 있던 사람은 모두 나간다.
+
 **자동 실행**(`src/autostart.ts`, `GET/POST /autostart`): 연동의 켜기/끄기. `npm run setup` 이 만드는 것 중 자동 시작 하나만 만들고 지운다 — Windows 시작프로그램의 `Agent Hub.lnk`(PowerShell WScript.Shell, 창 없이 --background), macOS LaunchAgent, 리눅스 `~/.config/autostart/agent-hub.desktop`. 바탕화면·시작 메뉴 아이콘은 그대로. 다음 로그인부터 적용. 시험용 `AGENT_HUB_STARTUP_DIR` 로 시작프로그램 폴더를 바꾼다.
 
 **공유 레포**(`data/shared.json`, 받은 레포 `data/shared/repo`, `src/shared.ts`): 연동의 "공유"에 회사 GitHub 레포를 넣으면 git 으로 받는다(연동의 GitHub 로그인 자격 증명, 전역 git 설정은 안 건드림). 켠 종류만 각 저장소에 **공유본**으로 끼운다.

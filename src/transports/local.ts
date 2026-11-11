@@ -14,6 +14,8 @@ import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
+import { isPrivateAddress, type RemoteAccess, type RemoteSession } from '../remote.ts';
+import type { CommandOrigin } from '../protocol.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
@@ -29,24 +31,36 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css']);
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
-  const server = createServer(async (req, res) => {
-    // DNS 리바인딩·다른 사이트의 요청 차단: Host 와 Origin 이 이 서버여야 한다.
-    if (!allowedHosts.has(req.headers.host ?? '')) return send(res, 403, '허용되지 않은 Host');
-    const origin = req.headers.origin;
-    if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ''))) return send(res, 403, '허용되지 않은 Origin');
-
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+  /**
+   * 요청 처리 — 이 PC 화면(rc 없음)과 원격(사무실 네트워크, rc = 로그인한 사람)이 함께 쓴다.
+   * 원격은 REMOTE_ALLOWED 에 있는 것만: 작업하기(명령·첨부·예약)와 읽기. 설정을 바꾸는 것은 PC 앞에서만.
+   */
+  const route = async (req: IncomingMessage, res: ServerResponse, rc: RemoteSession | null) => {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
+    if (rc && !REMOTE_ALLOWED.has(`${req.method} ${url.pathname}`)) return send(res, 403, '원격에서는 쓸 수 없음 — 이 PC 앞에서 하세요');
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
-      if (req.method === 'GET' && url.pathname === '/info') {
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(JSON.stringify(info));
+      if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, rc ? { ...info, remote: true, user: rc.name } : info);
+      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, rc ? { via: 'dashboard', user: `${rc.name}(원격)` } : { via: 'local', user: 'local' });
+      // 원격 접속 — 켜기·끄기·비밀번호(PC 앞에서만)
+      if (url.pathname === '/remote' && remote) {
+        if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError });
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try {
+            remote.set(body ?? {});
+          } catch (err) {
+            return send(res, 400, (err as Error).message);
+          }
+          await syncLan();
+          return json(res, 200, { ...remote.public(), error: lanError });
+        }
       }
-      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions);
       if (url.pathname.startsWith('/mcp/')) return await mcp(req, res, sessions, url.pathname.slice(5));
       // 첨부 업로드: 본문 = 파일 그대로, x-file-name 헤더 = 파일 이름(encodeURIComponent).
       // 사용자 정의 헤더가 있어 다른 사이트의 요청은 브라우저 사전 확인에서 막힌다.
@@ -306,17 +320,118 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       }
       send(res, 405, '허용되지 않은 방식');
     } catch (err) {
-      send(res, 500, String((err as Error).message));
+      if (!res.headersSent) send(res, 500, String((err as Error).message));
     }
-  });
+  };
 
+  const server = createServer((req, res) => {
+    // DNS 리바인딩·다른 사이트의 요청 차단: Host 와 Origin 이 이 서버여야 한다.
+    if (!allowedHosts.has(req.headers.host ?? '')) return send(res, 403, '허용되지 않은 Host');
+    const origin = req.headers.origin;
+    if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ''))) return send(res, 403, '허용되지 않은 Origin');
+    void route(req, res, null);
+  });
   // clink 는 작업자가 끝날 때까지(사람 승인 포함) 응답을 붙잡고 있으므로 요청 제한 시간을 끈다.
   server.requestTimeout = 0;
+
+  // ── 원격 접속(사무실 네트워크): 켜져 있을 때만 0.0.0.0:<원격 포트> 에 하나 더 연다 ──
+  let lan: Server | null = null;
+  let lanPort = 0;
+  let lanError: string | null = null;
+  const lanHandle = async (req: IncomingMessage, res: ServerResponse) => {
+    const ip = (req.socket.remoteAddress ?? '').replace(/^::ffff:/i, '');
+    if (!remote?.enabled || !isPrivateAddress(ip)) return send(res, 403, '사무실 네트워크에서만 들어올 수 있음');
+    // 다른 사이트에서 이 주소로 보내는 요청 차단: Origin 이 있으면 이 주소와 같아야 한다
+    const origin = req.headers.origin;
+    if (origin && origin.replace(/^https?:\/\//, '') !== req.headers.host) return send(res, 403, '허용되지 않은 Origin');
+    const url = new URL(req.url ?? '/', 'http://x');
+    if (url.pathname === '/login' && req.method === 'POST') {
+      const body = (await readJson(req, res)) as any;
+      if (body === undefined) return;
+      try {
+        const token = remote.login(body?.password, body?.name, ip);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': `ahs=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800` });
+        return res.end('{"ok":true}');
+      } catch (err) {
+        return send(res, 401, (err as Error).message);
+      }
+    }
+    if (url.pathname === '/logout' && req.method === 'POST') {
+      remote.logout(req.headers.cookie);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': 'ahs=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+      return res.end('{"ok":true}');
+    }
+    const who = remote.who(req.headers.cookie);
+    if (!who) {
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(LOGIN_PAGE);
+      }
+      return send(res, 401, '로그인 필요');
+    }
+    return route(req, res, who);
+  };
+  const syncLan = async () => {
+    if (!remote) return;
+    if (lan && (!remote.enabled || lanPort !== remote.port)) {
+      const old = lan;
+      lan = null;
+      old.closeAllConnections?.();
+      await new Promise((ok) => old.close(() => ok(null)));
+    }
+    if (!remote.enabled || lan) return;
+    const s = createServer((req, res) => void lanHandle(req, res));
+    s.requestTimeout = 0;
+    try {
+      await new Promise((ok, fail) => { s.once('error', fail); s.listen(remote.port, '0.0.0.0', () => ok(null)); });
+      lan = s;
+      lanPort = remote.port;
+      lanError = null;
+    } catch (err) {
+      lanError = `원격 접속을 열지 못함: ${(err as Error).message}`;
+    }
+  };
+  server.on('close', () => { lan?.closeAllConnections?.(); lan?.close(); });
+
   return new Promise((ok, fail) => {
     server.once('error', fail);
-    server.listen(port, '127.0.0.1', () => ok(server));
+    server.listen(port, '127.0.0.1', () => { void syncLan().then(() => ok(server)); });
   });
 }
+
+/** 원격(사무실 네트워크)에서 쓸 수 있는 것: 화면, 작업하기, 읽기 */
+const REMOTE_ALLOWED = new Set([
+  ...['/', '/index.html', '/app.js', '/md.js', '/style.css'].map((p) => `GET ${p}`),
+  'GET /events', 'GET /info', 'POST /cmd', 'POST /attach',
+  'GET /folders', 'POST /folders', 'GET /skills',
+  'GET /schedules', 'POST /schedules', 'DELETE /schedules',
+  'GET /work-presets', 'GET /presets', 'GET /tools', 'GET /hub-skills',
+]);
+
+const LOGIN_PAGE = `<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent Hub</title>
+<style>
+:root { color-scheme: light dark; --bg: #faf9f6; --ink: #1f1f1e; --soft: #76746e; --rule: #e4e2dc; --panel: #fff; --accent: #c96442; }
+@media (prefers-color-scheme: dark) { :root { --bg: #212120; --ink: #ecebe7; --soft: #9c9a94; --rule: #383835; --panel: #2a2a28; --accent: #d97757; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink); font: 15px/1.6 "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+form { width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+input { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; }
+button { font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 10px; cursor: pointer; }
+p { margin: 0; min-height: 1.6em; font-size: 13px; color: var(--soft); }
+</style></head><body>
+<form id="f"><h1>Agent Hub</h1>
+<input name="name" placeholder="이름 (기록에 남음)" autocomplete="nickname" maxlength="20">
+<input name="password" type="password" placeholder="비밀번호" autocomplete="current-password" required autofocus>
+<button>들어가기</button><p id="m"></p></form>
+<script>
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const r = await fetch('/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: f.name.value, password: f.password.value }) });
+  if (r.ok) location.reload(); else document.getElementById('m').textContent = await r.text();
+};
+</script></body></html>`;
 
 function events(req: IncomingMessage, res: ServerResponse, sessions: SessionManager) {
   res.writeHead(200, {
@@ -368,12 +483,12 @@ async function mcp(req: IncomingMessage, res: ServerResponse, sessions: SessionM
   res.end(JSON.stringify(Array.isArray(body) ? out : out[0]));
 }
 
-async function command(req: IncomingMessage, res: ServerResponse, sessions: SessionManager) {
+async function command(req: IncomingMessage, res: ServerResponse, sessions: SessionManager, origin: CommandOrigin) {
   const parsed = await readJson(req, res);
   if (parsed === undefined) return;
   const cmd = parseCommand(parsed);
   if (!cmd) return send(res, 400, '모르는 명령');
-  await sessions.handle(cmd, { via: 'local', user: 'local' });
+  await sessions.handle(cmd, origin);
   send(res, 202, 'ok');
 }
 

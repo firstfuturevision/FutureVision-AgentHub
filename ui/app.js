@@ -349,6 +349,7 @@ let cliState = {}; // AI CLI 설치 여부
 let ghState = null; // GitHub: { installed, login?, pending?: { code, url } }
 let updState = null; // 업데이트: { repo, mode, state, current, latest, behind, lastCheck, checking, canRestart }
 let autoState = null; // 자동 실행: { supported, enabled }
+let remoteState = null; // 원격 접속: { enabled, port, hasPassword, urls, people, error }
 let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
@@ -359,7 +360,7 @@ const getJson = async (url, fallback) => {
   }
 };
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState, autoState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null)]);
+  [authState, cliState, ghState, updState, sharedState, autoState, remoteState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null)]);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
 }
@@ -429,6 +430,7 @@ function renderAuth() {
   if (ghState) list.append(githubRow());
   if (updState) list.append(updateRow());
   if (autoState?.supported) list.append(autoRow());
+  if (remoteState) list.append(remoteRow());
   if (sharedState) list.append(sharedRow());
 }
 
@@ -562,6 +564,56 @@ function autoRow() {
   row.append(head);
   const body = el('div', 'auth-body');
   body.append(el('div', 'hint-inline auth-help', '이 PC 에 로그인하면 뒤에서 켭니다. 다음 로그인부터 적용'));
+  row.append(body);
+  return row;
+}
+
+/** 원격 접속 — 같은 사무실 네트워크의 PC·폰에서 공용 비밀번호로. 원격은 작업만 하고 설정은 못 바꾼다 */
+function remoteRow() {
+  const r = remoteState;
+  const row = el('div', 'auth-row');
+  const head = el('div', 'auth-head');
+  head.append(el('span', 'preset-name', '원격 접속'));
+  if (r.enabled && r.people) head.append(el('span', 'auth-state on', `${r.people}명 접속`));
+  const sw = el('button', `switch${r.enabled ? ' on' : ''}`);
+  sw.type = 'button';
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', String(r.enabled));
+  sw.setAttribute('aria-label', r.enabled ? '원격 접속 끄기' : '원격 접속 켜기');
+  sw.style.marginLeft = 'auto';
+  sw.onclick = async () => {
+    if (!r.hasPassword) { flash('비밀번호를 먼저 정하세요', true); return inp.focus(); }
+    sw.disabled = true;
+    const x = await postJson('/remote', { enabled: !r.enabled });
+    if (x) { remoteState = x; flash(x.error ?? (x.enabled ? '원격 접속 켬' : '원격 접속 끔'), Boolean(x.error)); }
+    renderAuth();
+  };
+  head.append(sw);
+  row.append(head);
+
+  const pw = el('div', 'auth-body');
+  const inp = el('input', 'key-input');
+  inp.type = 'password';
+  inp.placeholder = r.hasPassword ? '새 비밀번호 (바꿀 때만)' : '공용 비밀번호 (8자 이상)';
+  inp.autocomplete = 'new-password';
+  inp.setAttribute('aria-label', '원격 접속 비밀번호');
+  const save = el('button', 'line-btn', '저장');
+  save.type = 'button';
+  save.onclick = async () => {
+    if (!inp.value) return flash('비밀번호를 적어 주세요', true);
+    const x = await postJson('/remote', { password: inp.value });
+    if (x) { remoteState = x; flash(r.hasPassword ? '비밀번호를 바꿨어요. 들어와 있던 사람은 다시 로그인합니다' : '비밀번호 저장'); }
+    renderAuth();
+  };
+  pw.append(inp, save);
+  row.append(pw);
+
+  const body = el('div', 'auth-body');
+  if (r.error) body.append(el('span', 'auth-state off', r.error));
+  if (r.enabled && r.urls.length) for (const u of r.urls) body.append(el('span', 'auth-code', u));
+  body.append(el('div', 'hint-inline auth-help', r.enabled
+    ? '같은 사무실 네트워크의 PC·폰 브라우저에서 위 주소로. 원격은 작업만 하고 설정·키·권한은 바꿀 수 없습니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
+    : '켜면 같은 사무실 네트워크에서 비밀번호로 들어올 수 있습니다. 인터넷에는 열리지 않습니다'));
   row.append(body);
   return row;
 }
@@ -2186,6 +2238,14 @@ $('wp-select').onchange = () => {
 };
 fetch('/info').then((r) => r.json()).then((info) => {
   hostInfo = info;
+  // 원격(사무실 네트워크)으로 들어왔으면 설정은 숨긴다 — 설정은 PC 앞에서만
+  if (info.remote) {
+    document.querySelector('[data-nav="settings"]').hidden = true;
+    const out = $('remote-out');
+    out.hidden = false;
+    out.title = `${info.user} · 원격`;
+    out.onclick = async () => { await fetch('/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); location.reload(); };
+  }
   $('elevated').hidden = !info.elevated;  for (const a of AGENTS) if (info.models?.[a] && !models[a].length) models[a] = info.models[a];
   if (info.mainAgent && !store.get('main', null)) store.set('main', `${info.mainAgent}|`);
   fillSelects();

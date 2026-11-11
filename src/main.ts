@@ -17,6 +17,7 @@ import { WorkPresetStore } from './workpresets.ts';
 import { ScheduleStore } from './schedules.ts';
 import { SharedRepo } from './shared.ts';
 import { AutoStart } from './autostart.ts';
+import { RemoteAccess } from './remote.ts';
 import { startLocalServer } from './transports/local.ts';
 import { startDashboardLink } from './transports/dashboard.ts';
 import type { AgentKind } from './protocol.ts';
@@ -131,6 +132,8 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   shared,
   // 연동의 자동 실행(로그인하면 뒤에서 켜기). 시험용: AGENT_HUB_STARTUP_DIR 로 시작프로그램 폴더를 바꾼다
   autostart: new AutoStart({ root, startupDir: process.env.AGENT_HUB_STARTUP_DIR || undefined }),
+  // 원격 접속(사무실 네트워크만, 공용 비밀번호). 끄면 이 PC 에서만. 원격 포트 기본 = 화면 포트 + 2
+  remote: new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2),
 });
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);
