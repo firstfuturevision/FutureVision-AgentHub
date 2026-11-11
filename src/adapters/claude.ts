@@ -25,6 +25,8 @@ export class ClaudeAdapter implements AgentAdapter {
   private stopped = false;
   private stderrTail: string[] = [];
   private partialText = '';
+  private permSeq = 0;
+  private permissions = new Map<string, { requestId: string; input: unknown }>(); // 화면 요청 id → CLI 요청
   claudeSessionId: string | null = null; // 나중에 --resume 으로 이어 가기용
 
   constructor(opts: ClaudeOptions) {
@@ -40,9 +42,11 @@ export class ClaudeAdapter implements AgentAdapter {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      // 권한 묻지 않기면 확인 없이 실행(bypassPermissions). 아니면 설정값 — -p 모드라 묻지 못하는 도구는 막힌다
+      // 권한 묻지 않기면 확인 없이 실행(bypassPermissions). 아니면 설정값
       '--permission-mode', session.autoApprove ? 'bypassPermissions' : this.opts.permissionMode,
     ];
+    // 물어야 하는 도구는 stdout 의 control_request(can_use_tool)로 오고, 화면의 허용·거부를 stdin 의 control_response 로 돌려준다
+    if (!session.autoApprove) args.push('--permission-prompt-tool', 'stdio');
     for (const d of ctx.extraDirs ?? []) args.push('--add-dir', d); // 연결 폴더
     if (ctx.pluginDir) args.push('--plugin-dir', ctx.pluginDir); // 프리셋: Agent Hub 스킬
     const model = session.model ?? this.opts.model;
@@ -94,13 +98,22 @@ export class ClaudeAdapter implements AgentAdapter {
     this.proc.stdin.write(JSON.stringify(msg) + '\n');
   }
 
-  respondPermission() {
-    // -p 모드는 대화형 승인이 없다. 승인 흐름은 다음 단계(permission-prompt 도구 또는 ACP).
-    this.emit({ type: 'error', message: 'Claude 승인 응답은 아직 지원하지 않음' });
+  respondPermission(requestId: string, allow: boolean) {
+    const p = this.permissions.get(requestId);
+    if (!p) return;
+    this.permissions.delete(requestId);
+    // 허용은 이번 한 번만(같은 폴더라도 다음에 또 묻는다) — 화면 버튼이 "허용"·"거부" 둘뿐이라서
+    const response = allow ? { behavior: 'allow', updatedInput: p.input } : { behavior: 'deny', message: '사람이 거부함' };
+    this.write({ type: 'control_response', response: { subtype: 'success', request_id: p.requestId, response } });
+  }
+
+  private write(msg: unknown) {
+    if (this.proc?.stdin?.writable) this.proc.stdin.write(JSON.stringify(msg) + '\n');
   }
 
   stop() {
     this.stopped = true;
+    for (const id of [...this.permissions.keys()]) this.respondPermission(id, false);
     this.proc?.stdin?.end();
     const p = this.proc;
     setTimeout(() => { if (p && p.exitCode === null) p.kill(); }, 3000);
@@ -115,6 +128,20 @@ export class ClaudeAdapter implements AgentAdapter {
       return; // JSON 이 아닌 줄은 무시
     }
     switch (ev.type) {
+      case 'control_request': {
+        const r = ev.request ?? {};
+        if (r.subtype !== 'can_use_tool') {
+          this.write({ type: 'control_response', response: { subtype: 'error', request_id: ev.request_id, error: `지원하지 않는 요청: ${r.subtype}` } });
+          return;
+        }
+        const requestId = `c${++this.permSeq}`;
+        this.permissions.set(requestId, { requestId: ev.request_id, input: r.input ?? {} });
+        const what = r.description ?? brief(r.input);
+        const why = r.decision_reason_type === 'workingDir' ? '작업 폴더 밖' : '';
+        this.emit({ type: 'permission.request', requestId, tool: r.display_name ?? r.tool_name ?? '도구 실행', detail: [what, why].filter(Boolean).join(' · ') });
+        return;
+      }
+
       case 'system':
         if (ev.subtype === 'init' && typeof ev.session_id === 'string') this.claudeSessionId = ev.session_id;
         return;
@@ -175,6 +202,13 @@ export class ClaudeAdapter implements AgentAdapter {
         return;
     }
   }
+}
+
+function brief(input: any): string {
+  if (!input || typeof input !== 'object') return '';
+  const v = input.file_path ?? input.path ?? input.command ?? input.url ?? input.query ?? input.pattern;
+  const t = typeof v === 'string' ? v : '';
+  return t.length > 200 ? t.slice(0, 200) + '…' : t;
 }
 
 function summarize(content: unknown): string {

@@ -60,6 +60,35 @@ test('Claude 세션: 실시간 조각 → 완성 → 차례 끝, 두 번째 질�
   assert.ok(!log.some((e) => e.type === 'agent.text' && e.partial));
 });
 
+test('Claude 승인: 물어야 하는 도구는 허용·거부 카드로 오고, 답이 CLI 로 간다', async () => {
+  const { sessions, events } = setup();
+  await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);
+  const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'perm 1' }, local);
+  const req1 = await waitFor(events, (e) => e.type === 'permission.request' && e.sessionId === id);
+  assert.equal(req1.tool, 'Read');
+  assert.match(req1.detail, /C:\/밖\/a\.txt · 작업 폴더 밖/);
+  await sessions.handle({ type: 'permission.respond', sessionId: id, requestId: req1.requestId, allow: true }, local);
+  await waitFor(events, (e) => e.type === 'agent.tool_result' && e.ok && e.summary === '읽음 C:/밖/a.txt');
+
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'perm 2' }, local);
+  const req2 = await waitFor(events, (e) => e.type === 'permission.request' && e.requestId !== req1.requestId);
+  await sessions.handle({ type: 'permission.respond', sessionId: id, requestId: req2.requestId, allow: false }, local);
+  await waitFor(events, (e) => e.type === 'agent.tool_result' && !e.ok && e.summary === '사람이 거부함');
+  sessions.stopAll();
+});
+
+test('Claude 승인: 평소에는 stdio 로 승인을 묻게 띄운다', async () => {
+  const { sessions, events } = setup();
+  await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);
+  const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+  await sessions.handle({ type: 'user.message', sessionId: id, text: 'argv?' }, local);
+  const a = await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.text.startsWith('argv:'));
+  assert.match(a.text, /--permission-prompt-tool stdio/);
+  sessions.stopAll();
+});
+
 test('나중에 붙은 화면은 지금까지의 기록을 다시 받는다', async () => {
   const { sessions, events } = setup();
   const phone = { via: 'dashboard' as const, user: '김범무' };

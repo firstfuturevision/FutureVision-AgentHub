@@ -119,6 +119,32 @@ select:disabled { opacity: .45; cursor: default; }
 .msg.user { align-self: flex-end; max-width: 80%; background: var(--user); padding: 10px 16px; border-radius: 18px; }
 .msg.user .from { display: block; font-size: 11px; color: var(--ink-faint); margin-bottom: 2px; }
 .msg.agent.draft { color: var(--ink-soft); }
+
+/* 에이전트 답 마크다운 */
+.md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md .md-table { margin: 0 0 12px; }
+.md h3, .md h4, .md h5, .md h6 { margin: 18px 0 6px; line-height: 1.4; font-weight: 600; }
+.md h3 { font-size: 17px; }
+.md h4 { font-size: 15px; }
+.md h5, .md h6 { font-size: 14px; color: var(--ink-soft); }
+.md strong { font-weight: 600; }
+.md ul, .md ol { padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md li > ul, .md li > ol { margin: 2px 0 0; }
+.md li::marker { color: var(--ink-faint); }
+.md a { color: inherit; text-decoration: underline; text-decoration-color: var(--ink-faint); text-underline-offset: 2px; }
+.md a:hover { text-decoration-color: var(--ink); }
+.md code { font: 0.88em var(--mono); background: var(--user); padding: 1px 5px; border-radius: 5px; }
+.md pre { background: var(--user); padding: 10px 14px; border-radius: 10px; overflow-x: auto; white-space: pre; line-height: 1.55; }
+.md pre code { background: none; padding: 0; font-size: 12.5px; }
+.md blockquote { border-left: 3px solid var(--rule); padding-left: 12px; color: var(--ink-soft); }
+.md hr { border: 0; border-top: 1px solid var(--rule); margin: 16px 0; }
+.md .md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: 14px; }
+.md th, .md td { border: 1px solid var(--rule); padding: 5px 10px; text-align: left; vertical-align: top; }
+.md th { font-weight: 600; background: var(--side); }
 .note { font-size: 13px; color: var(--ink-faint); text-align: center; }
 .err-line { font-size: 13px; color: var(--warn); }
 

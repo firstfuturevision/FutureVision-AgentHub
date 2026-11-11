@@ -26,7 +26,13 @@ let lastContinuation = null;
 
 const queue = [];
 let busy = false;
+// 승인: --permission-prompt-tool stdio 면 "perm " 으로 시작하는 지시에 control_request 를 보내고 control_response 를 기다린다
+const askTool = argv.includes('--permission-prompt-tool') ? argv[argv.indexOf('--permission-prompt-tool') + 1] : null;
+const waiting = new Map();
 createInterface({ input: process.stdin }).on('line', (line) => {
+  let msg = null;
+  try { msg = JSON.parse(line); } catch {}
+  if (msg?.type === 'control_response') { waiting.get(msg.response?.request_id)?.(msg.response.response); waiting.delete(msg.response?.request_id); return; }
   queue.push(line);
   pump();
 });
@@ -103,6 +109,21 @@ async function handle(text) {
     out({ type: 'assistant', message: { content: [{ type: 'text', text: `argv: ${argv.slice(2).join(' ')}` }] }, parent_tool_use_id: null, session_id: sid });
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, total_cost_usd: 0, session_id: sid });
     return;
+  }
+
+  if (/^perm /.test(text)) { // 앞 대화에 붙은 "--permission-mode" 같은 글에는 반응하지 않게 맨 앞만
+    const input = { file_path: 'C:/밖/a.txt' };
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu_q${turn}`, name: 'Read', input }] }, parent_tool_use_id: null, session_id: sid });
+    let answer = { behavior: 'deny', message: 'stdio 승인 없음' };
+    if (askTool === 'stdio') {
+      const request_id = `req-${turn}`;
+      answer = await new Promise((done) => {
+        waiting.set(request_id, done);
+        out({ type: 'control_request', request_id, request: { subtype: 'can_use_tool', tool_name: 'Read', display_name: 'Read', input, description: input.file_path, decision_reason_type: 'workingDir', tool_use_id: `tu_q${turn}` } });
+      });
+    }
+    const ok = answer.behavior === 'allow';
+    out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu_q${turn}`, content: ok ? `읽음 ${answer.updatedInput?.file_path}` : answer.message, is_error: !ok }] }, parent_tool_use_id: null, session_id: sid });
   }
 
   if (text.includes('tool')) {

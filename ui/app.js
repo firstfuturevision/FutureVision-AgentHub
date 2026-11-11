@@ -1,5 +1,7 @@
 // Agent Hub 화면 — 왼쪽 작업 목록, 가운데 메인 에이전트 대화(작업자 카드 포함), 아래 입력창.
 // 대시보드 화면도 같은 이벤트를 받으므로 이 렌더링 규칙을 그대로 옮겨 쓴다.
+import { renderMarkdown } from './md.js';
+
 const NAMES = { claude: 'Claude', gemini: 'Gemini', codex: 'Codex' };
 const AGENTS = ['claude', 'codex', 'gemini'];
 const STATUS = { starting: '시작 중', idle: '대기', working: '작업 중', ended: '끝남' };
@@ -1919,7 +1921,7 @@ function mergedItem(it) {
 function item(it) {
   const div = el('div', it.k.startsWith('line') ? it.k : `msg ${it.k}`);
   if (it.from && it.from !== 'local') div.append(el('span', 'from', it.from));
-  if (it.t) div.append(document.createTextNode(it.t));
+  if (it.t) div.append(it.k === 'agent' ? renderMarkdown(it.t) : document.createTextNode(it.t)); // 에이전트 답만 마크다운
   if (it.files?.length) {
     // 첨부: 이 브라우저에서 올린 이미지는 미리보기, 나머지는 이름
     const box = el('div', 'msg-files');

@@ -101,6 +101,7 @@ test('권한 묻지 않기: Claude 는 bypassPermissions 로 뜨고, 끄면 설�
   await say(sessions, events, s.id, '안녕'); // 첫 지시에는 역할 지침이 붙는다
   const reply = await say(sessions, events, s.id, 'argv?');
   assert.match(reply.text, /--permission-mode bypassPermissions/);
+  assert.doesNotMatch(reply.text, /--permission-prompt-tool/); // 묻지 않으니 승인 통로도 없다
 
   // 끄면 설정값(default)으로 다시 뜬다
   await sessions.handle({ type: 'session.configure', sessionId: s.id, autoApprove: false }, local);
@@ -108,6 +109,7 @@ test('권한 묻지 않기: Claude 는 bypassPermissions 로 뜨고, 끄면 설�
   await say(sessions, events, s.id, '이어서'); // 다시 뜬 뒤 첫 지시에는 앞 대화가 붙는다
   const again = await say(sessions, events, s.id, 'argv?');
   assert.match(again.text, /--permission-mode default/);
+  assert.match(again.text, /--permission-prompt-tool stdio/);
   sessions.stopAll();
 });
 

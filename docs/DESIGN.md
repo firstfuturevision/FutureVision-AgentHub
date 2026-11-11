@@ -46,7 +46,7 @@
 - `session.created {session}` / `session.ended {sessionId, reason}`
 - `agent.text {sessionId, text, partial}` — 에이전트의 말
 - `agent.tool {sessionId, toolId, name, input}` / `agent.tool_result {sessionId, toolId, ok, summary}` — 지금 하는 행동
-- `permission.request {sessionId, requestId, tool, detail}` — 승인 대기 (다음 단계)
+- `permission.request {sessionId, requestId, tool, detail}` — 승인 대기
 - `turn.done {sessionId, durationMs, costUsd?}` — 한 차례 끝, 기록용 수치
 - `error {sessionId?, message}`
 
@@ -70,6 +70,7 @@ ACP 어댑터(`src/adapters/acp.ts`) 동작:
 - `initialize` → `session/new` 를 `startTimeoutMs`(기본 60초) 안에 못 받으면 "로그인 확인" 안내와 함께 세션을 끝낸다(로그인 만료 CLI 가 조용히 멈추는 문제 대응).
 - `session/prompt` 는 한 번에 하나만 보낸다(Gemini 는 새 prompt 가 앞 것을 취소한다) → 줄 세우기.
 - `session/request_permission` → `permission.request` → 화면 허용·거부 → `allow_once`/`reject_once` 로 답. "항상 허용"은 고르지 않는다.
+- Claude: `--permission-prompt-tool stdio` 로 띄우면 물어야 하는 도구가 stdout `control_request {subtype: can_use_tool, tool_name, input, description, decision_reason_type}` 로 온다 → `permission.request` → 답은 stdin `control_response {subtype: success, request_id, response: {behavior: allow, updatedInput} | {behavior: deny, message}}`. 허용은 한 번만(`permission_suggestions` 의 세션 규칙은 넣지 않는다). 2.1.283 에서 확인. 권한 묻지 않기면 이 인자를 붙이지 않는다.
 - PC·대시보드가 같은 승인 요청에 동시에 답하면 먼저 온 답만 받고 `permission.resolved {by}` 로 모든 화면에 알린다.
 - 광고하지 않은 `fs/*`·`terminal/*` 요청은 거절한다 — 파일은 에이전트가 작업 폴더 안에서 직접 다룬다.
 
@@ -113,7 +114,7 @@ clink 와 다른 점 (이 시스템의 목적에 맞춘 것)
 
 - 직접 작업 서버는 `127.0.0.1` 에만 바인딩한다.
 - 세션 작업 폴더는 설정의 `workspaceRoot` 아래로만 허용한다(경로 탈출 거부).
-- 권한 모드 기본값은 `default`(위험한 행동은 거부됨). 승인 버튼 흐름(`permission.*`)이 생기기 전까지 자동 승인 모드는 설정으로만 켠다.
+- 권한 모드 기본값은 `default`(위험한 행동은 거부됨). 물어야 하는 도구는 승인 카드로 묻는다.
 - API 키·대시보드 토큰은 환경 변수로만 받고 기록·로그에 쓰지 않는다.
 
 ## 7. 첫 버전 범위
@@ -131,6 +132,6 @@ clink 와 다른 점 (이 시스템의 목적에 맞춘 것)
 ## 9. 다음 단계
 
 1. 대시보드: 실시간 중계(WebSocket) + 에이전트 화면 + 기록 API — 대시보드 소스 위치 확인 필요
-2. 승인 흐름(ACP `session/request_permission`, Claude는 permission-prompt 도구)
+2. ~~승인 흐름~~ 완료(ACP `session/request_permission`, Claude `--permission-prompt-tool stdio`)
 3. Gemini ACP 연결(설정 파일 수정 후), Codex 설치 + ACP
 4. 작업별 폴더 분리, 비용·시간 집계 화면

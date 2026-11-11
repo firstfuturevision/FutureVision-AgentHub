@@ -21,7 +21,7 @@ const TYPES: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
 };
-const STATIC = new Set(['/index.html', '/app.js', '/style.css']);
+const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css']);
 
 /**
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
