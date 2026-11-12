@@ -1288,7 +1288,7 @@ function onEvent(ev) {
     sessions.delete(ev.sessionId);
     for (const s of sessions.values()) s.items = s.items.filter((it) => !(it.k === 'worker' && it.id === ev.sessionId));
     if (viewId === ev.sessionId) viewId = null;
-    return render();
+    return renderSoon();
   }
 
   if (ev.type === 'session.created') {
@@ -1304,7 +1304,7 @@ function onEvent(ev) {
       void sendWithFiles(info.id, pendingFirst.text, pendingFirst.files);
       pendingFirst = null;
     }
-    return render();
+    return renderSoon();
   }
 
   const s = ev.sessionId && sessions.get(ev.sessionId);
@@ -1368,7 +1368,7 @@ function onEvent(ev) {
     }
     case 'error': s.items.push({ k: 'line err', t: ev.message }); break;
   }
-  render();
+  renderSoon();
 }
 
 // ── 그리기 ──────────────────────────────────
@@ -1497,7 +1497,21 @@ function openSelectMenu(sel) {
   menu.querySelector('button.on')?.scrollIntoView({ block: 'nearest' });
 }
 
+/**
+ * 이벤트가 몰려 올 때(접속 직후 기록 전체를 다시 받을 때, 답이 조각조각 올 때) 이벤트마다 화면 전체를 다시 그리지 않고
+ * 한 프레임에 한 번만 그린다. 창이 가려져 있으면 rAF 가 멈추므로 시간 제한으로도 한 번 그린다.
+ */
+let renderTimer = 0;
+function renderSoon() {
+  if (renderTimer) return;
+  const run = () => { if (!renderTimer) return; cancelAnimationFrame(raf); clearTimeout(late); renderTimer = 0; render(); };
+  const raf = requestAnimationFrame(run);
+  const late = setTimeout(run, 100);
+  renderTimer = 1;
+}
+
 function render() {
+  renderTimer = 0;
   renderList();
   renderChat();
   renderPanel();
