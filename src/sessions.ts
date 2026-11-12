@@ -957,11 +957,14 @@ export class SessionManager {
       customTitle: title.length > 40 ? `${title.slice(0, 40)}…` : title || 'Claude Code',
       cliSessionId: id,
       seed: (sessionId) => {
+        // 지시·답과 그 사이 도구 사용(파일 수정·명령 실행)·결과를 화면에 그대로
         for (const m of got.messages) {
           if (m.role === 'user') this.publish({ type: 'user.message', sessionId, text: m.text, from: 'Claude Code' });
-          else this.publish({ type: 'agent.text', sessionId, text: m.text, partial: false });
+          else if (m.role === 'assistant') this.publish({ type: 'agent.text', sessionId, text: m.text, partial: false });
+          else if (m.role === 'tool') this.publish({ type: 'agent.tool', sessionId, toolId: m.id, name: m.name, input: m.input });
+          else this.publish({ type: 'agent.tool_result', sessionId, toolId: m.id, ok: m.ok, summary: m.summary });
         }
-        this.publish({ type: 'session.imported', sessionId, shown: got.messages.length });
+        this.publish({ type: 'session.imported', sessionId, shown: got.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length });
       },
     });
   }

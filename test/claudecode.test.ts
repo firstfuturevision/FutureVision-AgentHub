@@ -51,7 +51,10 @@ test('Claude Code 기록 찾기: 사람이 연 세션만, 첫 지시·마지막 
     { type: 'user', isMeta: true, cwd: outside, message: { role: 'user', content: '<command-name>/model</command-name>' } },
     human(outside, '<system-reminder>무시</system-reminder>견적서 정리해줘'),
     reply(outside, '네, 정리할게요'),
-    { type: 'user', cwd: outside, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '결과' }] } },
+    { type: 'assistant', isSidechain: false, cwd: outside, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Write', input: { file_path: 'C:/x/견적.md', content: '아주 긴 파일 내용'.repeat(500) } }] } },
+    { type: 'user', cwd: outside, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '파일을 만들었습니다\n둘째 줄' }] } },
+    { type: 'assistant', isSidechain: false, cwd: outside, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm run dev', run_in_background: true } }] } },
+    { type: 'user', cwd: outside, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', is_error: true, content: [{ type: 'text', text: 'Error: 포트 사용 중' }] }] } },
     reply(outside, '표로 만들었어요'),
     human(outside, '좋아 저장해'),
   ]);
@@ -74,13 +77,21 @@ test('Claude Code 기록 찾기: 사람이 연 세션만, 첫 지시·마지막 
   assert.equal(list[1].folderOk, false);
   assert.deepEqual(new ClaudeHistory(home).list(new Set([id])).map((s) => s.id), [old]);
 
-  // 대화 읽기: 사람 지시와 답만, 한 답이 여러 줄이면 하나로
+  // 대화 읽기: 지시·답과 그 사이 도구 사용(파일·명령만, 큰 내용은 버림)·결과(첫 줄)
   const got = new ClaudeHistory(home).read(id)!;
   assert.deepEqual(got.messages, [
     { role: 'user', text: '견적서 정리해줘' },
-    { role: 'assistant', text: '네, 정리할게요\n\n표로 만들었어요' },
+    { role: 'assistant', text: '네, 정리할게요' },
+    { role: 'tool', id: 't1', name: 'Write', input: { file_path: 'C:/x/견적.md' } },
+    { role: 'tool_result', id: 't1', ok: true, summary: '파일을 만들었습니다' },
+    { role: 'tool', id: 't2', name: 'Bash', input: { command: 'npm run dev' } },
+    { role: 'tool_result', id: 't2', ok: false, summary: 'Error: 포트 사용 중' },
+    { role: 'assistant', text: '표로 만들었어요' },
     { role: 'user', text: '좋아 저장해' },
   ]);
+  // max: 끝에서 글 2개 → 그 답을 만든 도구 사용까지 함께
+  assert.deepEqual(new ClaudeHistory(home).read(id, 2)!.messages.map((m) => m.role), ['tool', 'tool_result', 'tool', 'tool_result', 'assistant', 'user']);
+  assert.deepEqual(new ClaudeHistory(home).read(id, 3)!.messages.map((m) => m.role), ['assistant', 'tool', 'tool_result', 'tool', 'tool_result', 'assistant', 'user']);
   assert.equal(new ClaudeHistory(home).read('../../etc/passwd'), null);
   assert.equal(parseCommand({ type: 'session.import', cliSessionId: '../x' }), null);
 });

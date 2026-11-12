@@ -2282,7 +2282,8 @@ function permItem(s, it, live) {
 function brief(input) {
   if (!input || typeof input !== 'object') return '';
   const v = input.file_path ?? input.path ?? input.command ?? input.pattern ?? input.url ?? Object.values(input)[0];
-  const t = typeof v === 'string' ? v : JSON.stringify(v ?? '');
+  if (v == null || v === '') return ''; // 보여 줄 입력이 없으면 이름만
+  const t = typeof v === 'string' ? v : JSON.stringify(v);
   return t.length > 80 ? t.slice(0, 80) + '…' : t;
 }
 

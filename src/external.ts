@@ -19,7 +19,24 @@ export interface ExternalSession {
   active: boolean; // 방금(2분 안)까지 쓰던 세션 — 원래 창이 아직 쓰는 중일 수 있다
   folderOk: boolean; // 작업 폴더가 아직 있는가(없으면 이어 갈 수 없음)
 }
-export interface ExternalMessage { role: 'user' | 'assistant'; text: string }
+/** 가져온 대화 한 줄: 사람 지시·Claude 답·도구 사용(파일 수정·명령 실행 등)·도구 결과 */
+export type ExternalMessage =
+  | { role: 'user' | 'assistant'; text: string }
+  | { role: 'tool'; id: string; name: string; input: Record<string, string> }
+  | { role: 'tool_result'; id: string; ok: boolean; summary: string };
+
+/** 도구 입력은 화면 한 줄에 쓸 것만(파일·명령·패턴 등) — Write 의 파일 내용 같은 큰 값은 버린다 */
+const TOOL_KEYS = ['file_path', 'path', 'command', 'pattern', 'url', 'query', 'description', 'skill', 'subagent_type'];
+function toolInput(input: any): Record<string, string> {
+  if (!input || typeof input !== 'object') return {};
+  for (const k of TOOL_KEYS) if (typeof input[k] === 'string') return { [k]: clip(input[k], 200) };
+  const first = Object.entries(input).find(([, v]) => typeof v === 'string');
+  return first ? { [first[0]]: clip(first[1] as string, 200) } : {};
+}
+function resultSummary(c: any): string {
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n') : '';
+  return clip(text.split('\n').map((l: string) => l.trim()).find(Boolean) ?? '', 160);
+}
 
 const HEAD = 256 * 1024;
 const TAIL = 512 * 1024;
@@ -129,7 +146,10 @@ export class ClaudeHistory {
     return out;
   }
 
-  /** 가져오기: 그 세션의 폴더·첫 지시와 대화 끝부분(사람 지시와 Claude 의 답, 최대 max 개) */
+  /**
+   * 가져오기: 그 세션의 폴더·첫 지시와 대화 끝부분 — 사람 지시와 Claude 의 답(최대 max 개),
+   * 그 사이의 도구 사용(파일 수정·명령 실행 등)과 결과까지. AI 는 --resume 으로 전부 기억하고, 이것은 사람이 볼 화면용.
+   */
   read(id: string, max = 30): { cwd: string; title: string; messages: ExternalMessage[] } | null {
     const file = claudeTranscript(this.home, id);
     if (!file) return null;
@@ -139,18 +159,35 @@ export class ClaudeHistory {
     if (!s) return null;
     const start = Math.max(0, st.size - READ_TAIL);
     const messages: ExternalMessage[] = [];
-    for (const j of parse(readRange(file, start, st.size - start), start > 0)) {
-      const p = promptText(j);
-      const r = p === null ? replyText(j) : null;
-      const role = p !== null ? 'user' : r !== null ? 'assistant' : null;
-      if (!role) continue;
-      const text = (p ?? r)!;
+    const pushText = (role: 'user' | 'assistant', text: string) => {
       const prev = messages.at(-1);
-      // 한 답이 여러 줄(생각·도구 사이사이 글)로 나뉘어 기록된다 — 이어진 답은 하나로
+      // 한 답이 여러 줄로 나뉘어 기록된다 — 바로 이어진 답 글은 하나로
       if (role === 'assistant' && prev?.role === 'assistant') prev.text = clip(`${prev.text}\n\n${text}`);
       else messages.push({ role, text: clip(text) });
+    };
+    for (const j of parse(readRange(file, start, st.size - start), start > 0)) {
+      if (j?.isSidechain) continue;
+      const p = promptText(j);
+      if (p !== null) { pushText('user', p); continue; }
+      const c = j?.message?.content;
+      if (!Array.isArray(c)) continue;
+      if (j.type === 'assistant') {
+        for (const b of c) {
+          if (b?.type === 'text' && b.text?.trim()) pushText('assistant', b.text.trim());
+          else if (b?.type === 'tool_use' && typeof b.name === 'string') messages.push({ role: 'tool', id: String(b.id ?? ''), name: b.name, input: toolInput(b.input) });
+        }
+      } else if (j.type === 'user') {
+        for (const b of c) if (b?.type === 'tool_result') messages.push({ role: 'tool_result', id: String(b.tool_use_id ?? ''), ok: !b.is_error, summary: resultSummary(b.content) });
+      }
     }
-    return { cwd: s.cwd, title: s.title, messages: messages.slice(-max) };
+    // 끝에서 글(지시·답) max 개가 들어가는 곳부터. 도구 결과로 시작하면 그 앞 도구가 없으니 뺀다
+    let from = 0;
+    for (let i = messages.length - 1, n = 0; i >= 0; i--) {
+      const r = messages[i].role;
+      if ((r === 'user' || r === 'assistant') && ++n > max) { from = i + 1; break; }
+    }
+    while (from < messages.length && messages[from].role === 'tool_result') from++;
+    return { cwd: s.cwd, title: s.title, messages: messages.slice(from) };
   }
 
   private summary(file: string, size: number, mtime: number): Summary | null {
