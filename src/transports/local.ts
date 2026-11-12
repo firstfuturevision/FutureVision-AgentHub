@@ -408,7 +408,8 @@ async function screenRoute(req: IncomingMessage, res: ServerResponse, url: URL, 
     try {
       const f = await screen.frame(q('m'), q('w'), q('q'), url.searchParams.get('v') ?? '');
       // 관리자 확인 창·잠금 화면: 찍을 수 없다(관리자 권한 없이)
-      if (f.kind === 'secure') return send(res, 423, '관리자 확인 창이나 잠금 화면 — PC 앞에서 눌러야 함');
+      // 리눅스 Wayland: 허용 대기·거절 같은 까닭이 함께 온다
+      if (f.kind === 'secure') return send(res, 423, f.message ?? '관리자 확인 창이나 잠금 화면 — PC 앞에서 눌러야 함');
       res.writeHead(200, { 'content-type': f.type, 'cache-control': 'no-store', 'content-length': f.data.length });
       return res.end(f.data);
     } catch (err) {

@@ -9,29 +9,46 @@ import { deflate, crc32 } from 'node:zlib';
  *  - 원격 접속과 따로 켜고 끈다(기본 꺼짐). 원격 접속처럼 비밀번호·권한 구분은 없다.
  *  - Windows: src/screen-helper.cs 를 csc.exe(.NET Framework 4, Windows 기본)로 컴파일해 띄운다. 프레임 = JPEG.
  *  - 리눅스(X11): src/screen-helper-x11.py 를 python3 로 띄운다(ctypes + libX11·libXtst). 프레임 = 날 픽셀 → 여기서 줄여 PNG.
- *    Wayland 세션은 화면을 찍을 수 없어 안 된다(로그인 화면에서 Xorg 세션).
- *  - 둘 다 따로 설치할 것 없음. 도우미는 같은 줄 명령·프레임 형식만 지키면 바꿔 끼울 수 있다.
+ *  - 리눅스(GNOME Wayland): src/screen-helper-grd.ts — GNOME 자체 원격 데스크톱(gnome-remote-desktop)의 RDP 를 grdctl 로 켜고(sudo 없음)
+ *    직접 짠 RDP 클라이언트(src/rdp)로 127.0.0.1 에 붙는다. 허용 창 없음. 아이디·비밀번호는 data/screen-rdp.json.
+ *    (GNOME 50 의 원격 데스크톱에는 VNC 가 없고 RDP 만 있다 — 2026-11-12 확인)
+ *    GNOME 46+ 는 화면 공유를 포털(사람이 허용 창을 누름)과 GNOME 원격 데스크톱만 쓰게 막아서, 허용 창 없이 하는 길은 이것뿐이다.
+ *  - 리눅스(그 밖의 Wayland: KDE 등): 아직 없음(허용 창 없이 들어가는 길이 없어 넣지 않았다).
+ *  - 모두 따로 설치할 것 없음. 도우미는 같은 줄 명령·프레임 형식만 지키면 바꿔 끼울 수 있다.
  *  - Windows 관리자 확인 창(보안 데스크톱)·잠금 화면은 관리자 권한 없이 찍지도 누르지도 못한다 → 프레임 대신 'secure'.
  *  - 누가 보고 있으면(최근 3초 안에 프레임 요청) 이 PC 화면 위에 "원격으로 화면 보는 중" 띠를 띄운다.
  */
 export interface Monitor { x: number; y: number; w: number; h: number; primary: boolean }
-export type Frame = { kind: 'image'; type: 'image/jpeg' | 'image/png'; data: Buffer } | { kind: 'secure' };
+export type Frame = { kind: 'image'; type: 'image/jpeg' | 'image/png'; data: Buffer } | { kind: 'secure'; message?: string };
 
 const CSC = join(process.env.WINDIR ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
 const VIEW_WINDOW = 3000; // 이 시간 안에 프레임을 받아 간 화면 = 보고 있는 사람
 const IDLE_EXIT = 60_000; // 아무도 안 보면 도우미를 끈다
 const deflateAsync = promisify(deflate);
-const WAYLAND = 'Wayland 세션은 안 됨. 로그인 화면에서 Xorg 세션을 고르세요';
+const NO_DESKTOP = '데스크톱 화면이 없는 곳에서 켠 Agent Hub. 데스크톱에 로그인한 뒤 그 안에서 켜세요';
 
 /** 이 PC 에서 화면 제어를 쓸 수 있는가 — 안 되면 그 까닭 */
-function platformCheck(winSource: string, x11Source: string): { kind: 'win' | 'x11' | null; reason: string | null } {
+function hasGrdRdp(): boolean {
+  const r = spawnSync('grdctl', ['--help'], { timeout: 5000 });
+  return !r.error && /\brdp\b/i.test(String(r.stdout) + String(r.stderr));
+}
+
+function platformCheck(winSource: string, x11Source: string, grdSource: string): { kind: Kind; reason: string | null } {
   if (process.platform === 'win32') {
     if (!existsSync(CSC) || !existsSync(winSource)) return { kind: null, reason: '이 PC 에서 C# 컴파일러(.NET Framework 4)를 찾지 못함' };
     return { kind: 'win', reason: null };
   }
   if (process.platform === 'linux') {
-    if (!process.env.DISPLAY) return { kind: null, reason: process.env.WAYLAND_DISPLAY ? WAYLAND : '데스크톱 화면(DISPLAY)이 없는 곳에서 켠 Agent Hub. 데스크톱에 로그인해서 켜세요' };
-    if (process.env.XDG_SESSION_TYPE === 'wayland') return { kind: null, reason: WAYLAND };
+    // Wayland(또는 DISPLAY 없이 데스크톱 세션 버스만 있는 경우): GNOME 원격 데스크톱(RDP)
+    const wayland = Boolean(process.env.WAYLAND_DISPLAY) || process.env.XDG_SESSION_TYPE === 'wayland';
+    const sessionBus = Boolean(process.env.DBUS_SESSION_BUS_ADDRESS) || (process.env.XDG_RUNTIME_DIR ? existsSync(join(process.env.XDG_RUNTIME_DIR, 'bus')) : false);
+    if (wayland || (!process.env.DISPLAY && sessionBus)) {
+      if (!sessionBus) return { kind: null, reason: NO_DESKTOP };
+      if (!hasGrdRdp()) return { kind: null, reason: 'GNOME 원격 데스크톱(gnome-remote-desktop)이 없음. GNOME 이 아닌 Wayland 는 아직 안 됨' };
+      if (!existsSync(grdSource)) return { kind: null, reason: '화면 도우미 파일 없음' };
+      return { kind: 'grd', reason: null }; // 허용 창 없이
+    }
+    if (!process.env.DISPLAY) return { kind: null, reason: NO_DESKTOP };
     const r = spawnSync('python3', ['-c', 'import ctypes.util as u,sys;sys.exit(0 if u.find_library("X11") else 1)'], { timeout: 5000 });
     if (r.error || r.status !== 0) return { kind: null, reason: r.error ? 'python3 를 찾지 못함' : 'libX11 을 찾지 못함' };
     if (!existsSync(x11Source)) return { kind: null, reason: '화면 도우미 파일 없음' };
@@ -39,13 +56,16 @@ function platformCheck(winSource: string, x11Source: string): { kind: 'win' | 'x
   }
   return { kind: null, reason: '이 운영체제에서는 아직 안 됨(Windows·리눅스만)' };
 }
+type Kind = 'win' | 'x11' | 'grd' | null;
 
 export class ScreenControl {
   private file: string;
   private exe: string;
   private source: string;
   private x11Source: string;
-  private kind: 'win' | 'x11' | null;
+  private grdSource: string;
+  private rdpFile: string;
+  private kind: Kind;
   private reason: string | null;
   private helperCommand?: string[];
   private s: { enabled: boolean };
@@ -67,8 +87,10 @@ export class ScreenControl {
     this.exe = join(opts.binDir, 'screen-helper.exe');
     this.source = opts.source;
     this.x11Source = opts.x11Source ?? join(dirname(opts.source), 'screen-helper-x11.py');
+    this.grdSource = join(dirname(opts.source), 'screen-helper-grd.ts');
+    this.rdpFile = join(dirname(opts.file), 'screen-rdp.json');
     this.helperCommand = opts.helperCommand;
-    const c = opts.helperCommand ? { kind: null, reason: null } : platformCheck(this.source, this.x11Source);
+    const c = opts.helperCommand ? { kind: null, reason: null } : platformCheck(this.source, this.x11Source, this.grdSource);
     this.kind = c.kind;
     this.reason = c.reason;
     this.supported = Boolean(opts.helperCommand) || c.kind !== null;
@@ -91,7 +113,15 @@ export class ScreenControl {
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.s, null, 2));
     renameSync(`${this.file}.tmp`, this.file);
-    if (!v.enabled) this.stop();
+    if (!v.enabled) {
+      this.stop();
+      // GNOME 원격 데스크톱의 RDP 도 닫는다 — Agent Hub 가 켠 경우만(사람이 원래 켜 두었으면 그대로)
+      if (this.kind === 'grd') {
+        let byHub = false;
+        try { byHub = JSON.parse(readFileSync(this.rdpFile, 'utf8')).enabledByHub === true; } catch {}
+        if (byHub) execFile('grdctl', ['rdp', 'disable'], { timeout: 15000 }, () => {});
+      }
+    }
   }
 
   async monitors(): Promise<Monitor[]> {
@@ -108,7 +138,7 @@ export class ScreenControl {
     const r = await this.ask(`frame ${int(monitor, 0, 15)} ${w} ${int(quality, 20, 95)}`);
     if (r.t === 'F') return { kind: 'image', type: 'image/jpeg', data: r.data };
     if (r.t === 'R') return { kind: 'image', type: 'image/png', data: await rawToPng(r.data, w) };
-    if (r.t === 'S') return { kind: 'secure' };
+    if (r.t === 'S') return { kind: 'secure', message: r.data.toString('utf8') || undefined };
     throw new Error(r.data.toString('utf8') || '화면을 찍지 못함');
   }
 
@@ -160,6 +190,7 @@ export class ScreenControl {
     if (this.child) return;
     let cmd = this.helperCommand;
     if (!cmd && this.kind === 'x11') cmd = ['python3', this.x11Source];
+    if (!cmd && this.kind === 'grd') cmd = [process.execPath, '--experimental-strip-types', '--disable-warning=ExperimentalWarning', this.grdSource, this.rdpFile];
     if (!cmd) {
       await this.build();
       cmd = [this.exe];
