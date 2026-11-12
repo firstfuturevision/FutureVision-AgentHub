@@ -1947,11 +1947,30 @@ function renderContext(s) {
   box.replaceChildren();
   const items = s.ctxItems ?? [];
   box.closest('.psec').hidden = !items.length;
-  for (const it of items) {
+  // 같은 이름(예: 분담 공유 · Future Vision)은 한 줄로 묶어 횟수 · 글자 수를 더한다. 다음 지시에 붙을 것이 먼저, 나머지는 최근 것부터
+  const groups = new Map();
+  for (const it of [...items].reverse()) {
+    const key = `${it.pending ? 1 : 0}\u0000${it.label}`;
+    const g = groups.get(key) ?? { label: it.label, pending: it.pending, n: 0, chars: 0 };
+    g.n++;
+    g.chars += it.chars;
+    groups.set(key, g);
+  }
+  const rows = [...groups.values()].sort((a, b) => Number(b.pending) - Number(a.pending));
+  const LIMIT = 4;
+  const shown = s.ctxAll ? rows : rows.slice(0, LIMIT);
+  for (const g of shown) {
     const row = el('div', 'p-item');
-    row.append(el('span', 'p-name', it.label), el('span', 'p-meta', it.pending ? `${chars(it.chars)} · 다음 지시에` : chars(it.chars)));
-    row.title = it.pending ? '다음 지시에 붙어 에이전트에게 갑니다' : '에이전트에게 넣었습니다';
+    const meta = `${g.n > 1 ? `${g.n}번 · ` : ''}${chars(g.chars)}${g.pending ? ' · 다음 지시에' : ''}`;
+    row.append(el('span', 'p-name', g.label), el('span', 'p-meta', meta));
+    row.title = g.pending ? '다음 지시에 붙어 에이전트에게 갑니다' : `에이전트에게 넣었습니다${g.n > 1 ? ` (${g.n}번)` : ''}`;
     box.append(row);
+  }
+  if (rows.length > LIMIT) {
+    const more = el('button', 'p-more', s.ctxAll ? '접기' : `${rows.length - LIMIT}개 더 보기`);
+    more.type = 'button';
+    more.onclick = () => { s.ctxAll = !s.ctxAll; renderContext(s); };
+    box.append(more);
   }
 }
 const tokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
