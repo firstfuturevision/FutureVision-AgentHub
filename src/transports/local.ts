@@ -17,6 +17,7 @@ import type { AutoStart } from '../autostart.ts';
 import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import type { ScreenControl } from '../screen.ts';
+import type { ClaudeCli } from '../models.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
@@ -32,8 +33,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/scre
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -227,6 +228,24 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         }
       }
       // 연동의 설치 — AI CLI 가 있는지, 없으면 터미널 창에서 npm 설치
+      // Claude CLI — 버전·새 버전·CLI 가 아는 모델. 업데이트는 터미널 창에서 `claude update`
+      if (url.pathname === '/claude-cli' && claudeCli) {
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          if (body?.action === 'update') {
+            try { await openInstall?.('Claude Code 업데이트', `${String(info.claudeCommand ?? 'claude')} update`); } catch (err) { return send(res, 400, (err as Error).message); }
+            // 업데이트가 끝날 즈음 다시 묻는다(모델 목록이 새 CLI 기준으로 바뀐다)
+            for (const ms of [45_000, 120_000, 300_000]) setTimeout(() => void claudeCli.refresh(), ms).unref();
+          } else if (body?.action === 'refresh') await claudeCli.refresh();
+          else return send(res, 400, '알 수 없는 동작');
+        } else {
+          const st = claudeCli.public();
+          // 10분 넘게 안 물었으면 뒤에서 다시 묻는다(이번 답은 저장된 것)
+          if (!st.checking && (!st.checkedAt || Date.now() - Date.parse(st.checkedAt) > 10 * 60 * 1000)) void claudeCli.refresh();
+        }
+        return json(res, 200, claudeCli.public());
+      }
       if (url.pathname === '/clis' && clis) {
         if (req.method === 'GET') return json(res, 200, clis());
         if (req.method === 'POST') {

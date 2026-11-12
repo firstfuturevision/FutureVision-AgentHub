@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 const argv = process.argv;
+if (argv.includes('--version')) { console.log('2.1.283 (Claude Code)'); process.exit(0); }
 // --resume 이면 그 대화 id 그대로(실제 CLI 와 같이), 아니면 새 대화 id
 const sid = argv.includes('--resume') ? argv[argv.indexOf('--resume') + 1] : randomUUID();
 let turn = 0;
@@ -38,6 +39,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (msg?.type === 'control_request' && msg.request?.subtype === 'interrupt') {
     out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { still_queued: [] } } });
     abortTurn?.();
+    return;
+  }
+  // 모델 목록 묻기(initialize): 실제 2.1.283 과 같은 모양으로
+  if (msg?.type === 'control_request' && msg.request?.subtype === 'initialize') {
+    out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { commands: [], models: [{ value: 'default', displayName: 'Default (recommended)' }, { value: 'opus', displayName: 'Opus 5.5' }, { value: 'claude-fable-5-2', displayName: 'Fable 5.2' }] } } });
     return;
   }
   if (msg?.type === 'control_response') { waiting.get(msg.response?.request_id)?.(msg.response.response); waiting.delete(msg.response?.request_id); return; }

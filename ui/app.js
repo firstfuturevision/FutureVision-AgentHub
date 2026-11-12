@@ -360,6 +360,14 @@ let updState = null; // 업데이트: { repo, mode, state, current, latest, behi
 let autoState = null; // 자동 실행: { supported, enabled }
 let remoteState = null; // 원격 접속: { enabled, port, urls, error, local }
 let permState = { autoApproveAll: false }; // 권한 묻지 않기(모든 작업)
+let claudeCli = null; // Claude CLI: { version, latest, outdated, models, checking }
+/** CLI 가 아는 Claude 모델로 드롭다운을 바꾼다 */
+function useClaudeModels(st) {
+  if (!st?.models?.length) return;
+  if (JSON.stringify(models.claude) === JSON.stringify(st.models)) return;
+  models.claude = st.models;
+  fillSelects();
+}
 let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
@@ -372,7 +380,8 @@ const getJson = async (url, fallback) => {
 // 작업 정보의 "권한 묻지 않음" 표시용 — 설정을 열지 않아도 처음에 읽어 둔다
 getJson('/permissions', permState).then((x) => { permState = x ?? permState; renderPanel(); });
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState)]);
+  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState, claudeCli] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState), getJson('/claude-cli', null)]);
+  useClaudeModels(claudeCli);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
 }
@@ -437,6 +446,7 @@ function renderAuth() {
       row.append(body);
       seg.hidden = true;
     } else renderAuthRow(row, a, st, false);
+    if (a === 'claude' && claudeCli && cliState[a]?.installed !== false) row.append(claudeCliLine());
     list.append(row);
   }
   if (ghState) list.append(githubRow());
@@ -589,6 +599,35 @@ function autoRow() {
   body.append(el('div', 'hint-inline auth-help', '이 PC 에 로그인하면 뒤에서 켭니다. 다음 로그인부터 적용'));
   row.append(body);
   return row;
+}
+
+/** Claude CLI 버전·새 버전·업데이트(새 모델은 CLI 가 알아야 쓸 수 있다) */
+function claudeCliLine() {
+  const c = claudeCli;
+  const box = el('div', 'auth-body');
+  const parts = [c.version ? `Claude Code ${c.version}` : 'Claude Code 버전 모름', c.outdated && c.latest ? `새 버전 ${c.latest}` : c.latest ? '최신' : ''].filter(Boolean);
+  box.append(el('span', `auth-state${c.outdated ? ' on' : ''}`, parts.join(' · ')));
+  if (c.outdated) {
+    const b = el('button', 'line-btn', 'CLI 업데이트');
+    b.type = 'button';
+    b.onclick = async () => {
+      if (!(await askDialog({ title: 'Claude Code 업데이트', text: `터미널 창에서 claude update 를 돌립니다(${c.version} → ${c.latest}). 끝나면 새 모델이 목록에 나옵니다. 지금 돌고 있는 작업은 다음 지시부터 새 버전을 씁니다.`, ok: '업데이트' }))) return;
+      const r = await postJson('/claude-cli', { action: 'update' });
+      if (r) { claudeCli = r; flash('업데이트 창을 열었어요. 끝나면 모델 목록이 바뀝니다'); pollClaudeCli(); }
+    };
+    box.append(b);
+  }
+  if (c.models?.length) box.append(el('div', 'hint-inline auth-help', `쓸 수 있는 모델(CLI 기준): ${c.models.map((m) => m.name).join(', ')}`));
+  return box;
+}
+/** 업데이트 뒤 몇 분 동안 버전·모델이 바뀌었는지 본다 */
+function pollClaudeCli() {
+  const start = Date.now(), before = claudeCli?.version;
+  const t = setInterval(async () => {
+    const x = await postJson('/claude-cli', { action: 'refresh' });
+    if (x) { claudeCli = x; useClaudeModels(x); renderAuth(); }
+    if ((x && x.version !== before) || Date.now() - start > 6 * 60 * 1000) clearInterval(t);
+  }, 30_000);
 }
 
 /** 권한 묻지 않기(모든 작업) — 켜면 모든 작업이 파일 수정·명령 실행을 허용 버튼 없이 바로 한다 */

@@ -69,6 +69,8 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 
 **권한 묻지 않기**(`autoApprove`): 에이전트 편집의 체크 칸, 또는 작업 정보 → 지침 → 바꾸기의 "권한" 칸에서 켠다. 켜면 Claude 는 `--permission-mode bypassPermissions` 로 뜨고(끄면 설정값으로 뜨고, 물어야 하는 도구는 허용·거부 카드로 묻는다), Codex·Gemini(ACP)의 `session/request_permission` 은 호스트가 바로 허용한다(기록에는 "자동 허용"으로 남음). 메인이 묻지 않으면 그 메인이 맡긴 하위 에이전트도 묻지 않는다. 포크·복사는 이어받는다. 켜는 것은 PC 앞 화면에서만(대시보드에서는 끄기만). 에이전트 저장·지우기처럼 모두가 쓰는 설정을 바꾸는 승인은 그대로 묻는다.
 
+**Claude 모델 목록·CLI 버전**(`src/models.ts`, `GET/POST /claude-cli`, `data/claude-models.json`): Claude 모델은 코드에 고정하지 않고 CLI 에게 묻는다 — `claude -p --input-format stream-json` 에 `control_request {subtype:"initialize"}` 를 보내면 응답의 `models`(value·displayName)가 그 CLI 가 아는 모델이다(토큰 안 씀, 2.1.283 확인). CLI 가 모르는 모델은 `--model` 로 줘도 "unrecognized_model" 로 거절되므로 이 목록이 곧 쓸 수 있는 목록. "default" 는 Agent Hub 의 "기본"과 겹쳐 뺀다. 켜고 8초 뒤·6시간마다·연동을 열 때(10분 넘었으면) 다시 묻고 `cfg.models.claude`(=`/info` 의 models)를 바꾼다. 버전은 `claude --version` 과 `npm view @anthropic-ai/claude-code version` 을 견주어 새 버전이면 연동의 Claude 칸에 "CLI 업데이트"(터미널 창에서 `claude update`), 끝날 즈음(45초·2분·5분) 다시 묻는다.
+
 **권한 묻지 않기(모든 작업)**(`GET/POST /permissions`, `data/permissions.json`): 설정 → 연동의 스위치. 켜면 모든 작업의 승인 요청을 호스트가 바로 허용하고("자동 허용"), 켜는 순간 기다리던 요청도 허용한다. 작업별 설정과 상관없이 앞선다. 이 PC 화면·원격 접속에서만(대시보드는 이 서버를 거치지 않는다). 작업 정보에 "권한 묻지 않음(모든 작업)"으로 보인다. 자동 허용된 요청은 카드로 띄우지 않고 "도구 N개 사용" 접힌 줄 안에 "자동 허용 · 도구 — 내용" 한 줄로 넣는다(사람이 누를 것만 카드).
 
 작업 목록에서 우클릭(또는 ⋯) → **이름 바꾸기 · 포크 · 분담 · 복사 · 삭제**.
