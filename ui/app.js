@@ -1359,8 +1359,10 @@ function onEvent(ev) {
       if (s.info.role === 'worker') opened.add(s.info.id); // 승인이 필요하면 카드를 펼친다
       break;
     case 'permission.resolved': {
-      const p = s.items.find((it) => it.k === 'perm' && it.requestId === ev.requestId);
-      if (p) p.resolved = { allow: ev.allow, by: ev.by };
+      const at = s.items.findIndex((it) => it.k === 'perm' && it.requestId === ev.requestId);
+      // 자동 허용은 화면에 남기지 않는다(도구 줄에 이미 무엇을 했는지 나온다). 기록에는 남아 있다
+      if (at >= 0 && ev.by === '자동 허용') s.items.splice(at, 1);
+      else if (at >= 0) s.items[at].resolved = { allow: ev.allow, by: ev.by };
       break;
     }
     case 'error': s.items.push({ k: 'line err', t: ev.message }); break;
@@ -2194,9 +2196,7 @@ function renderChat() {
 }
 
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
-// 자동 허용된 승인 요청은 카드 대신 "도구 N개 사용" 접힌 줄 안에 한 줄로(사람이 누를 것이 아니니)
-const isAutoPerm = (it) => it.k === 'perm' && it.resolved?.by === '자동 허용';
-const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || isAutoPerm(it);
+const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail';
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');
 const openFolds = new Set(); // 펼친 "도구 N개 사용" 줄
 
@@ -2235,7 +2235,7 @@ function renderItems(s, live, into, skip) {
 
 /** "도구 3개 사용 ›" — 누르면 펼쳐서 무엇을 했는지 보여 준다 */
 function foldGroup(run, key) {
-  const tools = run.filter((it) => it.k === 'line tool').length || run.filter((it) => !isAutoPerm(it)).length || run.length;
+  const tools = run.filter((it) => it.k === 'line tool').length || run.length;
   const fails = run.filter((it) => it.k === 'line fail').length;
   const open = openFolds.has(key);
   const b = el('button', `fold${open ? ' open' : ''}`, `도구 ${tools}개 사용${fails ? ` · 실패 ${fails}` : ''}`);
@@ -2245,7 +2245,6 @@ function foldGroup(run, key) {
   if (!open) return [b];
   const body = el('div', 'fold-body');
   for (const it of run) {
-    if (isAutoPerm(it)) { body.append(el('div', 'fold-line auto', `자동 허용 · ${it.t}${it.detail ? ` — ${it.detail}` : ''}`)); continue; }
     body.append(el('div', `fold-line${it.k === 'line fail' ? ' fail' : ''}`, it.k === 'line tool' ? it.t : `→ ${it.t}`));
   }
   return [b, body];
