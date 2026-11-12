@@ -1626,7 +1626,7 @@ function render() {
   renderClaudeCode();
 }
 
-// ── 새 작업: 이 PC 의 Claude Code 세션 이어 하기(이 화면에서만 — FV 대시보드에는 없음) ──
+// ── 새 작업: 이 PC 의 Claude Code 세션 이어 하기(이 화면에서만 — 대시보드 연결에는 없음) ──
 // 목록은 새 작업 화면을 열 때 읽는다(30초 동안은 다시 읽지 않음). 고르면 그 대화에 --resume 으로 이어 가는 작업이 생긴다
 let ccList = null; // null = 아직 안 읽음
 let ccAt = 0;
@@ -1985,7 +1985,7 @@ function renderContext(s) {
   box.replaceChildren();
   const items = s.ctxItems ?? [];
   box.closest('.psec').hidden = !items.length;
-  // 같은 이름(예: 분담 공유 · Future Vision)은 한 줄로 묶어 횟수 · 글자 수를 더한다. 다음 지시에 붙을 것이 먼저, 나머지는 최근 것부터
+  // 같은 이름(예: 분담 공유 · 홈페이지)은 한 줄로 묶어 횟수 · 글자 수를 더한다. 다음 지시에 붙을 것이 먼저, 나머지는 최근 것부터
   const groups = new Map();
   for (const it of [...items].reverse()) {
     const key = `${it.pending ? 1 : 0}\u0000${it.label}`;

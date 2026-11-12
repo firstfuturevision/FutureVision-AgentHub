@@ -1098,7 +1098,7 @@ export class SessionManager {
 
   /**
    * Claude Code 세션 가져오기: 같은 폴더에서 그 대화 id 로 `claude --resume` 을 띄워 그 대화에 그대로 이어 간다.
-   * 화면에는 대화 끝부분을 먼저 보여 준다. 이 PC 화면(사무실 원격 포함)에서만, FV 대시보드에서는 안 된다.
+   * 화면에는 대화 끝부분을 먼저 보여 준다. 이 PC 화면(사무실 원격 포함)에서만, 대시보드 연결에서는 안 된다.
    * 원래 창이 아직 쓰는 중이면 둘이 같은 대화에 이어 쓰게 되어 갈라질 수 있다 — 화면이 먼저 묻는다.
    */
   private async importClaude(id: string, origin: CommandOrigin) {

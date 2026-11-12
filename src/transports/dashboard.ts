@@ -3,7 +3,7 @@ import type { SessionManager } from '../sessions.ts';
 
 export interface DashboardOptions {
   enabled: boolean;
-  url: string; // 예: wss://work.vision-share.com/ws/agent-host/  (대시보드에 아직 없음)
+  url: string; // 예: wss://<대시보드 주소>/ws/agent-host/  (대시보드 쪽 구현 필요)
   tokenEnv: string; // 워커 전용 계정 토큰을 담은 환경 변수 이름
 }
 

@@ -2,7 +2,7 @@
   "name": "agent-hub",
   "version": "0.1.0",
   "private": true,
-  "description": "Claude·Gemini·Codex 에이전트 호스트 — 공용 PC 직접 작업 + FV 대시보드 실시간 원격",
+  "description": "Claude·Gemini·Codex 에이전트 호스트 — 회사 공용 PC 한 대에서 같이 쓰는 대화 화면",
   "type": "module",
   "engines": {
     "node": ">=22.6"
@@ -12,6 +12,7 @@
     "start:direct": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/main.ts",
     "stop": "node scripts/launch.mjs --stop",
     "setup": "node scripts/setup.mjs",
+    "check:public": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/check-public.ts",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-timeout=60000 \"test/**/*.test.ts\""
   },
   "license": "SEE LICENSE IN LICENSE"
