@@ -23,6 +23,7 @@ export interface SessionInfo {
   preset?: { id: string; name: string }; // 쓴 에이전트(worker: 맡길 때, main: 메인으로 고른 것)
   workPreset?: { id: string; name: string }; // 작업 환경 프리셋(폴더 구조·작업 방식 지침)
   customTitle?: string; // 사람이 바꾼 이름(없으면 화면이 첫 마디로 이름을 짓는다)
+  rank?: number; // 사람이 목록에서 끌어 옮긴 자리(작을수록 위). 없으면 화면이 만든 시각으로 줄 세운다
   forkedFrom?: string; // 포크한 원래 세션 id(포크에서 한 일이 여기로 공유된다)
   splitFrom?: string; // 분담한 원래 세션 id(원본과 분담이 서로 한 일을 주고받는다)
   splitLines?: number; // 분담할 때 원본 대화 줄 수 — 원본 → 분담 공유는 그 뒤부터(앞은 이미 이어받음)
@@ -62,6 +63,7 @@ export type HostEvent =
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다
   | { type: 'session.renamed'; sessionId: string; title: string }
+  | { type: 'session.reordered'; sessionId: string; rank: number }
   | { type: 'session.deleted'; sessionId: string }
   | { type: 'session.dirs'; sessionId: string; dirs: string[] }
   // 에이전트 설정을 바꿈 — 메인 CLI 를 새 설정으로 다시 띄웠다(바뀐 SessionInfo 전체)
@@ -84,6 +86,7 @@ export type ClientCommand =
   | { type: 'permission.respond'; sessionId: string; requestId: string; allow: boolean }
   | { type: 'session.stop'; sessionId: string }
   | { type: 'session.rename'; sessionId: string; title: string }
+  | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
   | { type: 'session.split'; sessionId: string } // 분담: 포크처럼 이어받고, 원본과 서로 한 일을 주고받는다(양쪽 공유)
@@ -169,6 +172,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       if (!str(c.sessionId) || !title) return null;
       return { type: 'session.rename', sessionId: c.sessionId as string, title };
     }
+    case 'session.reorder':
+      if (!str(c.sessionId) || typeof c.rank !== 'number' || !Number.isFinite(c.rank)) return null;
+      return { type: 'session.reorder', sessionId: c.sessionId as string, rank: c.rank };
     case 'session.dirs': {
       if (!str(c.sessionId) || !Array.isArray(c.dirs)) return null;
       const dirs = (c.dirs as unknown[]).filter((d): d is string => typeof d === 'string' && d.length > 0 && d.length < 300).slice(0, 10);

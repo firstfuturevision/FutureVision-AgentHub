@@ -74,6 +74,8 @@ test('호스트를 다시 켜면 기록에서 작업·대화를 되살리고(대
   await sessions.handle({ type: 'user.message', sessionId: main.id, text: '@codex hello' }, phone);
   await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === main.id);
   await sessions.handle({ type: 'session.rename', sessionId: main.id, title: '인사 작업' }, phone);
+  await sessions.handle({ type: 'session.reorder', sessionId: main.id, rank: -5.5 }, phone); // 목록에서 끌어 옮긴 순서
+  assert.ok(events.some((e) => e.type === 'session.reordered' && e.sessionId === main.id && e.rank === -5.5));
   await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude' }, phone);
   const gone = created(events).filter((s) => s.role === 'main')[1];
   await sessions.handle({ type: 'session.delete', sessionId: gone.id }, phone);
@@ -85,6 +87,7 @@ test('호스트를 다시 켜면 기록에서 작업·대화를 되살리고(대
   const m = again.info(main.id)!;
   assert.equal(m.status, 'idle');
   assert.equal(m.customTitle, '인사 작업');
+  assert.equal(m.rank, -5.5); // 옮긴 순서도 되살린다
   const replay: HostEvent[] = [];
   again.subscribe((e) => replay.push(e));
   const kinds = replay.map((e) => `${e.type}${'sessionId' in e && e.sessionId !== main.id ? '(작업자)' : ''}${e.type === 'session.created' && e.session.role === 'worker' ? '(작업자)' : ''}`);

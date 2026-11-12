@@ -219,6 +219,7 @@ export class SessionManager {
       if (this.sessions.has(info.id)) continue;
       for (const e of events) {
         if (e.type === 'session.renamed') info.customTitle = e.title;
+        if (e.type === 'session.reordered') info.rank = e.rank;
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
@@ -649,6 +650,14 @@ export class SessionManager {
         if (!live) return;
         live.info.customTitle = cmd.title;
         this.publish({ type: 'session.renamed', sessionId: cmd.sessionId, title: cmd.title });
+        return;
+      }
+      case 'session.reorder': {
+        // 목록 순서만(계층은 그대로). 같은 단계 안에서의 자리를 화면이 정해 보낸다
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        live.info.rank = cmd.rank;
+        this.publish({ type: 'session.reordered', sessionId: cmd.sessionId, rank: cmd.rank });
         return;
       }
       case 'session.dirs': {

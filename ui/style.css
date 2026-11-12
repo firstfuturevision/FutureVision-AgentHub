@@ -57,6 +57,11 @@ select:disabled { opacity: .45; cursor: default; }
 .task-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; min-height: 0; }
 .task { position: relative; text-align: left; padding: 7px 30px 7px 10px; display: flex; flex-direction: column; gap: 0; width: 100%; }
 .task[aria-current="true"] { background: var(--hover); }
+/* 끌어 옮기기: 놓일 자리에 선 */
+.task.dragging { opacity: .45; }
+.task.drop-before::before, .task.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.task.drop-before::before { top: -1px; }
+.task.drop-after::after { bottom: -1px; }
 .task-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .task-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-head.wait .task-title { color: var(--accent); }

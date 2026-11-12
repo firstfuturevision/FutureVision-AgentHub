@@ -1329,6 +1329,7 @@ function onEvent(ev) {
       if (ev.status === 'idle' || ev.status === 'ended') for (const it of s.items) if (it.k === 'perm' && !it.resolved) it.resolved = { allow: false, by: '차례 끝남' };
       break;
     case 'session.renamed': s.info.customTitle = ev.title; break;
+    case 'session.reordered': s.info.rank = ev.rank; break;
     case 'session.dirs': s.info.extraDirs = ev.dirs; break;
     case 'session.configured': {
       Object.assign(s.info, ev.session);
@@ -1470,6 +1471,15 @@ function openTaskMenu(s, x, y) {
       const t = await askDialog({ title: '이름 바꾸기', input: titleOf(s), ok: '바꾸기' });
       if (t && t.trim()) send({ type: 'session.rename', sessionId: s.info.id, title: t.trim() });
     }],
+    ...(() => {
+      // 폰처럼 끌어 놓기가 안 될 때: 같은 단계 안에서 한 칸씩
+      const sib = siblingsOf(s);
+      const i = sib.indexOf(s);
+      return [
+        ...(i > 0 ? [['위로 옮기기', () => moveTask(s, i - 1)]] : []),
+        ...(i >= 0 && i < sib.length - 1 ? [['아래로 옮기기', () => moveTask(s, i + 1)]] : []),
+      ];
+    })(),
     ['포크', () => forkTask(s)],
     ['분담', () => { pendingFork = s.info.id; send({ type: 'session.split', sessionId: s.info.id }); }],
     ['복사', () => {
@@ -2194,13 +2204,42 @@ function openSchedForm(s, x) {
 const folded = new Set((() => { try { return JSON.parse(localStorage.getItem('hub.folded') || '[]'); } catch { return []; } })());
 function saveFolded() { try { localStorage.setItem('hub.folded', JSON.stringify([...folded])); } catch {} }
 
-/** 작업 목록: 포크는 원본 아래 나무 모양(오래된 것부터), 원본이 지워진 포크는 맨 위 단계로 */
+// 목록 순서: 사람이 끌어 옮긴 자리(rank, 서버에 남아 어느 기기든 같다)가 있으면 그것,
+// 없으면 맨 위 단계는 최근 것부터 · 갈래(포크 · 분담)는 오래된 것부터. 계층은 못 바꾸고 같은 단계 안에서만 옮긴다
+const parentOfTask = (k) => k.info.forkedFrom ?? k.info.splitFrom;
+const isTopTask = (k) => !parentOfTask(k) || !sessions.get(parentOfTask(k));
+const rankOf = (k) => k.info.rank ?? (isTopTask(k) ? -1 : 1) * Date.parse(k.info.createdAt);
+const byRank = (a, b) => rankOf(a) - rankOf(b);
+/** k 와 같은 단계(같은 원본 아래, 또는 맨 위)의 작업들, 보이는 순서대로 */
+function siblingsOf(k) {
+  const top = isTopTask(k);
+  return mains().filter((x) => (top ? isTopTask(x) : parentOfTask(x) === parentOfTask(k))).sort(byRank);
+}
+/** moved 를 같은 단계의 index 자리(moved 를 뺀 목록 기준)로 옮긴다 */
+function moveTask(moved, index) {
+  const sib = siblingsOf(moved).filter((k) => k !== moved);
+  index = Math.max(0, Math.min(index, sib.length));
+  const before = sib[index - 1];
+  const after = sib[index];
+  if (!before && !after) return;
+  const GAP = 60000;
+  let rank = !before ? rankOf(after) - GAP : !after ? rankOf(before) + GAP : (rankOf(before) + rankOf(after)) / 2;
+  const set = (k, r) => { k.info.rank = r; send({ type: 'session.reorder', sessionId: k.info.id, rank: r }); };
+  if (before && after && !(rank > rankOf(before) && rank < rankOf(after))) {
+    // 사이가 너무 좁아졌으면 이 단계 전체를 다시 매긴다
+    sib.splice(index, 0, moved);
+    sib.forEach((k, i) => set(k, (i - sib.length) * GAP));
+  } else set(moved, rank);
+  renderList();
+}
+
+/** 작업 목록: 포크 · 분담은 원본 아래 나무 모양, 원본이 지워진 갈래는 맨 위 단계로 */
 function renderList() {
   const list = $('task-list');
   list.replaceChildren();
   const all = mains();
-  const parentOf = (k) => k.info.forkedFrom ?? k.info.splitFrom;
-  const kidsOf = (s) => all.filter((k) => parentOf(k) === s.info.id).reverse();
+  const parentOf = parentOfTask;
+  const kidsOf = (s) => all.filter((k) => parentOf(k) === s.info.id).sort(byRank);
   const holds = (s, id) => kidsOf(s).some((k) => k.info.id === id || holds(k, id));
   const group = (s, depth) => {
     const g = el('div', 'task-group');
@@ -2214,9 +2253,46 @@ function renderList() {
     }
     return g;
   };
-  for (const s of all) if (!parentOf(s) || !sessions.get(parentOf(s))) list.append(group(s, 0));
+  for (const s of all.filter(isTopTask).sort(byRank)) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
   syncTitle();
+}
+
+// 끌어 놓기: 같은 단계의 작업 위에서만 놓을 수 있고, 줄의 위쪽 절반이면 그 앞, 아래쪽이면 그 뒤로
+let draggingTask = null;
+function dragTask(b, s) {
+  b.draggable = true;
+  b.ondragstart = (e) => {
+    draggingTask = s;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', s.info.id);
+    b.classList.add('dragging');
+  };
+  b.ondragend = () => {
+    draggingTask = null;
+    for (const x of document.querySelectorAll('.task.drop-before, .task.drop-after, .task.dragging')) x.classList.remove('drop-before', 'drop-after', 'dragging');
+  };
+  const where = (e) => {
+    const r = b.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+  };
+  const ok = () => draggingTask && draggingTask !== s && siblingsOf(s).includes(draggingTask);
+  b.ondragover = (e) => {
+    if (!ok()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const w = where(e);
+    b.classList.toggle('drop-before', w === 'before');
+    b.classList.toggle('drop-after', w === 'after');
+  };
+  b.ondragleave = () => b.classList.remove('drop-before', 'drop-after');
+  b.ondrop = (e) => {
+    if (!ok()) return;
+    e.preventDefault();
+    const moved = draggingTask;
+    const i = siblingsOf(s).filter((k) => k !== moved).indexOf(s);
+    moveTask(moved, where(e) === 'before' ? i : i + 1);
+  };
 }
 
 /** 작업 한 줄. 포크(depth>0)는 이름만. open: 포크가 달려 있으면 펼침 여부, 없으면 null */
@@ -2259,6 +2335,7 @@ function taskRow(s, depth, open) {
     b.append(sub);
   } else b.title = `${state} · ${time}`;
   b.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
+  dragTask(b, s);
   b.oncontextmenu = (e) => { e.preventDefault(); openTaskMenu(s, e.clientX, e.clientY); };
   const more = el('span', 'task-more', '⋯');
   more.setAttribute('role', 'button');

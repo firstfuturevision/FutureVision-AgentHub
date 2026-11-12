@@ -130,6 +130,9 @@ test('parseCommand: 포크 차례·복사', () => {
   assert.deepEqual(parseCommand({ type: 'session.fork', sessionId: 'a', upTo: -1 }), { type: 'session.fork', sessionId: 'a' });
   assert.deepEqual(parseCommand({ type: 'session.copy', sessionId: 'a' }), { type: 'session.copy', sessionId: 'a' });
   assert.equal(parseCommand({ type: 'session.merge', sessionId: 'a' }), null); // 공유는 자동이라 명령이 없다
+  assert.deepEqual(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: -1.5 }), { type: 'session.reorder', sessionId: 'a', rank: -1.5 });
+  assert.equal(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: 'x' }), null);
+  assert.equal(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: Infinity }), null);
 });
 
 test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 되돌려 보내지 않는다', async () => {
