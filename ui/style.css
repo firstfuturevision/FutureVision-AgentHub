@@ -303,6 +303,8 @@ select:disabled { opacity: .45; cursor: default; }
 .key-input:focus { outline: none; border-color: var(--ink-faint); }
 .line-btn { border: 1px solid var(--rule) !important; padding: 6px 12px; }
 .auth-help { width: 100%; }
+.auth-note { font-size: 12px; color: var(--ink-faint); margin: 2px 0 6px; }
+.auth-note:empty { display: none; }
 .auth-state { font-size: 12px; color: var(--ink-soft); }
 .auth-head .auth-state { margin-left: auto; }
 .auth-state.off { color: var(--warn); }

@@ -113,6 +113,7 @@ function selfRestart() {
 const shared = new SharedRepo({
   file: join(cfg.dataDir, 'shared.json'),
   dir: join(cfg.dataDir, 'shared', 'repo'),
+  defaultRepo: cfg.sharedRepo || undefined,
   presets,
   workPresets,
   tools,

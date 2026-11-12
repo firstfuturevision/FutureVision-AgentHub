@@ -121,3 +121,17 @@ test('공유: 레포 이름 형식과 비밀값 검사', async () => {
   assert.equal(findSecret('비밀번호는 각자 넣는다. password 칸은 비워 둔다'), null);
   assert.equal(findSecret('https://docs.example.com/mcp?lang=ko'), null);
 });
+
+test('공유: 정한 적이 없으면 기본 레포(공개 모음), 툴은 켜야 받고, 비우고 저장하면 꺼진 채 남는다', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'agent hub shared default '));
+  const remote = join(d, 'remote.git');
+  execFileSync('git', ['init', '--bare', '-q', remote]);
+  const make = () => new SharedRepo({ file: join(d, 'shared.json'), dir: join(d, 'shared', 'repo'), presets: new PresetStore(join(d, 'presets.json')), workPresets: new WorkPresetStore(join(d, 'wp.json')), tools: new ToolStore(join(d, 'tools.json')), skills: new HubSkillStore(join(d, 'skills')), defaultRepo: 'open-org/hub-shared', remoteUrl: () => remote });
+  const s = make().public();
+  assert.equal(s.repo, 'open-org/hub-shared');
+  assert.equal(s.defaultRepo, 'open-org/hub-shared');
+  assert.deepEqual(s.kinds, { presets: true, agents: true, skills: true, tools: false });
+
+  await make().set({ repo: '' });
+  assert.equal(make().public().repo, ''); // 끈 것은 다시 켜도 꺼져 있다
+});

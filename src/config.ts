@@ -17,6 +17,7 @@ export interface Config {
   models: Record<'claude' | 'gemini' | 'codex', { id: string; name: string }[]>;
   dashboard: DashboardOptions;
   updateRepo: string; // 업데이트 레포 기본 주소(연동에서 바꿀 수 있음)
+  sharedRepo: string; // 공유 레포를 정하지 않았을 때 받을 공개 모음(조직/이름). '' 이면 없음
 }
 
 export interface AcpAgentConfig {
@@ -58,6 +59,7 @@ const DEFAULTS: Config = {
   },
   dashboard: { enabled: false, url: '', tokenEnv: 'AGENT_HUB_DASHBOARD_TOKEN' },
   updateRepo: 'https://github.com/firstfuturevision/FutureVision-AgentHub',
+  sharedRepo: 'firstfuturevision/agent-hub-shared',
 };
 
 /** config.json 이 있으면 기본값 위에 덮는다. 상대 경로는 저장소 뿌리 기준. */

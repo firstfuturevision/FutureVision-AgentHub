@@ -719,6 +719,9 @@ function sharedRow() {
   head.append(el('span', 'preset-name', '공유'));
   if (s.repo && s.lastPull && !s.error) head.append(el('span', 'auth-state on', '연결됨'));
   row.append(head);
+  // 기본은 공개 모음. 회사 레포를 넣으면 그것으로, 비우고 저장하면 끈다
+  const isPublic = s.repo && s.repo === s.defaultRepo;
+  row.append(el('div', 'auth-note', isPublic ? 'Agent Hub 공개 모음을 받고 있어요. 회사끼리만 주고받으려면 회사 레포를 넣으세요. 툴은 이 PC 에서 명령을 실행하므로 켜야 받아요.' : s.defaultRepo && !s.repo ? `꺼져 있어요. 공개 모음은 ${s.defaultRepo}` : ''));
 
   const repo = el('div', 'auth-body');
   const inp = el('input', 'key-input');
@@ -776,7 +779,7 @@ function sharedButtons(kind, item, id, copy) {
     });
   } else if (sharedState?.repo && sharedState.kinds[kind]) {
     btn('올리기', async () => {
-      if (!(await askDialog({ title: `${item.name} 공유에 올리기`, text: '회사 공유 레포에 올립니다. 모든 PC 가 받아 쓰고, 이 PC 에서도 공유본으로 바뀝니다. 키·토큰이 들어 있으면 올리지 않습니다.', ok: '올리기' }))) return;
+      if (!(await askDialog({ title: `${item.name} 공유에 올리기`, text: `${sharedState.repo === sharedState.defaultRepo ? '공개 모음에 올립니다. 누구나 보고 받아 씁니다(쓰기 권한이 있는 계정만 올릴 수 있음).' : '회사 공유 레포에 올립니다. 모든 PC 가 받아 씁니다.'} 이 PC 에서도 공유본으로 바뀝니다. 키·토큰이 들어 있으면 올리지 않습니다.`, ok: '올리기' }))) return;
       if (await postShared({ action: 'push', kind, id }, '올리는 중')) flash(`${item.name} 올림`);
     });
   }

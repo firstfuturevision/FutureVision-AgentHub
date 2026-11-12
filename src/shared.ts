@@ -31,6 +31,7 @@ export interface SharedOptions {
   skills: HubSkillStore;
   gitEnv?: () => Record<string, string>; // GitHub 로그인(gh 자격 증명)
   author?: () => Promise<string | undefined>; // 커밋에 쓸 GitHub 계정 이름
+  defaultRepo?: string; // 한 번도 정하지 않았을 때 받을 레포(공개 모음). 비워서 저장하면 끈다
   remoteUrl?: (repo: string) => string; // 시험용: 로컬 bare 레포
   onChange?: () => void; // 저장소가 바뀜 — 화면이 다시 읽게
 }
@@ -49,9 +50,12 @@ export class SharedRepo {
     this.o = o;
     let saved: Partial<Saved> = {};
     try { saved = JSON.parse(readFileSync(o.file, 'utf8')); } catch {}
+    // 정한 적이 없으면 기본 레포(공개 모음). 툴은 이 PC 에서 명령을 실행하는 것이라 기본 레포에서는 켜야 받는다
+    const repo = typeof saved.repo === 'string' ? (REPO_RE.test(saved.repo) ? saved.repo : '') : (o.defaultRepo ?? '');
+    const isDefault = Boolean(repo) && repo === o.defaultRepo;
     this.s = {
-      repo: typeof saved.repo === 'string' && REPO_RE.test(saved.repo) ? saved.repo : '',
-      kinds: Object.fromEntries(SHARED_KINDS.map((k) => [k, saved.kinds?.[k] !== false])) as Record<SharedKind, boolean>,
+      repo,
+      kinds: Object.fromEntries(SHARED_KINDS.map((k) => [k, saved.kinds?.[k] ?? !(k === 'tools' && isDefault)])) as Record<SharedKind, boolean>,
       lastPull: saved.lastPull,
       error: saved.error,
     };
@@ -62,7 +66,7 @@ export class SharedRepo {
   public() {
     const on = this.ready();
     const counts = Object.fromEntries(SHARED_KINDS.map((k) => [k, on && this.s.kinds[k] ? this.names(k).length : 0]));
-    return { repo: this.s.repo, kinds: { ...this.s.kinds }, lastPull: this.s.lastPull ?? null, error: this.s.error ?? null, pulling: this.pulling, counts };
+    return { repo: this.s.repo, defaultRepo: this.o.defaultRepo ?? '', kinds: { ...this.s.kinds }, lastPull: this.s.lastPull ?? null, error: this.s.error ?? null, pulling: this.pulling, counts };
   }
 
   /** 레포·종류 정하기. 레포가 바뀌면 받은 것을 지우고 새로 받는다 */
