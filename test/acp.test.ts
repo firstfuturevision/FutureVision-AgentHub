@@ -25,7 +25,7 @@ function setup(mode: string, startTimeoutMs = 5000) {
 }
 
 const pc = { via: 'local' as const, user: 'local' };
-const phone = { via: 'dashboard' as const, user: '김범무' };
+const phone = { via: 'dashboard' as const, user: '홍길동' };
 
 async function open(mode: string, timeout?: number) {
   const t = setup(mode, timeout);
@@ -58,7 +58,7 @@ test('ACP: 승인 요청 → 대시보드에서 허용하면 실행되고, 늦�
   await sessions.handle({ type: 'permission.respond', sessionId: id, requestId: req.requestId, allow: false }, pc);
   const resolved = events.filter((e) => e.type === 'permission.resolved') as any[];
   assert.equal(resolved.length, 1);
-  assert.equal(resolved[0].by, '김범무');
+  assert.equal(resolved[0].by, '홍길동');
   const result = await waitFor(events, (e) => e.type === 'agent.tool_result');
   assert.equal(result.ok, true); // allow_always 가 아니라 allow_once 를 골랐다
   assert.equal(result.summary, 'wrote a.txt');

@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import type { ClaudeOptions } from './adapters/claude.ts';
 import type { DashboardOptions } from './transports/dashboard.ts';
@@ -83,5 +84,21 @@ export function loadConfig(root: string, configPath = 'config.json'): Config {
     a.command = rel(a.command);
     a.args = a.args.map(rel);
   }
+  // 업데이트는 받아 온 곳(origin)에서 — 포크해 쓰는 회사는 자기 포크에서 받는다. config.json 에 적었으면 그것
+  if (!user.updateRepo) cfg.updateRepo = originRepo(root) ?? DEFAULTS.updateRepo;
   return cfg;
+}
+
+/** git 의 origin 주소를 업데이트 레포 형식(https://호스트/조직/이름)으로. 없거나 다른 형식이면 undefined */
+export function originRepo(root: string): string | undefined {
+  let url: string;
+  try {
+    url = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+  } catch {
+    return undefined;
+  }
+  const ssh = /^(?:ssh:\/\/)?git@([^:/]+)[:/](.+)$/.exec(url); // git@github.com:조직/이름.git
+  if (ssh) url = `https://${ssh[1]}/${ssh[2]}`;
+  url = url.replace(/^https:\/\/[^@/]+@/, 'https://').replace(/\.git$/, '').replace(/\/+$/, ''); // 주소에 든 토큰은 빼고
+  return /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/[A-Za-z0-9._\/-]+$/.test(url) ? url : undefined;
 }

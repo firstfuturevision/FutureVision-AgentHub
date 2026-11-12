@@ -722,7 +722,7 @@ function sharedRow() {
 
   const repo = el('div', 'auth-body');
   const inp = el('input', 'key-input');
-  inp.placeholder = 'firstfuturevision/agent-hub-shared';
+  inp.placeholder = 'my-company/agent-hub-shared';
   inp.value = s.repo;
   inp.autocomplete = 'off';
   inp.spellcheck = false;

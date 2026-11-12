@@ -138,7 +138,7 @@ test('Claude 승인: 평소에는 stdio 로 승인을 묻게 띄운다', async (
 
 test('나중에 붙은 화면은 지금까지의 기록을 다시 받는다', async () => {
   const { sessions, events } = setup();
-  const phone = { via: 'dashboard' as const, user: '김범무' };
+  const phone = { via: 'dashboard' as const, user: '홍길동' };
   await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, phone);
   const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
   await sessions.handle({ type: 'user.message', sessionId: id, text: 'hi' }, phone);
@@ -147,7 +147,7 @@ test('나중에 붙은 화면은 지금까지의 기록을 다시 받는다', as
   const late: HostEvent[] = [];
   sessions.subscribe((e) => late.push(e));
   assert.equal(late[0].type, 'session.created');
-  assert.equal((late[0] as any).session.requestedBy, '김범무');
+  assert.equal((late[0] as any).session.requestedBy, '홍길동');
   assert.ok(late.some((e) => e.type === 'agent.text' && e.text === 'turn 1: hi'));
   sessions.stopAll();
 });
@@ -180,7 +180,7 @@ test('터미널 열기: PC 앞에서만, 작업 폴더 안에서만 열린다', 
   });
   sessions.subscribe((e) => events.push(e));
 
-  await sessions.handle({ type: 'terminal.open', agent: 'gemini', workdir: 'proj' }, { via: 'dashboard', user: '김범무' });
+  await sessions.handle({ type: 'terminal.open', agent: 'gemini', workdir: 'proj' }, { via: 'dashboard', user: '홍길동' });
   assert.equal(opened.length, 0);
   assert.ok(events.some((e) => e.type === 'error' && e.message.includes('공용 PC 앞에서만')));
 

@@ -70,7 +70,7 @@ export class SharedRepo {
     return this.serial(async () => {
       if (v.repo !== undefined) {
         const repo = String(v.repo ?? '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
-        if (repo && !REPO_RE.test(repo)) throw new Error('레포는 "조직/이름" 형식 (예: firstfuturevision/agent-hub-shared)');
+        if (repo && !REPO_RE.test(repo)) throw new Error('레포는 "조직/이름" 형식 (예: my-company/agent-hub-shared)');
         if (repo !== this.s.repo) {
           rmSync(this.o.dir, { recursive: true, force: true });
           this.s.repo = repo;

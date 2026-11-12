@@ -64,7 +64,7 @@ async function setup(clinkWaitMs = 5000, defaultWorker?: { agent: string; model?
   sessions.subscribe((e) => events.push(e));
   managers.push(sessions);
   servers.push(await startLocalServer({ port, uiDir: here, sessions, info: {} }));
-  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', defaultWorker: defaultWorker as any }, { via: 'dashboard', user: '김범무' });
+  await sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', defaultWorker: defaultWorker as any }, { via: 'dashboard', user: '홍길동' });
   const main = (await waitFor(events, (e) => e.type === 'session.created')).session;
   return { port, sessions, events, main, presets, base };
 }
@@ -337,7 +337,7 @@ test('화면에서 고른 기본 작업자(AI·모델)로 맡기고, CLI 가 알
 });
 
 const created = (events: HostEvent[]) => events.filter((e) => e.type === 'session.created').map((e: any) => e.session);
-const phone = { via: 'dashboard' as const, user: '김범무' };
+const phone = { via: 'dashboard' as const, user: '홍길동' };
 
 test('메인이 "@codex …" 를 받으면 clink 로 Codex 작업자를 띄우고 그 결과를 보고한다', async () => {
   const { sessions, events, main } = await setup();
@@ -349,7 +349,7 @@ test('메인이 "@codex …" 를 받으면 clink 로 Codex 작업자를 띄우�
   const worker = created(events).find((s) => s.role === 'worker');
   assert.equal(worker.agent, 'codex');
   assert.equal(worker.parentId, main.id);
-  assert.equal(worker.requestedBy, '김범무'); // 기록상 요청자는 메인을 부린 사람
+  assert.equal(worker.requestedBy, '홍길동'); // 기록상 요청자는 메인을 부린 사람
   assert.ok(events.some((e) => e.type === 'user.message' && e.sessionId === worker.id && e.from === '메인 · claude' && e.text === 'fix the bug'));
   // 메인 쪽에는 clink 도구 호출과 결과가 남는다
   assert.ok(events.some((e) => e.type === 'agent.tool' && e.sessionId === main.id && e.name === 'mcp__hub__clink'));
@@ -431,7 +431,7 @@ test('호스트를 다시 켠 뒤: 쉬던 메인은 다음 지시 때 다시 떠
   assert.match(String(r), /쉬는 중/); // 메인 CLI 가 아직 없으면 MCP 로 부를 수 없다
   await again.handle({ type: 'user.message', sessionId: main.id, text: '이어서' }, phone);
   const reply = await waitFor(ev2, (e) => e.type === 'agent.text' && !e.partial && e.sessionId === main.id && e.text.includes('이어서'));
-  assert.match(reply.text, /사람\(김범무\): @codex 첫 일/);
+  assert.match(reply.text, /사람\(홍길동\): @codex 첫 일/);
   const res = await again.clink(main.id, { prompt: '두 번째 일', continuation_id: worker.id });
   assert.equal(res.status, 'done');
   assert.match(res.content, /turn 1: \[이전 대화/); // 새 CLI, 앞 대화를 붙여 받음
