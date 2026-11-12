@@ -400,7 +400,8 @@ async function screenRoute(req: IncomingMessage, res: ServerResponse, url: URL, 
       try { screen.set(body ?? {}); } catch (err) { return send(res, 400, (err as Error).message); }
     } else if (req.method !== 'GET') return send(res, 405, '허용되지 않은 방식');
     let monitors: unknown[] = [];
-    if (screen.enabled) { try { monitors = await screen.monitors(); } catch (err) { screen.error = (err as Error).message; } }
+    // 상태 확인은 오래 기다리지 않는다(도우미가 연결을 기다리는 중이면 모니터는 빈 목록)
+    if (screen.enabled) { try { monitors = await screen.monitors(3000); } catch (err) { screen.error = (err as Error).message; } }
     return json(res, 200, { ...screen.public(), monitors });
   }
   if (!screen.enabled) return send(res, 403, '화면 제어가 꺼져 있음');

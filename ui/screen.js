@@ -60,7 +60,7 @@ async function loop() {
       const w = Math.max(320, Math.min(full, Math.round(stage.clientWidth * (devicePixelRatio || 1))));
       let r;
       try {
-        r = await fetch(`/screen/frame?m=${scr.mon}&w=${w}&q=60&v=${viewer}`, { cache: 'no-store' });
+        r = await fetch(`/screen/frame?m=${scr.mon}&w=${w}&q=70&v=${viewer}`, { cache: 'no-store' });
       } catch {
         msg('Agent Hub 에 연결하지 못함');
         await sleep(1500);

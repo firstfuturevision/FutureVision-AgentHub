@@ -1,8 +1,11 @@
 import { spawn, spawnSync, execFile, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { userInfo } from 'node:os';
 import { promisify } from 'node:util';
 import { deflate, crc32 } from 'node:zlib';
+import { ByteQueue } from './bytes.ts';
+import { encodeJpeg } from './jpeg.ts';
 
 /**
  * 화면 제어 — 같은 사무실 네트워크의 PC·폰에서 이 PC 화면을 보고 마우스·키보드로 조작한다.
@@ -23,7 +26,10 @@ export type Frame = { kind: 'image'; type: 'image/jpeg' | 'image/png'; data: Buf
 
 const CSC = join(process.env.WINDIR ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
 const VIEW_WINDOW = 3000; // 이 시간 안에 프레임을 받아 간 화면 = 보고 있는 사람
-const IDLE_EXIT = 60_000; // 아무도 안 보면 도우미를 끈다
+const IDLE_EXIT = 60_000; // 아무도 안 보면 도우미를 끈다(Agent Hub 가 푼 화면 잠금도 이때 다시 잠근다)
+const ASK_TIMEOUT = 20_000; // 도우미 답을 기다리는 최대 시간
+const NO_ANSWER = '화면 도우미가 답하지 않음';
+const execAsync = promisify(execFile);
 const deflateAsync = promisify(deflate);
 const NO_DESKTOP = '데스크톱 화면이 없는 곳에서 켠 Agent Hub. 데스크톱에 로그인한 뒤 그 안에서 켜세요';
 
@@ -71,18 +77,26 @@ export class ScreenControl {
   private s: { enabled: boolean };
   private child: ChildProcess | null = null;
   private stderr = '';
-  private buf = Buffer.alloc(0);
+  private buf = new ByteQueue();
+  private cache = new Map<string, Frame>(); // 화면이 안 바뀌었을 때(U) 다시 보낼 마지막 그림(모니터·너비·화질별)
   private waiting: { resolve: (r: { t: string; data: Buffer }) => void; reject: (e: Error) => void }[] = [];
   private building: Promise<void> | null = null;
   private viewers = new Map<string, number>();
   private indicatorOn = false;
   private lastUse = 0;
   private timer: NodeJS.Timeout | null = null;
+  private loginctl: (args: string[]) => Promise<string>;
+  private unlockedByHub = false; // Agent Hub 가 잠금을 풀었으면 다 보고 나서 다시 잠근다
+  private unlockTried = 0;
   readonly supported: boolean;
   error: string | null = null;
 
-  /** source: screen-helper.cs, x11Source: screen-helper-x11.py(기본 = 같은 폴더). helperCommand: 시험용 — 이 명령을 도우미로 띄운다 */
-  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[] }) {
+  /**
+   * source: screen-helper.cs, x11Source: screen-helper-x11.py(기본 = 같은 폴더).
+   * 시험용: helperCommand = 이 명령을 도우미로 띄운다, loginctl = 잠금 풀기·잠그기 명령 대신
+   */
+  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[]; loginctl?: (args: string[]) => Promise<string> }) {
+    this.loginctl = opts.loginctl ?? (async (args) => String((await execAsync('loginctl', args, { timeout: 8000 })).stdout));
     this.file = opts.file;
     this.exe = join(opts.binDir, 'screen-helper.exe');
     this.source = opts.source;
@@ -124,8 +138,15 @@ export class ScreenControl {
     }
   }
 
-  async monitors(): Promise<Monitor[]> {
-    const r = await this.ask('info');
+  /** 모니터 목록. timeoutMs 안에 답이 없으면 빈 목록(도우미가 연결을 기다리는 동안 상태 확인까지 멈추지 않게) */
+  async monitors(timeoutMs = ASK_TIMEOUT): Promise<Monitor[]> {
+    let r;
+    try {
+      r = await this.ask('info', timeoutMs);
+    } catch (err) {
+      if ((err as Error).message === NO_ANSWER) return [];
+      throw err;
+    }
     if (r.t !== 'J') throw new Error(r.data.toString('utf8'));
     return JSON.parse(r.data.toString('utf8')).monitors;
   }
@@ -134,12 +155,62 @@ export class ScreenControl {
   async frame(monitor: number, width: number, quality: number, viewer: string): Promise<Frame> {
     this.viewers.set(viewer.slice(0, 40) || '?', Date.now());
     this.syncIndicator();
-    const w = int(width, 160, 7680);
-    const r = await this.ask(`frame ${int(monitor, 0, 15)} ${w} ${int(quality, 20, 95)}`);
+    const w = int(width, 160, 7680), m = int(monitor, 0, 15), q = int(quality, 20, 95);
+    const key = `${m}:${w}:${q}`;
+    let r = await this.ask(`frame ${m} ${w} ${q}`);
+    // U = 지난번과 같은 화면(리눅스 GNOME) — 만들어 둔 그림을 다시 쓴다. 없으면(다른 너비) 새로 받는다
+    if (r.t === 'U') {
+      const hit = this.cache.get(key);
+      if (hit) return hit;
+      r = await this.ask(`frame ${m} ${w} ${q} force`);
+    }
     if (r.t === 'F') return { kind: 'image', type: 'image/jpeg', data: r.data };
-    if (r.t === 'R') return { kind: 'image', type: 'image/png', data: await rawToPng(r.data, w) };
+    if (r.t === 'R') {
+      const f: Frame = { kind: 'image', type: 'image/jpeg', data: rawToJpeg(r.data, w, q) };
+      if (this.cache.size > 8) this.cache.clear();
+      this.cache.set(key, f);
+      return f;
+    }
     if (r.t === 'S') return { kind: 'secure', message: r.data.toString('utf8') || undefined };
+    if (r.t === 'K') return { kind: 'secure', message: await this.unlockForView() };
     throw new Error(r.data.toString('utf8') || '화면을 찍지 못함');
+  }
+
+  /**
+   * 화면이 잠겨 있다(리눅스 GNOME — 잠금 화면에서는 원격 연결이 막힌다): 이 계정의 세션 잠금을 푼다(loginctl, sudo 없음).
+   * 푼 것은 다 보고 나서(1분 동안 아무도 안 보면·화면 제어를 끄면) 다시 잠근다. 10초에 한 번만 시도.
+   */
+  private async unlockForView(): Promise<string> {
+    if (Date.now() - this.unlockTried < 10_000) return '화면 잠금을 푸는 중';
+    this.unlockTried = Date.now();
+    if (await this.sessions('unlock-session')) {
+      this.unlockedByHub = true;
+      return '화면 잠금을 푸는 중';
+    }
+    return '화면이 잠겨 있고 풀지 못함 — PC 앞에서 풀어 주세요';
+  }
+
+  /** Agent Hub 가 푼 잠금이면 다시 잠근다 */
+  private relock() {
+    if (!this.unlockedByHub) return;
+    this.unlockedByHub = false;
+    void this.sessions('lock-session');
+  }
+
+  /** 이 계정의 그래픽 세션(wayland·x11)에 loginctl 명령. 하나라도 되면 true */
+  private async sessions(verb: 'unlock-session' | 'lock-session'): Promise<boolean> {
+    let ok = false;
+    try {
+      const me = userInfo().username;
+      for (const line of (await this.loginctl(['list-sessions', '--no-legend'])).split('\n')) {
+        const [id, , user] = line.trim().split(/\s+/);
+        if (!id || user !== me) continue;
+        const type = (await this.loginctl(['show-session', id, '-p', 'Type', '--value']).catch(() => '')).trim();
+        if (type !== 'wayland' && type !== 'x11') continue;
+        try { await this.loginctl([verb, id]); ok = true; } catch {}
+      }
+    } catch {}
+    return ok;
   }
 
   /** 마우스·키보드. 좌표는 그 모니터 안 0..1 */
@@ -164,6 +235,7 @@ export class ScreenControl {
   }
 
   stop() {
+    this.relock();
     this.indicatorOn = false;
     this.viewers.clear();
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
@@ -174,13 +246,22 @@ export class ScreenControl {
   }
 
   // ── 도우미 ──
-  private async ask(line: string): Promise<{ t: string; data: Buffer }> {
+  /**
+   * 도우미에게 묻고 답을 기다린다(최대 timeoutMs). 시간이 지나도 줄 순서는 지켜야 해서 대기 자리는 남겨 두고,
+   * 늦게 온 답은 그 자리가 받아 버린다.
+   */
+  private async ask(line: string, timeoutMs = ASK_TIMEOUT): Promise<{ t: string; data: Buffer }> {
     if (!this.enabled) throw new Error('화면 제어가 꺼져 있음');
     await this.ensure();
     this.lastUse = Date.now();
     return new Promise((resolve, reject) => {
       if (!this.child?.stdin) return reject(new Error(this.error ?? '화면 도우미가 끝남'));
-      this.waiting.push({ resolve, reject });
+      let done = false;
+      const timer = setTimeout(() => { if (!done) { done = true; reject(new Error(NO_ANSWER)); } }, timeoutMs);
+      this.waiting.push({
+        resolve: (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } },
+        reject: (e) => { if (!done) { done = true; clearTimeout(timer); reject(e); } },
+      });
       this.child.stdin.write(line + '\n');
     });
   }
@@ -198,7 +279,8 @@ export class ScreenControl {
     if (this.child) return;
     const c = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = c;
-    this.buf = Buffer.alloc(0);
+    this.buf.clear();
+    this.cache.clear();
     this.stderr = '';
     this.error = null;
     c.stdout!.on('data', (d: Buffer) => this.read(d));
@@ -233,13 +315,15 @@ export class ScreenControl {
   }
 
   private read(d: Buffer) {
-    this.buf = Buffer.concat([this.buf, d]);
-    while (this.buf.length >= 5) {
-      const n = this.buf.readInt32LE(1);
+    this.buf.push(d);
+    for (;;) {
+      const head = this.buf.peek(5);
+      if (!head) break;
+      const n = head.readInt32LE(1);
       if (this.buf.length < 5 + n) break;
-      const t = String.fromCharCode(this.buf[0]);
-      const data = Buffer.from(this.buf.subarray(5, 5 + n));
-      this.buf = this.buf.subarray(5 + n);
+      const t = String.fromCharCode(head[0]);
+      this.buf.take(5);
+      const data = this.buf.take(n)!;
       if (t === 'L') continue; // 답을 기다리지 않은 명령의 실패(기록만)
       this.waiting.shift()?.resolve({ t, data });
     }
@@ -259,6 +343,7 @@ export class ScreenControl {
   private tick() {
     this.syncIndicator();
     if (this.child && !this.indicatorOn && Date.now() - this.lastUse > IDLE_EXIT && !this.waiting.length) {
+      this.relock();
       const c = this.child;
       this.child = null;
       c.stdin?.end();
@@ -299,8 +384,20 @@ const ARROW = [
   '#', '##', '#.#', '#..#', '#...#', '#....#', '#.....#', '#......#', '#.......#', '#........#', '#.....#####', '#..#..#', '#.# #..#', '##  #..#', '#    #..#', '      ##',
 ];
 
-/** 내용: <IIIii> 너비, 높이, 한 줄 바이트, 커서 x, 커서 y(밖이면 -1) + BGRX */
+/** 날 픽셀 → JPEG(리눅스 화면 제어가 쓰는 것 — PNG 보다 5~10배 작다) */
+export function rawToJpeg(raw: Buffer, maxW: number, quality: number): Buffer {
+  const { rgb, tw, th } = scaleRaw(raw, maxW);
+  return encodeJpeg(rgb, tw, th, quality);
+}
+
+/** 날 픽셀 → PNG(손실 없음, 시험·비교용) */
 export async function rawToPng(raw: Buffer, maxW: number): Promise<Buffer> {
+  const { rgb, tw, th } = scaleRaw(raw, maxW);
+  return encodePng(rgb, tw, th);
+}
+
+/** 내용: <IIIii> 너비, 높이, 한 줄 바이트, 커서 x, 커서 y(밖이면 -1) + BGRX → 화면 너비로 줄이고 커서를 그린 RGB */
+function scaleRaw(raw: Buffer, maxW: number): { rgb: Buffer; tw: number; th: number } {
   const w = raw.readUInt32LE(0), h = raw.readUInt32LE(4), stride = raw.readUInt32LE(8);
   const cx = raw.readInt32LE(12), cy = raw.readInt32LE(16);
   const px = raw.subarray(20);
@@ -334,6 +431,10 @@ export async function rawToPng(raw: Buffer, maxW: number): Promise<Buffer> {
       }
     });
   }
+  return { rgb, tw, th };
+}
+
+async function encodePng(rgb: Buffer, tw: number, th: number): Promise<Buffer> {
   // PNG: 줄마다 Sub 필터(왼쪽 칸과의 차) → deflate
   const line = tw * 3;
   const filtered = Buffer.alloc((line + 1) * th);

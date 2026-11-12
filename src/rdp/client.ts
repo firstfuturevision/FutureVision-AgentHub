@@ -6,6 +6,7 @@ import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import { credssp } from './credssp.ts';
 import { Zgfx } from './zgfx.ts';
 import { decodeProgressive } from './rfx.ts';
+import { ByteQueue } from '../bytes.ts';
 
 const u16 = (n: number) => { const b = Buffer.alloc(2); b.writeUInt16LE(n & 0xffff); return b; };
 const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
@@ -32,7 +33,7 @@ export class RdpClient {
   log: (m: string) => void = () => {};
 
   private sock!: Socket | TLSSocket;
-  private buf = Buffer.alloc(0);
+  private buf = new ByteQueue();
   private waiters: ((p: Buffer) => void)[] = [];
   private closedErr: Error | null = null;
   private userId = 0;
@@ -67,7 +68,7 @@ export class RdpClient {
 
   // ── 읽기: TPKT 또는 빠른 경로 PDU 하나씩 ──
   private onData = (d: Buffer) => {
-    this.buf = this.buf.length ? Buffer.concat([this.buf, d]) : d;
+    this.buf.push(d);
     for (;;) {
       const p = this.cut();
       if (!p) break;
@@ -77,15 +78,14 @@ export class RdpClient {
   };
 
   private cut(): Buffer | null {
-    const b = this.buf;
-    if (b.length < 2) return null;
+    const b = this.buf.peek(2);
+    if (!b) return null;
     let n: number;
-    if (b[0] === 3) { if (b.length < 4) return null; n = b.readUInt16BE(2); }
-    else if (b[1] & 0x80) { if (b.length < 3) return null; n = ((b[1] & 0x7f) << 8) | b[2]; }
+    if (b[0] === 3) { const h = this.buf.peek(4); if (!h) return null; n = h.readUInt16BE(2); }
+    else if (b[1] & 0x80) { const h = this.buf.peek(3); if (!h) return null; n = ((h[1] & 0x7f) << 8) | h[2]; }
     else n = b[1];
-    if (n < 2 || b.length < n) return null;
-    this.buf = b.subarray(n);
-    return b.subarray(0, n);
+    if (n < 2) return null;
+    return this.buf.take(n);
   }
 
   private next(): Promise<Buffer> {

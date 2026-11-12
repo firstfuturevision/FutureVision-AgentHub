@@ -4,7 +4,8 @@
 //  - 켜기: grdctl(sudo 없음, 사용자 세션의 데스크톱 공유)로 TLS 인증서·아이디·비밀번호·조작 허용을 정하고 RDP 를 켠 뒤 서비스를 띄운다.
 //    이미 사람이 원격 데스크톱을 켜 두었으면 그 아이디·비밀번호를 그대로 쓴다(바꾸면 그 사람의 접속이 깨진다).
 //  - 명령·응답 형식은 screen-helper.cs 와 같다. 프레임은 날 픽셀(R) → 허브가 PNG. 커서는 마지막 마우스 자리에 허브가 그린다.
-// argv[2] = 설정 파일(data/screen-rdp.json): { user, password, ownCredentials, enabledByHub }
+//  - 화면이 잠겨 있으면 GNOME 이 원격 연결을 막는다 → 붙지 않고 K(잠김)로 바로 알린다. 잠금 풀기·다시 잠그기는 허브(ScreenControl)가 loginctl 로.
+// argv[2] = 설정 파일(data/screen-rdp.json): { user, password, enabledByHub }
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
@@ -19,6 +20,7 @@ const file = process.argv[2] ?? 'screen-rdp.json';
 let rdp: RdpClient | null = null;
 let connecting: Promise<RdpClient> | null = null;
 let last = { x: -1, y: -1 };
+let lastSent = ''; // 마지막으로 보낸 화면의 판(바뀌지 않았으면 U)
 
 interface Saved { user?: string; password?: string; enabledByHub?: boolean }
 
@@ -126,6 +128,7 @@ async function setup(): Promise<{ user: string; password: string; port: number }
 async function tryConnect(user: string, password: string, port: number): Promise<RdpClient> {
   const c = new RdpClient();
   c.onClose = () => { if (rdp === c) rdp = null; };
+  lastSent = ''; // 새 연결의 첫 화면은 꼭 보낸다
   await c.connect('127.0.0.1', port, user, password, { timeoutMs: 10000 });
   return c;
 }
@@ -150,6 +153,20 @@ async function ensure(): Promise<RdpClient> {
   return connecting;
 }
 
+/** 화면이 잠겨 있는가 — 잠금 화면에서는 GNOME 이 원격 연결을 막는다("Session creation inhibited"). 1초 동안 기억 */
+let lockSeen = { at: 0, locked: false };
+async function locked(): Promise<boolean> {
+  if (Date.now() - lockSeen.at < 1000) return lockSeen.locked;
+  let v = false;
+  try {
+    const r = await run('gdbus', ['call', '--session', '--dest', 'org.gnome.ScreenSaver', '--object-path', '/org/gnome/ScreenSaver', '--method', 'org.gnome.ScreenSaver.GetActive'], { timeout: 3000 });
+    v = /true/.test(String(r.stdout));
+  } catch {}
+  lockSeen = { at: Date.now(), locked: v };
+  return v;
+}
+const LOCKED = '화면이 잠겨 있음';
+
 const clamp = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const at = (c: RdpClient, xs: string, ys: string) => ({ x: clamp(Number(xs)) * (c.width - 1), y: clamp(Number(ys)) * (c.height - 1) });
 
@@ -162,10 +179,21 @@ async function handle(a: string[]) {
       if (load().enabledByHub) await grdctl('rdp', 'disable').catch(() => '');
       return;
     }
+    // 잠겨 있으면 붙어 보지 않고 바로 알린다(K) — 허브가 잠금을 풀고 다시 묻는다
+    if ((!rdp || rdp.closed) && (c === 'info' || c === 'frame') && (await locked())) {
+      if (c === 'info') write('J', Buffer.from(JSON.stringify({ monitors: [] })));
+      else write('K', Buffer.from(LOCKED));
+      return;
+    }
+    if ((!rdp || rdp.closed) && c !== 'info' && c !== 'frame' && (await locked())) return; // 잠긴 동안 입력은 버린다
     const v = await ensure();
     if (c === 'info') {
       write('J', Buffer.from(JSON.stringify({ monitors: [{ x: 0, y: 0, w: v.width, h: v.height, primary: true }] })));
     } else if (c === 'frame') {
+      // 지난번에 보낸 뒤로 화면(갱신 수·크기)도 커서도 그대로면 U — 허브가 만들어 둔 그림을 다시 쓴다(8MB 를 다시 넘기고 압축하지 않게)
+      const version = `${v.frames}:${v.width}x${v.height}:${last.x},${last.y}`;
+      if (a[4] !== 'force' && version === lastSent) { write('U'); return; }
+      lastSent = version;
       const head = Buffer.alloc(20);
       head.writeUInt32LE(v.width, 0); head.writeUInt32LE(v.height, 4); head.writeUInt32LE(v.width * 4, 8);
       head.writeInt32LE(last.x, 12); head.writeInt32LE(last.y, 16);
