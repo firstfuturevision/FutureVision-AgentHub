@@ -130,6 +130,7 @@ if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되
 const remote = new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2); // 원격 접속(사무실 네트워크만)
 // 화면 제어(기본 꺼짐) — Windows 는 도우미를 처음 쓸 때 컴파일해 data/bin 에 둔다
 const screen = new ScreenControl({ file: join(cfg.dataDir, 'screen.json'), binDir: join(cfg.dataDir, 'bin'), source: join(root, 'src', 'screen-helper.cs') });
+sessions.screen = screen; // 메인 에이전트의 화면 도구(screen_*)
 // 스스로 다시 켤 때는 앞의 Agent Hub 가 화면 포트를 놓을 때까지 기다린다(최대 30초)
 const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,

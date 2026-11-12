@@ -13,6 +13,7 @@ import { SHARED_KINDS, type SharedRepo, type SharedKind } from './shared.ts';
 import { skillsFor, type SkillInfo } from './skills.ts';
 import type { ScheduleStore } from './schedules.ts';
 import { ClaudeHistory, claudeHome, claudeTranscript } from './external.ts';
+import type { ScreenControl } from './screen.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -103,6 +104,8 @@ export class SessionManager {
   private workspaceRoot: string;
   private logDir: string;
   private permFile: string;
+  /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
+  screen?: ScreenControl;
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
   autoApproveAll = false;
   private makeAdapter: AdapterFactory;

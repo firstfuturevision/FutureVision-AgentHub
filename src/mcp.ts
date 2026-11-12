@@ -2,6 +2,7 @@ import { AGENTS } from './protocol.ts';
 import type { AgentKind } from './protocol.ts';
 import type { SessionManager } from './sessions.ts';
 import type { Preset } from './presets.ts';
+import { SCREEN_TOOLS, SCREEN_INSTRUCTION, handleScreenTool } from './screen-tools.ts';
 
 /**
  * 메인 에이전트에게 주는 MCP 서버 — 의존성 없이 손으로 구현한 최소 Streamable HTTP.
@@ -24,6 +25,7 @@ const INSTRUCTIONS = [
   '사람이 에이전트(하위 에이전트 역할)을 만들거나 고치거나 지워 달라고 하면 agent_list / agent_save / agent_delete 를 쓴다. 역할 지침은 할 일·하지 말 일·보고 형식·끝나는 조건이 드러나게 구체적으로 쓴다. 저장·삭제 전에 사람 승인 화면이 뜬다.',
   '사람이 프리셋(작업 환경: 작업 폴더·함께 연결할 폴더·작업 방식 지침·기본 메인 에이전트)을 만들거나 고치거나 지워 달라고 하면 preset_list / preset_save / preset_delete 를 쓴다. 에이전트와 프리셋은 다른 것이다.',
   '사람이 프리셋·에이전트·스킬·툴을 "공유 레포에 올려 달라"고 하면 share_push 로 이름을 주어 올린다(사람 승인 후). 목록의 shared=true 는 이미 공유받은 것이라 고칠 수 없다.',
+  SCREEN_INSTRUCTION,
 ].join('\n');
 
 /** 프리셋 목록은 사람이 설정에서 바꾸므로 부를 때마다 새로 만든다 */
@@ -162,10 +164,13 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
     case 'ping':
       return ok({});
     case 'tools/list':
-      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS] });
+      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS, ...SCREEN_TOOLS] });
     case 'tools/call': {
       const a = msg.params?.arguments ?? {};
       const text = (t: string, isError = false) => ok({ content: [{ type: 'text', text: t }], isError });
+      // 화면 제어 도구(screen_*)
+      const scr = await handleScreenTool(String(msg.params?.name ?? ''), a, mainId, sessions.screen);
+      if (scr) return ok(scr);
       switch (msg.params?.name) {
         case 'clink':
           break;
