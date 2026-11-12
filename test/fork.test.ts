@@ -189,6 +189,37 @@ test('분담 여럿: 한 분담이 한 일은 메인을 거쳐 바로 다른 분
   sessions.stopAll();
 });
 
+test('분담의 분담: 분담 2 가 한 일이 분담을 거쳐 바로 원래 작업까지 가고, 원래 작업의 일도 분담 2 까지 간다', async () => {
+  const { sessions, events } = setup();
+  const orig = await newMain(sessions, events);
+  await say(sessions, events, orig.id, '계획 세우기');
+  await sessions.handle({ type: 'session.split', sessionId: orig.id }, local);
+  const mid = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === orig.id)).session;
+  await waitFor(events, () => sessions.info(mid.id)?.status === 'idle');
+  await sessions.handle({ type: 'session.split', sessionId: mid.id }, local);
+  const leaf = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === mid.id)).session;
+  await waitFor(events, () => sessions.info(leaf.id)?.status === 'idle');
+  const merged = (to: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === to) as any[];
+
+  // 분담 2 → 분담 → 원래 작업: 분담이 다시 답하지 않아도 바로
+  await say(sessions, events, leaf.id, '세부 조사');
+  assert.equal(merged(mid.id).length, 1);
+  assert.equal(merged(orig.id).length, 1);
+  assert.equal(merged(orig.id)[0].fromId, mid.id);
+  assert.match(merged(orig.id)[0].text, /사람\(local\): 세부 조사/);
+  assert.equal(merged(leaf.id).length, 0); // 되돌아가지 않는다
+
+  // 원래 작업 → 분담 → 분담 2: 원래 작업의 새 대화만, 분담 2 가 보낸 것은 빼고
+  await say(sessions, events, orig.id, '방향 바꿈');
+  assert.equal(merged(leaf.id).length, 1);
+  // 원래 작업의 새 대화부터 시작한다(세부 조사는 이미 가 있다). 가짜 AI 는 받은 글을 따라 말하므로 첫 줄로 본다
+  // 분담이 넘겨주는 것이라 원래 작업에서 받은 공유 묶음으로 간다
+  assert.match(merged(leaf.id)[0].text, /^\[분담 공유: 계획 세우기\]\n사람\(local\): 방향 바꿈/);
+  assert.equal(merged(mid.id).length, 2);
+  assert.match(merged(mid.id)[1].text, /^사람\(local\): 방향 바꿈/);
+  sessions.stopAll();
+});
+
 test('컨텍스트: 사용량과, 앞 대화·공유가 다음 지시에 붙을 때까지 대기로 보인다', async () => {
   const { sessions, events } = setup();
   const lastItems = (id: string) => (events.filter((e) => e.type === 'context.items' && e.sessionId === id).at(-1) as any)?.items ?? [];

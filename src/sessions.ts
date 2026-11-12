@@ -1230,19 +1230,32 @@ export class SessionManager {
    * 원본이 끝났으면 기록에만 남아 원본을 다시 포크할 때 함께 이어받는다.
    * 포크의 포크는 바로 위 원본에 공유되고, 그 원본의 다음 답이 끝날 때 다시 위로 올라간다.
    */
-  /** 답이 끝날 때마다: 포크 → 원본, 분담한 쪽 → 원본, 원본 → 분담한 쪽들 */
+  /** 답이 끝날 때마다: 포크 → 원본, 분담 묶음 안에서는 끝난 쪽부터 모든 분담으로 */
   private share(live: Live) {
     if (live.info.role === 'worker') return;
-    const get = (id?: string) => (id ? this.sessions.get(id) : undefined);
-    const fork = get(live.info.forkedFrom);
+    const fork = live.info.forkedFrom ? this.sessions.get(live.info.forkedFrom) : undefined;
     if (fork) this.shareTo(live, fork, 'fork');
-    const origin = get(live.info.splitFrom);
-    if (origin) {
-      this.shareTo(live, origin, 'split');
-      // 메인을 거쳐 다른 분담들에게도 바로(메인이 다시 답할 때까지 기다리지 않는다). 메인 쪽 보낸 표시가 앞으로 가서 나중에 겹쳐 가지 않는다
-      for (const s of this.sessions.values()) if (s.info.splitFrom === origin.info.id && s !== live) this.shareTo(origin, s, 'split');
-    }
-    for (const s of this.sessions.values()) if (s.info.splitFrom === live.info.id) this.shareTo(live, s, 'split');
+    // 분담은 원본 · 분담 · 분담의 분담이 한 묶음(나무)이다. 끝난 쪽에서 이웃으로 보내고, 받은 쪽이 다시 자기 다른 이웃에게 넘긴다 —
+    // 중간 분담이 다시 답할 때까지 기다리지 않는다(분담 2 가 한 일이 바로 원래 작업까지). 넘길 때마다 보낸 표시가 앞으로 가서 나중에 겹쳐 가지 않는다
+    const seen = new Set([live.info.id]);
+    const relay = (from: Live) => {
+      for (const to of this.splitNeighbors(from)) {
+        if (seen.has(to.info.id)) continue;
+        seen.add(to.info.id);
+        this.shareTo(from, to, 'split');
+        relay(to);
+      }
+    };
+    relay(live);
+  }
+
+  /** 분담으로 바로 이어진 작업들: 분담해 온 원본 + 여기서 분담해 간 것들 */
+  private splitNeighbors(live: Live): Live[] {
+    const out: Live[] = [];
+    const origin = live.info.splitFrom ? this.sessions.get(live.info.splitFrom) : undefined;
+    if (origin) out.push(origin);
+    for (const s of this.sessions.values()) if (s.info.splitFrom === live.info.id) out.push(s);
+    return out;
   }
 
   /**
