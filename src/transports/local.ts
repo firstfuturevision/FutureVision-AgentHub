@@ -16,6 +16,7 @@ import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
 import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { CommandOrigin } from '../protocol.ts';
+import type { ScreenControl } from '../screen.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
 import type { SessionManager } from '../sessions.ts';
@@ -25,14 +26,14 @@ const TYPES: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
 };
-const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css']);
+const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/screen.js']);
 
 /**
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -64,6 +65,8 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
         }
       }
+      // 화면 제어 — 이 PC 화면 보기·마우스·키보드(원격 접속처럼 구분 없음, 따로 켜고 끈다)
+      if ((url.pathname === '/screen' || url.pathname.startsWith('/screen/')) && screen) return await screenRoute(req, res, url, screen);
       if (url.pathname.startsWith('/mcp/')) return await mcp(req, res, sessions, url.pathname.slice(5));
       // 첨부 업로드: 본문 = 파일 그대로, x-file-name 헤더 = 파일 이름(encodeURIComponent).
       // 사용자 정의 헤더가 있어 다른 사이트의 요청은 브라우저 사전 확인에서 막힌다.
@@ -380,12 +383,44 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       lanError = `원격 접속을 열지 못함: ${(err as Error).message}`;
     }
   };
-  server.on('close', () => { lan?.closeAllConnections?.(); lan?.close(); });
+  server.on('close', () => { lan?.closeAllConnections?.(); lan?.close(); screen?.stop(); });
 
   return new Promise((ok, fail) => {
     server.once('error', fail);
     server.listen(port, '127.0.0.1', () => { void syncLan().then(() => ok(server)); });
   });
+}
+
+async function screenRoute(req: IncomingMessage, res: ServerResponse, url: URL, screen: ScreenControl) {
+  const q = (k: string) => Number(url.searchParams.get(k) ?? NaN);
+  if (url.pathname === '/screen') {
+    if (req.method === 'POST') {
+      const body = (await readJson(req, res)) as any;
+      if (body === undefined) return;
+      try { screen.set(body ?? {}); } catch (err) { return send(res, 400, (err as Error).message); }
+    } else if (req.method !== 'GET') return send(res, 405, '허용되지 않은 방식');
+    let monitors: unknown[] = [];
+    if (screen.enabled) { try { monitors = await screen.monitors(); } catch (err) { screen.error = (err as Error).message; } }
+    return json(res, 200, { ...screen.public(), monitors });
+  }
+  if (!screen.enabled) return send(res, 403, '화면 제어가 꺼져 있음');
+  if (req.method === 'GET' && url.pathname === '/screen/frame') {
+    try {
+      const f = await screen.frame(q('m'), q('w'), q('q'), url.searchParams.get('v') ?? '');
+      // 관리자 확인 창·잠금 화면: 찍을 수 없다(관리자 권한 없이)
+      if (f.kind === 'secure') return send(res, 423, '관리자 확인 창이나 잠금 화면 — PC 앞에서 눌러야 함');
+      res.writeHead(200, { 'content-type': f.type, 'cache-control': 'no-store', 'content-length': f.data.length });
+      return res.end(f.data);
+    } catch (err) {
+      return send(res, 503, (err as Error).message);
+    }
+  }
+  if (req.method === 'POST' && url.pathname === '/screen/input') {
+    const body = (await readJson(req, res)) as any;
+    if (body === undefined) return;
+    try { return json(res, 200, { sent: await screen.input(body?.m, body?.events) }); } catch (err) { return send(res, 400, (err as Error).message); }
+  }
+  send(res, 404, '없음');
 }
 
 function events(req: IncomingMessage, res: ServerResponse, sessions: SessionManager) {

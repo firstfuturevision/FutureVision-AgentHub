@@ -18,6 +18,7 @@ import { ScheduleStore } from './schedules.ts';
 import { SharedRepo } from './shared.ts';
 import { AutoStart } from './autostart.ts';
 import { RemoteAccess } from './remote.ts';
+import { ScreenControl } from './screen.ts';
 import { startLocalServer } from './transports/local.ts';
 import { startDashboardLink } from './transports/dashboard.ts';
 import type { AgentKind } from './protocol.ts';
@@ -107,6 +108,8 @@ const restored = sessions.restore();
 if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되살림(대기 — 다음 지시 때 CLI 를 다시 띄움)`);
 
 const remote = new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2); // 원격 접속(사무실 네트워크만)
+// 화면 제어(기본 꺼짐) — Windows 는 도우미를 처음 쓸 때 컴파일해 data/bin 에 둔다
+const screen = new ScreenControl({ file: join(cfg.dataDir, 'screen.json'), binDir: join(cfg.dataDir, 'bin'), source: join(root, 'src', 'screen-helper.cs') });
 const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,
     platform: process.platform,
@@ -135,6 +138,7 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   autostart: new AutoStart({ root, startupDir: process.env.AGENT_HUB_STARTUP_DIR || undefined }),
   // 원격 접속(사무실 네트워크만, 공용 비밀번호). 끄면 이 PC 에서만. 원격 포트 기본 = 화면 포트 + 2
   remote,
+  screen,
 });
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);

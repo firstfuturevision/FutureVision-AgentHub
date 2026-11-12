@@ -87,6 +87,11 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 
 **원격 접속**(`src/remote.ts`, `GET/POST /remote`): 연동에서 켜면 사무실 네트워크용 서버를 `0.0.0.0:<화면 포트+2>`(기본 4319)에 연다. 화면에 이 PC 의 사설 주소로 만든 접속 주소가 나온다. 비밀번호도 권한 구분도 없다: 원격 요청은 이 PC 화면과 같은 `route` 로 가고 명령은 `{via: 'local'}`. 문은 둘: 사설 주소에서 온 접속만(`isPrivateAddress`), Host 는 이 PC 의 주소·컴퓨터 이름·localhost 에 원격 포트(`isOwnHost`, DNS 리바인딩 차단). Origin 이 있으면 Host 와 같아야 한다. 켜져 있으면 `127.0.0.1` 화면(`GET /`)은 사무실 주소로 302 이동한다. 끄면 답을 보낸 뒤 원격 서버를 닫고 화면은 `local` 주소로 돌아간다. 예전 `data/remote.json` 의 비밀번호 해시·`full` 은 읽지 않고 다음 저장 때 지워진다.
 
+**화면 제어**(`src/screen.ts`, `GET/POST /screen`, `GET /screen/frame`, `POST /screen/input`, 화면 `ui/screen.js`): 왼쪽 위 버튼. 따로 켜고 끈다(`data/screen.json`, 기본 꺼짐). 비밀번호·권한 구분 없음(원격 접속과 같다). 도우미 프로세스 하나와 줄 명령으로 말한다: 표준 입력 한 줄 = 명령(`info`, `frame m w q`, `move/down/up/wheel m x y …`, `key d|u vk`, `text base64`, `indicator 1|0`), 표준 출력 = `[종류 1바이트][길이 4바이트 LE][내용]`. 종류 J(JSON)·F(JPEG)·R(날 픽셀)·S(못 찍음)·E(오류)는 info·frame 의 답, L 은 답 없는 명령의 실패라 버린다. 좌표는 모니터 안 0..1, 키는 Windows 가상 키 코드(화면이 `KeyboardEvent.code` 로 바꾼다).
+- Windows: `src/screen-helper.cs` 를 `csc.exe`(.NET Framework 4, Windows 기본)로 `data/bin/screen-helper.exe` 에 컴파일한다(소스가 더 새로우면 다시). 화면 배율과 상관없이 실제 픽셀(DPI 인식). JPEG 로 보낸다. 관리자 확인 창·잠금 화면이면 입력 데스크톱을 열 수 없어 S → 423. 표시 띠는 `WDA_EXCLUDEFROMCAPTURE` 로 원격 화면에 안 찍힌다.
+- 리눅스(X11): `src/screen-helper-x11.py` 를 `python3` 로 띄운다(ctypes + libX11·libXtst·libXrandr, 설치 없음). 날 픽셀(R)을 허브가 화면 너비로 넓이 평균해 줄이고 커서를 그려 PNG 로 만든다(`rawToPng`). 글자 넣기는 안 쓰는 키 하나를 그 글자로 바꿔 누른다(xdotool 방식). `DISPLAY` 가 없거나 Wayland 세션이면 `supported:false` 와 까닭.
+- 프레임은 화면이 한 장씩 당긴다(받으면 다음, 최소 60ms 간격). 최근 3초 안에 받아 간 화면 = 보는 사람, 있으면 `indicator 1`. 아무도 안 보고 60초 지나면 도우미를 끈다.
+
 **자동 실행**(`src/autostart.ts`, `GET/POST /autostart`): 연동의 켜기/끄기. `npm run setup` 이 만드는 것 중 자동 시작 하나만 만들고 지운다 — Windows 시작프로그램의 `Agent Hub.lnk`(PowerShell WScript.Shell, 창 없이 --background), macOS LaunchAgent, 리눅스 `~/.config/autostart/agent-hub.desktop`. 바탕화면·시작 메뉴 아이콘은 그대로. 다음 로그인부터 적용. 시험용 `AGENT_HUB_STARTUP_DIR` 로 시작프로그램 폴더를 바꾼다.
 
 **공유 레포**(`data/shared.json`, 받은 레포 `data/shared/repo`, `src/shared.ts`): 연동의 "공유"에 회사 GitHub 레포를 넣으면 git 으로 받는다(연동의 GitHub 로그인 자격 증명, 전역 git 설정은 안 건드림). 켠 종류만 각 저장소에 **공유본**으로 끼운다.
