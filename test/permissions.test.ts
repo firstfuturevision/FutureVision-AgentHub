@@ -53,6 +53,11 @@ test('권한 묻지 않기(모든 작업): 켜면 기다리던 요청도 허용,
   await waitFor(a.events, (e) => a.events.indexOf(e) >= before && e.type === 'agent.tool_result' && /읽음/.test(e.summary));
   const fresh = a.events.slice(before);
   assert.ok(fresh.some((e) => e.type === 'permission.resolved' && e.by === '자동 허용'));
+  // 자동 허용할 요청은 표시가 붙어 화면에 카드로 올라가지 않고, 번호는 앞 요청과 겹치지 않는다
+  const req2 = fresh.find((e) => e.type === 'permission.request') as any;
+  assert.equal(req2.auto, true);
+  assert.equal((req as any).auto, undefined);
+  assert.notEqual(req2.requestId, (req as any).requestId);
   a.sessions.stopAll();
 
   // 다시 켜도(호스트 재시작) 켜진 채로

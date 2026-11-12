@@ -497,7 +497,7 @@ export class SessionManager {
   private askHuman(sessionId: string, tool: string, detail: string): Promise<boolean> {
     const live = this.sessions.get(sessionId);
     if (!live || live.dormant) return Promise.resolve(false);
-    const requestId = `hub${++this.askSeq}`;
+    const requestId = `hub${++this.askSeq}-${randomUUID().slice(0, 8)}`; // Agent Hub 를 다시 켜도 기록의 예전 요청과 겹치지 않게
     return new Promise((resolve) => {
       this.asks.set(requestId, { sessionId, resolve });
       this.publish({ type: 'permission.request', sessionId, requestId, tool, detail });
@@ -1130,10 +1130,11 @@ export class SessionManager {
       if (live.info.cliSessionId === ev.cliSessionId) return;
       live.info.cliSessionId = ev.cliSessionId;
     }
-    const full = { ...ev, sessionId: live.info.id } as HostEvent;
+    const auto = ev.type === 'permission.request' && (live.info.autoApprove || this.autoApproveAll);
+    const full = { ...ev, sessionId: live.info.id, ...(auto ? { auto: true } : {}) } as HostEvent;
     this.publish(full);
     // 권한 묻지 않기(이 작업 또는 모든 작업): 요청과 허용을 기록에만 남기고 바로 허용한다
-    if (ev.type === 'permission.request' && (live.info.autoApprove || this.autoApproveAll)) {
+    if (ev.type === 'permission.request' && auto) {
       this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: true, by: '자동 허용' });
       live.adapter.respondPermission(ev.requestId, true);
     }
@@ -1146,6 +1147,8 @@ export class SessionManager {
       if (turn.done || turn.ended) for (const w of [...turn.waiters]) w();
     }
     if (ev.type === 'turn.done') {
+      // 차례가 끝났는데 답하지 않은 승인 요청이 남아 있으면 더는 답할 곳이 없다 — "승인 대기"로 남지 않게 닫는다
+      this.closePerms(live, '차례 끝남');
       this.setStatus(live, 'idle');
       this.share(live);
     }

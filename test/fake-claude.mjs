@@ -148,6 +148,13 @@ async function handle(text) {
   }
   if (text === 'exit!') process.exit(3); // CLI 가 꺼짐
 
+  // 묻다가 CLI 스스로 거둬들임(control_cancel_request) / 묻고 답 없이 차례를 끝냄
+  if (askTool === 'stdio' && /^(permcancel|permleft) /.test(text)) {
+    const request_id = `req-x${turn}`;
+    out({ type: 'control_request', request_id, request: { subtype: 'can_use_tool', tool_name: 'mcp__hub__screen_view', display_name: 'screen_view', input: {}, tool_use_id: `tu_x${turn}` } });
+    await new Promise((ok) => setTimeout(ok, 50));
+    if (text.startsWith('permcancel')) out({ type: 'control_cancel_request', request_id });
+  }
   if (/^perm /.test(text)) { // 앞 대화에 붙은 "--permission-mode" 같은 글에는 반응하지 않게 맨 앞만
     const input = { file_path: 'C:/밖/a.txt' };
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu_q${turn}`, name: 'Read', input }] }, parent_tool_use_id: null, session_id: sid });

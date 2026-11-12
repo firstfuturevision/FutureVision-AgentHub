@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -145,11 +146,22 @@ export class ClaudeAdapter implements AgentAdapter {
           this.write({ type: 'control_response', response: { subtype: 'error', request_id: ev.request_id, error: `지원하지 않는 요청: ${r.subtype}` } });
           return;
         }
-        const requestId = `c${++this.permSeq}`;
+        // 번호만 쓰면 CLI 를 다시 띄울 때마다 c1 부터 다시 매겨져 예전 요청과 겹친다 → 겹치지 않는 id
+        const requestId = `c${++this.permSeq}-${randomUUID().slice(0, 8)}`;
         this.permissions.set(requestId, { requestId: ev.request_id, input: r.input ?? {} });
         const what = r.description ?? brief(r.input);
         const why = r.decision_reason_type === 'workingDir' ? '작업 폴더 밖' : '';
         this.emit({ type: 'permission.request', requestId, tool: r.display_name ?? r.tool_name ?? '도구 실행', detail: [what, why].filter(Boolean).join(' · ') });
+        return;
+      }
+
+      // CLI 가 묻던 것을 스스로 거둬들임(도구가 다른 길로 끝났거나 차례가 끊김) → 화면의 승인 카드도 닫는다
+      case 'control_cancel_request': {
+        for (const [id, p] of this.permissions) {
+          if (p.requestId !== ev.request_id) continue;
+          this.permissions.delete(id);
+          this.emit({ type: 'permission.resolved', requestId: id, allow: false, by: 'CLI 가 거둠' });
+        }
         return;
       }
 

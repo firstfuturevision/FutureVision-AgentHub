@@ -107,6 +107,25 @@ test('Claude 승인: 물어야 하는 도구는 허용·거부 카드로 오고,
   sessions.stopAll();
 });
 
+test('Claude 승인: CLI 가 거둬들인 요청·답 없이 차례가 끝난 요청은 "승인 대기"로 남지 않는다', async () => {
+  const { sessions, events } = setup();
+  await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);
+  const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+  const open = () => {
+    const done = new Set(events.flatMap((e) => (e.type === 'permission.resolved' ? [e.requestId] : [])));
+    return events.filter((e) => e.type === 'permission.request' && e.sessionId === id && !done.has(e.requestId));
+  };
+  for (const text of ['permcancel 1', 'permleft 2']) {
+    const n = events.filter((e) => e.type === 'turn.done').length;
+    await sessions.handle({ type: 'user.message', sessionId: id, text }, local);
+    await waitFor(events, () => events.filter((e) => e.type === 'turn.done').length > n);
+    await waitFor(events, () => open().length === 0, 2000);
+  }
+  const by = events.filter((e) => e.type === 'permission.resolved').map((e: any) => e.by);
+  assert.deepEqual(by, ['CLI 가 거둠', '차례 끝남']);
+  sessions.stopAll();
+});
+
 test('Claude 승인: 평소에는 stdio 로 승인을 묻게 띄운다', async () => {
   const { sessions, events } = setup();
   await sessions.handle({ type: 'session.create', role: 'direct', agent: 'claude', workdir: 'proj' }, local);

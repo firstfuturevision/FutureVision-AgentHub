@@ -1356,11 +1356,13 @@ function onEvent(ev) {
       break;
     case 'agent.image': s.items.push({ k: 'image', url: ev.url, name: ev.name, caption: ev.caption }); break;
     case 'permission.request':
+      if (ev.auto) break; // 자동 허용할 요청: 화면에는 아예 올리지 않는다(바로 뒤 허용과 사이에 "승인 대기"가 깜빡이지 않게)
       s.items.push({ k: 'perm', requestId: ev.requestId, t: ev.tool, detail: ev.detail, resolved: null });
       if (s.info.role === 'worker') opened.add(s.info.id); // 승인이 필요하면 카드를 펼친다
       break;
     case 'permission.resolved': {
-      const at = s.items.findIndex((it) => it.k === 'perm' && it.requestId === ev.requestId);
+      // 아직 답하지 않은 것부터(예전 기록에 같은 번호가 있어도 새 요청을 닫는다)
+      const at = s.items.findIndex((it) => it.k === 'perm' && !it.resolved && it.requestId === ev.requestId);
       // 자동 허용은 화면에 남기지 않는다(도구 줄에 이미 무엇을 했는지 나온다). 기록에는 남아 있다
       if (at >= 0 && ev.by === '자동 허용') s.items.splice(at, 1);
       else if (at >= 0) s.items[at].resolved = { allow: ev.allow, by: ev.by };

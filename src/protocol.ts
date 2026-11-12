@@ -55,7 +55,7 @@ export type HostEvent =
   | { type: 'agent.tool_result'; sessionId: string; toolId: string; ok: boolean; summary: string }
   // 에이전트가 채팅에 띄운 그림(show_image). url = 이 Agent Hub 의 /images/...
   | { type: 'agent.image'; sessionId: string; url: string; name: string; caption?: string }
-  | { type: 'permission.request'; sessionId: string; requestId: string; tool: string; detail: string }
+  | { type: 'permission.request'; sessionId: string; requestId: string; tool: string; detail: string; auto?: boolean } // auto = 권한 묻지 않기로 바로 허용할 것(화면에 카드 없이)
   | { type: 'permission.resolved'; sessionId: string; requestId: string; allow: boolean; by: string }
   | { type: 'turn.done'; sessionId: string; durationMs: number; costUsd: number | null; isError: boolean }
   | { type: 'notice'; agent?: AgentKind; message: string }

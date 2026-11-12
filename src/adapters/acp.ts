@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { SessionInfo } from '../protocol.ts';
@@ -246,7 +247,7 @@ export class AcpAdapter implements AgentAdapter {
 
   private onPermission(rpcId: number | string, params: any) {
     this.flushText();
-    const requestId = `p${++this.permSeq}`;
+    const requestId = `p${++this.permSeq}-${randomUUID().slice(0, 8)}`; // 다시 띄워도 예전 요청과 겹치지 않게
     const tc = params?.toolCall ?? {};
     this.permissions.set(requestId, { rpcId, options: params?.options ?? [] });
     const where = (tc.locations ?? []).map((l: any) => l.path).filter(Boolean).join(', ');
