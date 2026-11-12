@@ -102,6 +102,9 @@ export class SessionManager {
   private listeners = new Set<Listener>();
   private workspaceRoot: string;
   private logDir: string;
+  private permFile: string;
+  /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
+  autoApproveAll = false;
   private makeAdapter: AdapterFactory;
   private openTerminal?: TerminalOpener;
   private mcpBaseUrl?: string;
@@ -162,6 +165,8 @@ export class SessionManager {
     this.tools = opts.tools;
     this.workspaceRoot = resolve(opts.workspaceRoot);
     this.logDir = join(resolve(opts.dataDir), 'sessions');
+    this.permFile = join(resolve(opts.dataDir), 'permissions.json');
+    try { this.autoApproveAll = JSON.parse(readFileSync(this.permFile, 'utf8')).autoApproveAll === true; } catch {}
     this.makeAdapter = opts.makeAdapter;
     this.openTerminal = opts.openTerminal;
     this.mcpBaseUrl = opts.mcpBaseUrl;
@@ -396,6 +401,23 @@ export class SessionManager {
     this.presets!.remove(p.id);
     this.presetsChanged();
     return p;
+  }
+
+  /** 권한 묻지 않기(모든 작업) 켜기·끄기. 켜면 지금 기다리는 승인 요청도 바로 허용한다(호스트가 직접 묻는 것은 빼고) */
+  setAutoApproveAll(on: boolean) {
+    this.autoApproveAll = on;
+    mkdirSync(dirname(this.permFile), { recursive: true });
+    writeFileSync(this.permFile, JSON.stringify({ autoApproveAll: on }, null, 2));
+    if (!on) return;
+    for (const live of this.sessions.values()) {
+      if (live.dormant) continue;
+      const done = new Set(live.history.filter((e) => e.type === 'permission.resolved').map((e: any) => e.requestId));
+      for (const e of live.history) {
+        if (e.type !== 'permission.request' || done.has(e.requestId) || this.asks.has(e.requestId)) continue;
+        this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: e.requestId, allow: true, by: '자동 허용' });
+        live.adapter.respondPermission(e.requestId, true);
+      }
+    }
   }
 
   /** 세션 대화에 승인 카드를 띄우고 사람의 답을 기다린다. 세션이 끝나면 거부로 본다. */
@@ -1037,8 +1059,8 @@ export class SessionManager {
     }
     const full = { ...ev, sessionId: live.info.id } as HostEvent;
     this.publish(full);
-    // 권한 묻지 않기: 요청과 허용을 기록에만 남기고 바로 허용한다
-    if (ev.type === 'permission.request' && live.info.autoApprove) {
+    // 권한 묻지 않기(이 작업 또는 모든 작업): 요청과 허용을 기록에만 남기고 바로 허용한다
+    if (ev.type === 'permission.request' && (live.info.autoApprove || this.autoApproveAll)) {
       this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: true, by: '자동 허용' });
       live.adapter.respondPermission(ev.requestId, true);
     }

@@ -65,6 +65,16 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
         }
       }
+      // 권한 묻지 않기(모든 작업) — PC 앞·원격 접속(같은 권한)에서만. 대시보드는 이 서버를 거치지 않는다
+      if (url.pathname === '/permissions') {
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          if (typeof body?.autoApproveAll !== 'boolean') return send(res, 400, 'autoApproveAll 은 true/false');
+          sessions.setAutoApproveAll(body.autoApproveAll);
+        }
+        return json(res, 200, { autoApproveAll: sessions.autoApproveAll });
+      }
       // 화면 제어 — 이 PC 화면 보기·마우스·키보드(원격 접속처럼 구분 없음, 따로 켜고 끈다)
       if ((url.pathname === '/screen' || url.pathname.startsWith('/screen/')) && screen) return await screenRoute(req, res, url, screen);
       if (url.pathname.startsWith('/mcp/')) return await mcp(req, res, sessions, url.pathname.slice(5));

@@ -359,6 +359,7 @@ let ghState = null; // GitHub: { installed, login?, pending?: { code, url } }
 let updState = null; // 업데이트: { repo, mode, state, current, latest, behind, lastCheck, checking, canRestart }
 let autoState = null; // 자동 실행: { supported, enabled }
 let remoteState = null; // 원격 접속: { enabled, port, urls, error, local }
+let permState = { autoApproveAll: false }; // 권한 묻지 않기(모든 작업)
 let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
@@ -368,8 +369,10 @@ const getJson = async (url, fallback) => {
     return fallback;
   }
 };
+// 작업 정보의 "권한 묻지 않음" 표시용 — 설정을 열지 않아도 처음에 읽어 둔다
+getJson('/permissions', permState).then((x) => { permState = x ?? permState; renderPanel(); });
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState, autoState, remoteState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null)]);
+  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState)]);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
 }
@@ -438,6 +441,7 @@ function renderAuth() {
   }
   if (ghState) list.append(githubRow());
   if (updState) list.append(updateRow());
+  list.append(permRow());
   if (autoState?.supported) list.append(autoRow());
   if (remoteState) list.append(remoteRow());
   if (sharedState) list.append(sharedRow());
@@ -573,6 +577,36 @@ function autoRow() {
   row.append(head);
   const body = el('div', 'auth-body');
   body.append(el('div', 'hint-inline auth-help', '이 PC 에 로그인하면 뒤에서 켭니다. 다음 로그인부터 적용'));
+  row.append(body);
+  return row;
+}
+
+/** 권한 묻지 않기(모든 작업) — 켜면 모든 작업이 파일 수정·명령 실행을 허용 버튼 없이 바로 한다 */
+function permRow() {
+  const on = Boolean(permState?.autoApproveAll);
+  const row = el('div', 'auth-row');
+  const head = el('div', 'auth-head');
+  head.append(el('span', 'preset-name', '권한 묻지 않기'));
+  head.append(el('span', `auth-state${on ? ' off' : ''}`, on ? '모든 작업' : '꺼짐'));
+  const sw = el('button', `switch${on ? ' on' : ''}`);
+  sw.type = 'button';
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', String(on));
+  sw.setAttribute('aria-label', on ? '권한 묻지 않기 끄기' : '모든 작업 권한 묻지 않기 켜기');
+  sw.style.marginLeft = 'auto';
+  sw.onclick = async () => {
+    sw.disabled = true;
+    const x = await postJson('/permissions', { autoApproveAll: !on });
+    if (x) { permState = x; flash(x.autoApproveAll ? '모든 작업 권한 묻지 않음' : '권한 묻지 않기 끔'); }
+    renderAuth();
+    renderPanel();
+  };
+  head.append(sw);
+  row.append(head);
+  const body = el('div', 'auth-body');
+  body.append(el('div', 'hint-inline auth-help', on
+    ? '모든 작업이 파일 수정·명령 실행을 허용 버튼 없이 바로 합니다. 지금 기다리는 요청도 허용했습니다'
+    : '켜면 모든 작업이 파일 수정·명령 실행을 허용 버튼 없이 바로 합니다. 작업마다 켜려면 작업 정보 → 지침 → 바꾸기'));
   row.append(body);
   return row;
 }
@@ -1317,7 +1351,10 @@ function openTaskMenu(s, x, y) {
     }],
     ['삭제', async () => {
       const running = s.info.status !== 'ended' ? '진행 중이면 멈춥니다. ' : '';
-      if (await askDialog({ title: '작업 삭제', text: `${titleOf(s)}\n${running}기록 파일은 남습니다.`, ok: '삭제', danger: true })) send({ type: 'session.delete', sessionId: s.info.id });
+      // 제목이 인계 지시문 전체처럼 길 수 있다 — 첫 줄 80자만
+      const name = titleOf(s).split('\n')[0].trim();
+      const short = name.length > 80 ? `${name.slice(0, 80)}…` : name;
+      if (await askDialog({ title: '작업 삭제', text: `${short}\n${running}기록 파일은 남습니다.`, ok: '삭제', danger: true })) send({ type: 'session.delete', sessionId: s.info.id });
     }, 'danger'],
   ];
   for (const [label, fn, cls] of items) {
@@ -1604,7 +1641,7 @@ function renderPanel() {
   } else {
     role.append(el('div', 'p-item-title', `기본 · ${NAMES[s.info.agent]}${s.info.model ? ` · ${modelName(s.info.agent, s.info.model)}` : ''}`), el('div', 'p-text', '계정 설정 그대로'));
   }
-  if (s.info.autoApprove) role.append(el('div', 'p-warn', '권한 묻지 않음 · 도구를 허용 없이 바로 실행'));
+  if (s.info.autoApprove || permState?.autoApproveAll) role.append(el('div', 'p-warn', `권한 묻지 않음${s.info.autoApprove ? '' : '(모든 작업)'} · 도구를 허용 없이 바로 실행`));
   if (s.info.role !== 'worker') {
     const acts = el('div', 'p-acts');
     const change = el('button', 'p-mini', confEdit === s.info.id ? '닫기' : '바꾸기');

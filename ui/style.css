@@ -312,9 +312,11 @@ select:disabled { opacity: .45; cursor: default; }
 
 /* 확인 창 */
 .dlg-back { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.dlg { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--rule); border-radius: 16px; padding: 18px 18px 14px; box-shadow: 0 16px 48px rgba(0,0,0,.3); }
+.dlg { width: 100%; max-width: 380px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--rule); border-radius: 16px; padding: 18px 18px 14px; box-shadow: 0 16px 48px rgba(0,0,0,.3); }
 .dlg-title { font-size: 15px; font-weight: 600; }
-.dlg-text { font-size: 13px; color: var(--ink-soft); margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+/* 글이 길어도 버튼(확인·취소)은 늘 보이게: 글만 스크롤 */
+.dlg-text { font-size: 13px; color: var(--ink-soft); margin-top: 6px; white-space: pre-wrap; word-break: break-word; min-height: 0; max-height: 40vh; overflow-y: auto; }
+.dlg-foot { flex: none; }
 .dlg-input { width: 100%; margin-top: 12px; font: 14px var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 10px; padding: 8px 10px; }
 .dlg-input:focus { outline: none; border-color: var(--ink-faint); }
 .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
