@@ -1439,7 +1439,7 @@ function notify(s, body) {
 /** 탭 제목에 확인할 작업 수: (2) Agent Hub */
 const baseTitle = document.title;
 // ── 확인할 것: 마지막 답이 사람에게 묻거나 할 일을 남겼는데 아직 답하지 않은 작업 ──
-// 읽었어도(새 답 점이 꺼져도) 사람이 답하거나 "확인함"을 누를 때까지 남는다
+// 그 작업을 열면(보고 있는 창이면) 꺼진다. 새 답이 오면 다시 판단
 const ASK = /(할까요|될까요|드릴까요|좋을까요|맞나요|괜찮을까요|원하시나요|어떠세요|어느 쪽인가요)\s*[?？]|[?？]\s*$|말씀해\s*주세요|알려\s*주세요|정해\s*주세요|골라\s*주세요|확인해\s*주세요|넣어\s*주세요|눌러\s*주세요|승인해\s*주세요|주셔야\s*(할|합니다|해요)/m;
 const askOff = (() => { try { return JSON.parse(localStorage.getItem('hub.askOff') || '{}'); } catch { return {}; } })();
 const lastAnswer = (s) => {
@@ -1458,10 +1458,12 @@ function askIn(s) {
   if (!t || askOff[s.info.id] === `${s.doneAt ?? ''}:${t.length}`) return false;
   return ASK.test(t.slice(-700)); // 끝부분(묻는 말 · 해 주실 일은 보통 끝에)
 }
-function dismissAsk(s) {
+/** 열어 본 작업의 확인 표시를 끈다. 껐으면 true */
+function seenAsk(s) {
+  if (!askIn(s)) return false;
   askOff[s.info.id] = `${s.doneAt ?? ''}:${lastAnswer(s)?.length ?? 0}`;
   try { localStorage.setItem('hub.askOff', JSON.stringify(askOff)); } catch {}
-  renderList();
+  return true;
 }
 
 function syncTitle() {
@@ -1506,7 +1508,6 @@ function openTaskMenu(s, x, y) {
         ...(i >= 0 && i < sib.length - 1 ? [['아래로 옮기기', () => moveTask(s, i + 1)]] : []),
       ];
     })(),
-    ...(askIn(s) ? [['확인함 (표시 끄기)', () => dismissAsk(s)]] : []),
     ['포크', () => forkTask(s)],
     ['분담', () => { pendingFork = s.info.id; send({ type: 'session.split', sessionId: s.info.id }); }],
     ['복사', () => {
@@ -2287,7 +2288,8 @@ function renderList() {
   if (need.length) {
     const at = need.findIndex((k) => k.info.id === viewId);
     const next = need[(at + 1) % need.length];
-    const go = el('button', 'task-need', `확인할 작업 ${need.length}`);
+    const go = el('button', 'task-need');
+    go.append(el('span', 'task-ask'), el('span', 'task-need-label', `확인할 작업 ${need.length}`));
     go.type = 'button';
     go.title = `다음: ${titleOf(next)}`;
     go.append(el('span', 'task-need-next', at >= 0 && need.length > 1 ? '다음 ›' : '›'));
@@ -2349,7 +2351,11 @@ function taskRow(s, depth, open) {
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
   if (depth && s.info.splitFrom) head.append(el('span', 'task-tag', '분담')); // 서로 공유하는 갈래
   head.append(el('span', `task-title${fresh ? ' fresh' : ''}`, titleOf(s)));
-  if (ask) head.append(el('span', 'task-ask', '확인'));
+  if (ask) {
+    const dot = el('span', 'task-ask');
+    dot.setAttribute('aria-label', '확인 필요');
+    head.prepend(dot); // 맨 왼쪽 점
+  }
   if (fresh) {
     const dot = el('span', 'task-dot');
     dot.setAttribute('aria-label', '새 답');
@@ -2395,7 +2401,10 @@ function taskRow(s, depth, open) {
 function renderChat() {
   const s = viewId && sessions.get(viewId);
   const live = s && s.info.status !== 'ended';
-  if (s && watching()) markSeen(s);
+  if (s && watching()) {
+    markSeen(s);
+    if (seenAsk(s)) renderList(); // 열었으니 확인 점을 끈다
+  }
   $('welcome').hidden = Boolean(s);
   $('chat-title').textContent = s ? titleOf(s) : '새 작업';
   const wait = s && waitingIn(s);

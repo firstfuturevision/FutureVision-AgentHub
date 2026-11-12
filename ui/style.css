@@ -82,12 +82,14 @@ select:disabled { opacity: .45; cursor: default; }
 .task-sub.fresh { color: var(--ink); }
 .task-title.fresh { font-weight: 600; }
 .task-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
-/* 확인 필요: 마지막 답이 묻거나 할 일을 남김 — 읽어도 사람이 답할 때까지 */
-.task-ask { flex: none; font-size: 10.5px; line-height: 1; padding: 3px 5px; border-radius: 4px; background: var(--ink); color: var(--bg); margin-left: 2px; }
-.task-sub.ask { color: var(--ink); font-weight: 500; }
-.task-need { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 4px 6px; padding: 7px 10px; border-radius: 8px; background: var(--ink); color: var(--bg); font-size: 13px; font-weight: 600; text-align: left; }
-.task-need:hover { opacity: .9; }
-.task-need-next { font-weight: 500; opacity: .8; }
+/* 확인 필요: 마지막 답이 묻거나 할 일을 남김 — 제목 왼쪽 점, 읽어도 사람이 답할 때까지 */
+.task-ask { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); margin-right: 3px; }
+.task-head > .task-ask { position: absolute; left: 2px; top: 14px; margin: 0; } /* 왼쪽 여백에 띄워 제목 줄을 맞춘다 */
+.task-sub.ask { color: var(--ink-soft); }
+.task-need { display: flex; align-items: center; gap: 6px; margin: 0 4px 4px; padding: 5px 10px; border-radius: 8px; color: var(--ink-soft); font-size: 12.5px; text-align: left; }
+.task-need:hover { background: var(--hover); color: var(--ink); }
+.task-need-label { flex: 1; }
+.task-need-next { opacity: .7; }
 .task-more { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 6px; color: var(--ink-soft); opacity: 0; }
 .task:hover .task-more, .task[aria-current="true"] .task-more { opacity: 1; }
 .task-more:hover { background: var(--rule); color: var(--ink); }
