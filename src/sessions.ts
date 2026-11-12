@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, join, resolve, relative, isAbsolute, extname, basename } from 'node:path';
 import { AGENTS, MODEL_RE } from './protocol.ts';
 import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
@@ -68,6 +68,7 @@ interface Live {
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_INLINE_IMAGE = 5 * 1024 * 1024; // 이보다 큰 이미지는 경로로만 알린다
 const MAX_ATTACHMENT = 50 * 1024 * 1024;
+const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 function formatSize(n: number): string {
   return n < 1024 ? `${n}B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
@@ -327,6 +328,48 @@ export class SessionManager {
     for (let n = 2; existsSync(join(dir, name)); n++) name = `${stamp}-${n}-${safe}`;
     writeFileSync(join(dir, name), data);
     return { path: `첨부/${name}`, name: rawName || safe, mime: /^[\w.+-]+\/[\w.+-]+$/.test(mime) ? mime : 'application/octet-stream', size: data.length };
+  }
+
+  /**
+   * 에이전트가 사람에게 그림을 보여 준다(show_image): 그림 파일 또는 지금 화면을 data/images/<작업>/ 에 두고 채팅에 띄운다.
+   * 기록에 남으니 다시 켜도 보인다. 작업을 지워도 그림 파일은 남는다(기록 파일과 같이).
+   */
+  async showImage(sessionId: string, a: { path?: unknown; caption?: unknown; monitor?: unknown }): Promise<string> {
+    const live = this.sessions.get(sessionId);
+    if (!live) throw new Error('없는 작업');
+    let data: Buffer, ext: string, name: string;
+    if (typeof a.path === 'string' && a.path.trim()) {
+      const abs = resolve(live.info.workdir, a.path.trim());
+      ext = extname(abs).toLowerCase().replace('.jpeg', '.jpg');
+      if (!IMAGE_TYPES[ext]) throw new Error('그림 파일(png·jpg·gif·webp)만 띄울 수 있음');
+      if (!existsSync(abs)) throw new Error(`파일이 없음: ${abs}`);
+      if (statSync(abs).size > MAX_ATTACHMENT) throw new Error(`그림이 너무 큼(최대 ${formatSize(MAX_ATTACHMENT)})`);
+      data = readFileSync(abs);
+      name = basename(abs);
+    } else {
+      const screen = this.screen;
+      if (!screen?.enabled) throw new Error('화면 제어가 꺼져 있어 화면을 찍을 수 없음. 사람에게 Agent Hub 왼쪽 위 화면 제어에서 켜 달라고 하거나, 그림 파일이면 path 를 준다');
+      const m = Number.isInteger(a.monitor) ? Math.max(0, Math.min(15, a.monitor as number)) : 0;
+      const f = await screen.frame(m, 1920, 85, `agent:${sessionId}`);
+      if (f.kind !== 'image') throw new Error(`화면을 찍을 수 없음: ${f.message ?? '관리자 확인 창이나 잠금 화면'}`);
+      data = f.data;
+      ext = '.jpg';
+      name = '화면';
+    }
+    const dir = join(this.logDir, '..', 'images', sessionId);
+    mkdirSync(dir, { recursive: true });
+    const file = `${randomUUID()}${ext}`;
+    writeFileSync(join(dir, file), data);
+    const caption = typeof a.caption === 'string' && a.caption.trim() ? a.caption.trim().slice(0, 300) : undefined;
+    this.publish({ type: 'agent.image', sessionId, url: `/images/${sessionId}/${file}`, name, ...(caption ? { caption } : {}) });
+    return `채팅에 띄움: ${name}${caption ? ` — ${caption}` : ''}`;
+  }
+
+  /** /images/<작업>/<파일> → 실제 경로(이름 모양이 맞고 실제로 있을 때만) */
+  imagePath(sessionId: string, file: string): { path: string; type: string } | null {
+    if (!/^[\w-]+$/.test(sessionId) || !/^[\w-]+\.(png|jpg|gif|webp)$/.test(file)) return null;
+    const path = join(this.logDir, '..', 'images', sessionId, file);
+    return existsSync(path) ? { path, type: IMAGE_TYPES[extname(file)] } : null;
   }
 
   /** 첨부 경로 → 실제 파일 경로(그 세션 작업 폴더의 첨부/ 안에 실제로 있을 때만) */

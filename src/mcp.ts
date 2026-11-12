@@ -2,7 +2,7 @@ import { AGENTS } from './protocol.ts';
 import type { AgentKind } from './protocol.ts';
 import type { SessionManager } from './sessions.ts';
 import type { Preset } from './presets.ts';
-import { SCREEN_TOOLS, SCREEN_INSTRUCTION, handleScreenTool } from './screen-tools.ts';
+import { SCREEN_TOOLS, SCREEN_INSTRUCTION, SHOW_IMAGE_TOOL, handleScreenTool } from './screen-tools.ts';
 
 /**
  * 메인 에이전트에게 주는 MCP 서버 — 의존성 없이 손으로 구현한 최소 Streamable HTTP.
@@ -164,7 +164,7 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
     case 'ping':
       return ok({});
     case 'tools/list':
-      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS, ...SCREEN_TOOLS] });
+      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS, ...SCREEN_TOOLS, SHOW_IMAGE_TOOL] });
     case 'tools/call': {
       const a = msg.params?.arguments ?? {};
       const text = (t: string, isError = false) => ok({ content: [{ type: 'text', text: t }], isError });
@@ -172,6 +172,12 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
       const scr = await handleScreenTool(String(msg.params?.name ?? ''), a, mainId, sessions.screen);
       if (scr) return ok(scr);
       switch (msg.params?.name) {
+        case 'show_image':
+          try {
+            return text(await sessions.showImage(mainId, a));
+          } catch (err) {
+            return text(`못 띄움: ${(err as Error).message}`, true);
+          }
         case 'clink':
           break;
         case 'agent_list': {

@@ -1,7 +1,7 @@
 // 메인 에이전트 → clink(MCP) → 작업자 전 과정. 실제 HTTP 서버와 가짜 CLI 들로 돌린다.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { ToolStore } from '../src/tools.ts';
 import { HubSkillStore } from '../src/hubskills.ts';
@@ -464,9 +464,37 @@ test('MCP: initialize 는 지침을, tools/list 는 clink 와 프리셋 도구�
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.match(init.result.instructions, /메인 에이전트/);
   const list = await call('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
   assert.deepEqual(list.result.tools[0].inputSchema.properties.preset.enum, ['리뷰어']); // 프리셋이 도구에 실린다
   assert.match(init.result.instructions, /맡길 수 있는 하위 에이전트: 리뷰어/);
   assert.ok(events.length > 0);
+  sessions.stopAll();
+});
+
+test('MCP show_image: 작업 폴더의 그림을 채팅에 띄우고(/images 로 받음), 화면 제어가 없으면 화면 찍기는 까닭과 함께 거절', async () => {
+  const { port, sessions, events, main } = await setup();
+  const url = (sessions as any).sessions.get(main.id).token;
+  const call = async (args: object) =>
+    (await fetch(`http://127.0.0.1:${port}/mcp/${url}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'show_image', arguments: args } }),
+    })).json();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  writeFileSync(join(main.workdir, '플레이.png'), png);
+  const r = await call({ path: '플레이.png', caption: '보스 방' });
+  assert.ok(!r.result.isError, r.result.content[0].text);
+  const ev = (await waitFor(events, (e) => e.type === 'agent.image')) as any;
+  assert.equal(ev.sessionId, main.id);
+  assert.equal(ev.caption, '보스 방');
+  assert.equal(ev.name, '플레이.png');
+  const got = await fetch(`http://127.0.0.1:${port}${ev.url}`);
+  assert.equal(got.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), png);
+  // 이상한 경로·그림이 아닌 파일·화면 제어 없음
+  assert.equal((await fetch(`http://127.0.0.1:${port}/images/..%2F..%2Fx/a.png`)).status, 404);
+  writeFileSync(join(main.workdir, 'a.txt'), 'x');
+  assert.match((await call({ path: 'a.txt' })).result.content[0].text, /그림 파일/);
+  assert.match((await call({})).result.content[0].text, /화면 제어가 꺼져/);
   sessions.stopAll();
 });

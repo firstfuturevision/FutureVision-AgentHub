@@ -349,6 +349,14 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, presets.list());
         }
       }
+      // 에이전트가 채팅에 띄운 그림(show_image)
+      const img = req.method === 'GET' && url.pathname.match(/^\/images\/([^/]+)\/([^/]+)$/);
+      if (img) {
+        const found = sessions.imagePath(img[1], img[2]);
+        if (!found) return send(res, 404, '없음');
+        res.writeHead(200, { 'content-type': found.type, 'cache-control': 'private, max-age=86400' });
+        return res.end(await readFile(found.path));
+      }
       if (req.method === 'GET') {
         const path = url.pathname === '/' ? '/index.html' : url.pathname;
         if (!STATIC.has(path)) return send(res, 404, '없음');

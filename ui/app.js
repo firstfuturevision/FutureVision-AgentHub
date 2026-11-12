@@ -1354,6 +1354,7 @@ function onEvent(ev) {
       // 화면에는 걸린 시간만. 비용은 기록(data/sessions/*.jsonl)에만 남긴다.
       s.items.push({ k: 'line meta', t: `${(ev.durationMs / 1000).toFixed(1)}초` });
       break;
+    case 'agent.image': s.items.push({ k: 'image', url: ev.url, name: ev.name, caption: ev.caption }); break;
     case 'permission.request':
       s.items.push({ k: 'perm', requestId: ev.requestId, t: ev.tool, detail: ev.detail, resolved: null });
       if (s.info.role === 'worker') opened.add(s.info.id); // 승인이 필요하면 카드를 펼친다
@@ -2254,11 +2255,29 @@ function renderItems(s, live, into, skip, from = 0) {
     else if (it.k === 'line err') into.append(el('div', 'err-line', it.t));
     else if (it.k === 'line halt') into.append(el('div', 'halt-line', it.t));
     else if (it.k === 'note') into.append(el('div', 'note', it.t));
+    else if (it.k === 'image') into.append(imageItem(it));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
     else into.append(item(it));
     i++;
   }
+}
+
+/** 에이전트가 띄운 그림: 누르면 새 탭에서 원래 크기로 */
+function imageItem(it) {
+  const fig = el('figure', 'shot');
+  const a = el('a');
+  a.href = it.url;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  const img = el('img');
+  img.src = it.url;
+  img.alt = it.caption || it.name || '';
+  img.loading = 'lazy';
+  a.append(img);
+  fig.append(a);
+  if (it.caption) fig.append(el('figcaption', '', it.caption));
+  return fig;
 }
 
 /** "도구 3개 사용 ›" — 누르면 펼쳐서 무엇을 했는지 보여 준다 */
