@@ -2466,8 +2466,31 @@ function agentItem(s, it, upTo) {
 function mergedItem(it) {
   const box = el('details', 'merged');
   const head = el('summary', '', `${it.split ? '분담' : '포크'} 공유 · ${it.t}`);
-  box.append(head, el('div', 'merged-body', it.text));
+  const body = el('div', 'merged-body');
+  for (const turn of mergedTurns(it.text)) {
+    const div = el('div', 'merged-turn');
+    if (turn.who) div.append(el('span', 'merged-who', turn.who));
+    div.append(renderMarkdown(turn.text)); // 에이전트 답과 같은 마크다운
+    body.append(div);
+  }
+  box.append(head, body);
   return box;
+}
+
+/** 공유받은 대화 글("사람(local): …", "에이전트: …" 줄로 이어 붙인 것)을 말한 차례로 나눈다. 코드 블록 안의 같은 모양 줄은 나누지 않는다 */
+function mergedTurns(text) {
+  const turns = [];
+  let fence = false;
+  for (const line of String(text ?? '').split('\n')) {
+    const m = !fence && /^(사람\([^)]*\)|에이전트): ?(.*)$/.exec(line);
+    if (m) turns.push({ who: m[1] === '에이전트' ? '에이전트' : m[1].replace(/^사람\((.*)\)$/, '사람 · $1'), lines: [m[2]] });
+    else {
+      if (!turns.length) turns.push({ who: '', lines: [] }); // 앞이 잘린(…) 글
+      turns.at(-1).lines.push(line);
+    }
+    if (/^\s*(```|~~~)/.test(m ? m[2] : line)) fence = !fence;
+  }
+  return turns.map((t) => ({ who: t.who, text: t.lines.join('\n') }));
 }
 
 function item(it) {

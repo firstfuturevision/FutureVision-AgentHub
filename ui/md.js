@@ -21,6 +21,20 @@ export function renderMarkdown(text) {
   return root;
 }
 
+/** 코드 블록 더블 클릭 → 블록 전체를 골라 보여 주고 복사. 원격(http) 화면은 클립보드 API 가 없어 예전 방식으로 */
+async function copyBlock(pre, code) {
+  const text = code.textContent;
+  getSelection().selectAllChildren(code); // 단어 하나만 골라지는 대신 블록 전체
+  let ok = false;
+  try {
+    if (navigator.clipboard && isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+  } catch {}
+  if (!ok) { try { ok = document.execCommand('copy'); } catch {} }
+  pre.dataset.copied = ok ? '복사함' : '복사 못 함';
+  clearTimeout(pre._copyTimer);
+  pre._copyTimer = setTimeout(() => { delete pre.dataset.copied; }, 1500);
+}
+
 function blocks(lines, into) {
   let para = [];
   const flush = () => {
@@ -50,6 +64,8 @@ function blocks(lines, into) {
       if (f[2]) pre.dataset.lang = f[2];
       code.textContent = body.join('\n');
       pre.append(code);
+      pre.title = '더블 클릭하면 복사';
+      pre.ondblclick = () => void copyBlock(pre, code);
       into.append(pre);
       i = j + 1;
       continue;

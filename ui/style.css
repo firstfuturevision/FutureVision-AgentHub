@@ -158,6 +158,9 @@ select:disabled { opacity: .45; cursor: default; }
 .md code { font: 0.88em var(--mono); background: var(--user); padding: 1px 5px; border-radius: 5px; }
 .md pre { background: var(--user); padding: 10px 14px; border-radius: 10px; overflow-x: auto; white-space: pre; line-height: 1.55; }
 .md pre code { background: none; padding: 0; font-size: 12.5px; }
+/* 더블 클릭 복사: 잠깐 오른쪽 위에 "복사함" */
+.md pre { position: relative; cursor: copy; }
+.md pre[data-copied]::after { content: attr(data-copied); position: absolute; right: 8px; top: 6px; font: 12px var(--sans, inherit); color: var(--paper, #fff); background: var(--ink); padding: 2px 8px; border-radius: 6px; }
 .md blockquote { border-left: 3px solid var(--rule); padding-left: 12px; color: var(--ink-soft); }
 .md hr { border: 0; border-top: 1px solid var(--rule); margin: 16px 0; }
 .md .md-table { overflow-x: auto; }
@@ -433,7 +436,10 @@ select:disabled { opacity: .45; cursor: default; }
 .merged summary::-webkit-details-marker { display: none; }
 .merged summary::after { content: " ›"; color: var(--ink-faint); }
 .merged[open] summary::after { content: " ⌄"; }
-.merged-body { margin-top: 8px; white-space: pre-wrap; font-size: 12px; max-height: 260px; overflow-y: auto; }
+.merged-body { margin-top: 8px; font-size: 12.5px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.merged-who { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-faint); margin-bottom: 2px; }
+.merged-body .md h3 { font-size: 14px; }
+.merged-body .md h4, .merged-body .md h5, .merged-body .md h6 { font-size: 13px; }
 .p-note { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
 @media (max-width: 1100px) {
   .app.with-panel { grid-template-columns: 260px minmax(0, 1fr); }
