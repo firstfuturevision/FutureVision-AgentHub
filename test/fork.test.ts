@@ -162,6 +162,33 @@ test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 
   sessions.stopAll();
 });
 
+test('분담 여럿: 한 분담이 한 일은 메인을 거쳐 바로 다른 분담에게도 가고, 나중에 겹쳐 가지 않는다', async () => {
+  const { sessions, events } = setup();
+  const orig = await newMain(sessions, events);
+  await say(sessions, events, orig.id, '계획 세우기');
+  await sessions.handle({ type: 'session.split', sessionId: orig.id }, local);
+  const a = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === orig.id)).session;
+  await waitFor(events, () => sessions.info(a.id)?.status === 'idle');
+  await sessions.handle({ type: 'session.split', sessionId: orig.id }, local);
+  const b = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === orig.id && e.session.id !== a.id)).session;
+  await waitFor(events, () => sessions.info(b.id)?.status === 'idle');
+
+  await say(sessions, events, a.id, '가 부분');
+  // 메인이 다시 답하지 않아도 b 에게 a 의 진행이 간다(메인을 거쳐)
+  const toB = () => events.filter((e) => e.type === 'session.merged' && e.sessionId === b.id) as any[];
+  assert.equal(toB().length, 1);
+  assert.equal(toB()[0].fromId, orig.id);
+  assert.match(toB()[0].text, /사람\(local\): 가 부분/);
+  // a 에게는 되돌아가지 않는다
+  assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === a.id).length, 0);
+
+  // 메인이 답하면 b 에게는 메인의 새 대화만(가 부분은 다시 안 감)
+  await say(sessions, events, orig.id, '나 부분');
+  assert.equal(toB().length, 2);
+  assert.match(toB()[1].text, /^사람\(local\): 나 부분/); // 가 부분은 이미 갔으니 그 뒤부터(가짜 AI 는 받은 글을 따라 말하므로 첫 줄로 본다)
+  sessions.stopAll();
+});
+
 test('컨텍스트: 사용량과, 앞 대화·공유가 다음 지시에 붙을 때까지 대기로 보인다', async () => {
   const { sessions, events } = setup();
   const lastItems = (id: string) => (events.filter((e) => e.type === 'context.items' && e.sessionId === id).at(-1) as any)?.items ?? [];

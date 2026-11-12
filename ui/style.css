@@ -169,6 +169,8 @@ select:disabled { opacity: .45; cursor: default; }
 .fold-body { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; border-left: 2px solid var(--rule); margin-top: -10px; }
 .fold-line { font-size: 13px; color: var(--ink-soft); word-break: break-all; }
 .fold-line.fail { color: var(--warn); }
+.older { align-self: center; font-size: 13px; color: var(--ink-soft); padding: 4px 12px; border: 1px solid var(--rule); border-radius: 8px; }
+.older:hover { color: var(--ink); }
 
 /* 하위 에이전트: 체크리스트 카드 */
 .tasks { border: 1px solid var(--rule); border-radius: 16px; padding: 6px; background: var(--bg); }

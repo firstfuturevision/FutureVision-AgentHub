@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { AGENTS, MODEL_RE } from './protocol.ts';
 import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, SessionInfo, SessionRole } from './protocol.ts';
@@ -92,6 +93,8 @@ function transcript(history: HostEvent[], upTo?: number): string {
 }
 
 const HISTORY_CAP = 2000;
+/** 기록 파일이 이보다 크면 켤 때 통째로 data/sessions/archive/*.jsonl.gz 에 압축해 두고 최근 것만 남긴다 */
+const LOG_TRIM_BYTES = 20 * 1024 * 1024;
 
 /**
  * 세션의 유일한 주인. 로컬 화면이든 대시보드든 메인 에이전트(MCP)든 같은 명령을 여기로 보내고,
@@ -192,8 +195,10 @@ export class SessionManager {
     const restored: Live[] = [];
     for (const f of files) {
       let events: HostEvent[];
+      let lines: string[];
       try {
-        events = readFileSync(join(this.logDir, f), 'utf8').split('\n').filter(Boolean).map((l) => {
+        lines = readFileSync(join(this.logDir, f), 'utf8').split('\n').filter(Boolean);
+        events = lines.map((l) => {
           const { at, ...ev } = JSON.parse(l);
           this.stamp(ev as HostEvent, Date.parse(at) || 0); // 기록된 시각으로 순서를 되살린다
           return ev as HostEvent;
@@ -211,7 +216,10 @@ export class SessionManager {
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
       }
-      const live: Live = { info, adapter: new UnavailableAdapter('다시 띄우기 전'), history: events.slice(-HISTORY_CAP), turn: null };
+      // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
+      const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
+      this.trimLog(f, lines, info);
+      const live: Live = { info, adapter: new UnavailableAdapter('다시 띄우기 전'), history, turn: null };
       info.status = 'idle';
       live.dormant = true;
       restored.push(live);
@@ -221,6 +229,25 @@ export class SessionManager {
     for (const l of restored) this.sessions.set(l.info.id, l);
     for (const l of restored) this.closePerms(l, '호스트를 다시 켬'); // 꺼진 CLI 가 묻던 것은 답할 곳이 없다
     return restored.length;
+  }
+
+  /**
+   * 기록 파일이 너무 크면(LOG_TRIM_BYTES) 통째로 archive 에 압축해 두고, 파일에는 지금 정보로 쓴 만든 기록 + 최근 줄만 남긴다.
+   * 기록은 AX 근거라 지우지 않고 옮긴다.
+   */
+  private trimLog(file: string, lines: string[], info: SessionInfo) {
+    const path = join(this.logDir, file);
+    try {
+      if (statSync(path).size <= LOG_TRIM_BYTES || lines.length <= HISTORY_CAP) return;
+      const archive = join(this.logDir, 'archive');
+      mkdirSync(archive, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      writeFileSync(join(archive, `${file.replace(/\.jsonl$/, '')}-${stamp}.jsonl.gz`), gzipSync(lines.join('\n') + '\n'));
+      const head = JSON.stringify({ at: info.createdAt, type: 'session.created', session: { ...info, status: 'idle' } });
+      const keep = lines.slice(-(HISTORY_CAP - 1)).filter((l) => !l.includes('"type":"session.created"'));
+      writeFileSync(`${path}.tmp`, [head, ...keep].join('\n') + '\n');
+      renameSync(`${path}.tmp`, path);
+    } catch {}
   }
 
   /** 구독. 지금까지의 세션 기록을 먼저 다시 보내 준다. 해지 함수를 돌려준다. */
@@ -1105,7 +1132,11 @@ export class SessionManager {
     const fork = get(live.info.forkedFrom);
     if (fork) this.shareTo(live, fork, 'fork');
     const origin = get(live.info.splitFrom);
-    if (origin) this.shareTo(live, origin, 'split');
+    if (origin) {
+      this.shareTo(live, origin, 'split');
+      // 메인을 거쳐 다른 분담들에게도 바로(메인이 다시 답할 때까지 기다리지 않는다). 메인 쪽 보낸 표시가 앞으로 가서 나중에 겹쳐 가지 않는다
+      for (const s of this.sessions.values()) if (s.info.splitFrom === origin.info.id && s !== live) this.shareTo(origin, s, 'split');
+    }
     for (const s of this.sessions.values()) if (s.info.splitFrom === live.info.id) this.shareTo(live, s, 'split');
   }
 
@@ -1222,7 +1253,8 @@ export class SessionManager {
         if (!isPartial) {
           this.stamp(ev);
           live.history.push(ev);
-          if (live.history.length > HISTORY_CAP) live.history.shift();
+          // 넘치면 오래된 것부터 버리되 만든 기록(맨 앞 session.created)은 남긴다
+          if (live.history.length > HISTORY_CAP) live.history.splice(live.history[0]?.type === 'session.created' ? 1 : 0, 1);
           appendFileSync(join(this.logDir, `${sessionId}.jsonl`), JSON.stringify({ at: new Date().toISOString(), ...ev }) + '\n');
         }
       }

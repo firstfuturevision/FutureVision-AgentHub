@@ -2188,7 +2188,9 @@ function renderChat() {
       const from = sessions.get(s.info.copiedFrom);
       log.append(el('div', 'note', `${from ? titleOf(from) : '지워진 작업'} 에서 복사`));
     }
-    renderItems(s, live, log);
+    const from = shownFrom(s);
+    if (from > 0) log.append(olderButton(s, from));
+    renderItems(s, live, log, undefined, from);
     if (s.draft) log.append(item({ k: 'agent', t: s.draft }));
     if (live && isBusy(s) && !waitingIn(s)) log.append(workingLine(s));
   }
@@ -2196,15 +2198,41 @@ function renderChat() {
 }
 
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
-const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail';
+// 답한 승인 요청도 접힌 줄 안으로(카드는 아직 답하지 않은 것만)
+const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || (it.k === 'perm' && it.resolved);
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');
 const openFolds = new Set(); // 펼친 "도구 N개 사용" 줄
 
+// 긴 대화는 최근 지시 몇 차례만 그린다(오래된 것은 "이전 대화 보기"로). 다른 작업을 보다 돌아오면 다시 접힌다
+const SHOW_TURNS = 10;
+let shown = { id: null, turns: SHOW_TURNS };
+/** 그리기 시작할 항목 번호: 끝에서 shown.turns 번째 사람 지시부터 */
+function shownFrom(s) {
+  if (shown.id !== s.info.id) shown = { id: s.info.id, turns: SHOW_TURNS };
+  let n = 0;
+  for (let i = s.items.length - 1; i >= 0; i--) if (s.items[i].k === 'user' && ++n === shown.turns) return i;
+  return 0;
+}
+function olderButton(s, from) {
+  const turns = s.items.slice(0, from).filter((it) => it.k === 'user').length;
+  const b = el('button', 'older', `이전 대화 ${turns}개 더 있어요 · 보기`);
+  b.type = 'button';
+  b.onclick = () => {
+    const scroll = $('scroll');
+    const before = scroll.scrollHeight;
+    shown.turns += SHOW_TURNS;
+    render();
+    scroll.scrollTop += scroll.scrollHeight - before; // 보던 자리 그대로
+  };
+  return b;
+}
+
 /** 대화 항목 그리기: 연달아 나온 도구 줄은 한 줄로 접고, 연달아 맡긴 작업은 체크리스트 카드 하나로 묶는다 */
-function renderItems(s, live, into, skip) {
+function renderItems(s, live, into, skip, from = 0) {
   const items = s.items;
-  let users = 0; // 지금까지 나온 사람 지시 수 — "여기서 포크"가 몇 번째 차례까지 가져갈지
-  for (let i = 0; i < items.length; ) {
+  // 지금까지 나온 사람 지시 수 — "여기서 포크"가 몇 번째 차례까지 가져갈지(가린 앞부분도 센다)
+  let users = items.slice(0, from).filter((it) => it.k === 'user').length;
+  for (let i = from; i < items.length; ) {
     const it = items[i];
     if (it.k === 'user') users++;
     if (it === skip || it.k === 'line meta') { i++; continue; } // 걸린 시간은 카드에만
@@ -2235,7 +2263,7 @@ function renderItems(s, live, into, skip) {
 
 /** "도구 3개 사용 ›" — 누르면 펼쳐서 무엇을 했는지 보여 준다 */
 function foldGroup(run, key) {
-  const tools = run.filter((it) => it.k === 'line tool').length || run.length;
+  const tools = run.filter((it) => it.k === 'line tool').length || run.filter((it) => it.k !== 'perm').length || run.length;
   const fails = run.filter((it) => it.k === 'line fail').length;
   const open = openFolds.has(key);
   const b = el('button', `fold${open ? ' open' : ''}`, `도구 ${tools}개 사용${fails ? ` · 실패 ${fails}` : ''}`);
@@ -2245,6 +2273,7 @@ function foldGroup(run, key) {
   if (!open) return [b];
   const body = el('div', 'fold-body');
   for (const it of run) {
+    if (it.k === 'perm') { body.append(el('div', `fold-line${it.resolved.allow ? '' : ' fail'}`, `${it.resolved.allow ? '허용' : '거부'} · ${it.t}${it.resolved.by ? ` (${it.resolved.by})` : ''}`)); continue; }
     body.append(el('div', `fold-line${it.k === 'line fail' ? ' fail' : ''}`, it.k === 'line tool' ? it.t : `→ ${it.t}`));
   }
   return [b, body];
