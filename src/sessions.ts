@@ -228,7 +228,12 @@ export class SessionManager {
     // 메인이 작업자보다 먼저 오도록(화면이 카드를 메인에 붙인다), 만든 순서대로
     restored.sort((a, b) => Number(a.info.role === 'worker') - Number(b.info.role === 'worker') || a.info.createdAt.localeCompare(b.info.createdAt));
     for (const l of restored) this.sessions.set(l.info.id, l);
-    for (const l of restored) this.closePerms(l, '호스트를 다시 켬'); // 꺼진 CLI 가 묻던 것은 답할 곳이 없다
+    for (const l of restored) {
+      this.closePerms(l, '호스트를 다시 켬'); // 꺼진 CLI 가 묻던 것은 답할 곳이 없다
+      // 일하던 중에 꺼졌으면 기록의 마지막 상태가 "작업 중"이다 — 화면이 기록을 다시 받을 때 대기로 끝나게
+      const last = l.history.findLast((e) => e.type === 'session.status');
+      if (last && last.type === 'session.status' && last.status !== 'idle') this.publish({ type: 'session.status', sessionId: l.info.id, status: 'idle' });
+    }
     return restored.length;
   }
 
@@ -423,6 +428,54 @@ export class SessionManager {
     this.workPresets!.remove(p.id);
     this.presetsChanged();
     return p;
+  }
+
+  /** 메인이 자기 작업의 설정을 본다(session_info): 권한 묻지 않기(이 작업·모든 작업), 모델, 폴더, 예약 수, 이 PC 의 현지 시각 */
+  sessionInfoByMain(mainId: string) {
+    const live = this.sessions.get(mainId);
+    if (!live) throw new Error('없는 작업');
+    const i = live.info;
+    const now = new Date();
+    return {
+      id: i.id,
+      title: i.customTitle ?? i.title,
+      agent: i.agent,
+      model: i.model ?? null,
+      workdir: i.workdir,
+      extraDirs: i.extraDirs ?? [],
+      preset: i.preset?.name ?? null,
+      workPreset: i.workPreset?.name ?? null,
+      autoApproveThisTask: Boolean(i.autoApprove),
+      autoApproveAllTasks: this.autoApproveAll,
+      asksPermission: !(i.autoApprove || this.autoApproveAll),
+      schedules: this.schedules?.forSession(i.id).length ?? 0,
+      localTime: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  }
+
+  /** 메인이 자기 작업(오른쪽 작업 정보의 "예약")에 걸린 예약을 본다 */
+  scheduleListByMain(mainId: string) {
+    if (!this.schedules) throw new Error('예약 기능이 없음');
+    if (!this.sessions.has(mainId)) throw new Error('없는 작업');
+    return this.schedules.forSession(mainId);
+  }
+
+  /** 메인이 자기 작업에 예약을 걸거나(id 없이) 고친다. 다른 작업의 예약은 건드리지 못한다 */
+  scheduleSaveByMain(mainId: string, a: Record<string, unknown>) {
+    if (!this.schedules) throw new Error('예약 기능이 없음');
+    if (!this.sessions.has(mainId)) throw new Error('없는 작업');
+    if (typeof a.id === 'string' && a.id && !this.schedules.forSession(mainId).some((s) => s.id === a.id)) throw new Error(`이 작업의 예약이 아님: ${a.id}`);
+    const s = this.schedules.save({ ...a, sessionId: mainId });
+    this.schedulesChanged();
+    return s;
+  }
+
+  scheduleDeleteByMain(mainId: string, id: string) {
+    if (!this.schedules) throw new Error('예약 기능이 없음');
+    if (!this.schedules.forSession(mainId).some((s) => s.id === id)) throw new Error(`이 작업의 예약이 아님: ${id}`);
+    this.schedules.remove(id);
+    this.schedulesChanged();
   }
 
   /** 메인이 이 PC 의 프리셋·에이전트·스킬·툴을 공유 레포에 올린다(이름으로). 사람 승인 후 */

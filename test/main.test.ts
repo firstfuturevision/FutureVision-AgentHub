@@ -17,6 +17,7 @@ import { AcpAdapter } from '../src/adapters/acp.ts';
 import { startLocalServer } from '../src/transports/local.ts';
 import { PresetStore } from '../src/presets.ts';
 import { WorkPresetStore } from '../src/workpresets.ts';
+import { ScheduleStore } from '../src/schedules.ts';
 import type { HostEvent } from '../src/protocol.ts';
 import { waitFor } from './helpers.ts';
 
@@ -52,6 +53,7 @@ async function setup(clinkWaitMs = 5000, defaultWorker?: { agent: string; model?
     workspaceRoot: join(base, 'ws'),
     dataDir: join(base, 'data'),
     presets,
+    schedules: new ScheduleStore(join(base, 'data', 'schedules.json')),
     mcpBaseUrl: `http://127.0.0.1:${port}/mcp`,
     clinkWaitMs,
     makeAdapter: (agent) =>
@@ -464,7 +466,7 @@ test('MCP: initialize 는 지침을, tools/list 는 clink 와 프리셋 도구�
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.match(init.result.instructions, /메인 에이전트/);
   const list = await call('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'session_info', 'schedule_list', 'schedule_save', 'schedule_delete', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
   assert.deepEqual(list.result.tools[0].inputSchema.properties.preset.enum, ['리뷰어']); // 프리셋이 도구에 실린다
   assert.match(init.result.instructions, /맡길 수 있는 하위 에이전트: 리뷰어/);
   assert.ok(events.length > 0);
@@ -496,5 +498,39 @@ test('MCP show_image: 작업 폴더의 그림을 채팅에 띄우고(/images 로
   writeFileSync(join(main.workdir, 'a.txt'), 'x');
   assert.match((await call({ path: 'a.txt' })).result.content[0].text, /그림 파일/);
   assert.match((await call({})).result.content[0].text, /화면 제어가 꺼져/);
+  sessions.stopAll();
+});
+
+test('MCP 예약·설정: 메인은 지금 이 작업에만 예약을 걸고·보고·지우며, 설정(권한 묻지 않기)을 읽는다', async () => {
+  const { port, sessions, events, main } = await setup();
+  const url = (sessions as any).sessions.get(main.id).token;
+  const call = async (name: string, args: object = {}) =>
+    (await (await fetch(`http://127.0.0.1:${port}/mcp/${url}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    })).json()).result;
+  let info = (await call('session_info')).structuredContent;
+  assert.equal(info.id, main.id);
+  assert.equal(info.asksPermission, true);
+  sessions.setAutoApproveAll(true);
+  info = (await call('session_info')).structuredContent;
+  assert.equal(info.autoApproveAllTasks, true);
+  assert.equal(info.asksPermission, false);
+  assert.match(info.localTime, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+
+  const saved = await call('schedule_save', { prompt: '오늘의 메타버스 하나 올려 줘', repeat: 'daily', time: '10:00' });
+  assert.ok(!saved.isError, saved.content[0].text);
+  assert.ok(events.some((e) => e.type === 'schedules.changed')); // 화면의 예약 칸이 새로 읽는다
+  const list = (await call('schedule_list')).structuredContent.schedules;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].sessionId, main.id);
+  assert.equal(list[0].time, '10:00');
+  // 잘못된 값·다른 작업의 예약
+  assert.match((await call('schedule_save', { prompt: 'x', repeat: 'daily', time: '25:00' })).content[0].text, /시각은 HH:MM/);
+  assert.match((await call('schedule_delete', { id: 'nope' })).content[0].text, /이 작업의 예약이 아님/);
+  assert.match((await call('schedule_delete', { id: list[0].id })).content[0].text, /지움/);
+  assert.equal((await call('schedule_list')).structuredContent.schedules.length, 0);
+  sessions.setAutoApproveAll(false);
   sessions.stopAll();
 });

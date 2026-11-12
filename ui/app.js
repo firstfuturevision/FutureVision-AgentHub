@@ -1310,7 +1310,11 @@ function onEvent(ev) {
   const s = ev.sessionId && sessions.get(ev.sessionId);
   if (!s) return;
   switch (ev.type) {
-    case 'session.status': s.info.status = ev.status; break;
+    case 'session.status':
+      s.info.status = ev.status;
+      // 쉬거나 끝나면 답 없이 남은 승인 카드는 닫는다(예전 버전 기록·놓친 소식에도 "승인 대기"로 남지 않게)
+      if (ev.status === 'idle' || ev.status === 'ended') for (const it of s.items) if (it.k === 'perm' && !it.resolved) it.resolved = { allow: false, by: '차례 끝남' };
+      break;
     case 'session.renamed': s.info.customTitle = ev.title; break;
     case 'session.dirs': s.info.extraDirs = ev.dirs; break;
     case 'session.configured': {
@@ -1376,7 +1380,8 @@ function onEvent(ev) {
 // ── 그리기 ──────────────────────────────────
 const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main').sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
 const workersOf = (s) => s.items.filter((it) => it.k === 'worker').map((it) => sessions.get(it.id)).filter(Boolean);
-const pendingPerm = (s) => s.info.status !== 'ended' && s.items.some((it) => it.k === 'perm' && !it.resolved);
+// 승인을 기다리는 건 일하는 중일 때뿐이다(묻는 CLI 는 차례 안에서 묻는다). 쉬는 작업에 남은 답 없는 요청은 기다리는 게 아니다
+const pendingPerm = (s) => (s.info.status === 'working' || s.info.status === 'starting') && s.items.some((it) => it.k === 'perm' && !it.resolved);
 const waitingIn = (s) => pendingPerm(s) || workersOf(s).some(pendingPerm);
 const titleOf = (s) => {
   const first = s.items.find((it) => it.k === 'user');

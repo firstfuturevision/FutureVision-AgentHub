@@ -48,3 +48,25 @@ test('긴 기록: 다시 켜도 작업이 사라지지 않고(만든 기록 유�
   assert.equal(again.info(id)?.customTitle, '새 이름');
   assert.equal(readdirSync(join(logDir, 'archive')).length, 1); // 작아졌으니 또 옮기지 않는다
 });
+
+test('일하던 중에 꺼진 작업: 다시 켜면 기록이 "대기"로 끝나고 답 없던 승인은 닫힌다(화면에 승인 대기로 남지 않게)', () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub halt '));
+  const ws = join(base, 'workspace');
+  const logDir = join(base, 'data', 'sessions');
+  mkdirSync(join(ws, 'proj'), { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  const id = 'halt-1';
+  const t = (i: number) => new Date(Date.parse('2026-11-12T00:00:00Z') + i * 1000).toISOString();
+  const info = { id, role: 'main', agent: 'claude', title: '도중', workdir: join(ws, 'proj'), requestedBy: 'local', via: 'local', createdAt: t(0), status: 'idle' };
+  writeFileSync(join(logDir, `${id}.jsonl`), [
+    { at: t(0), type: 'session.created', session: info },
+    { at: t(1), type: 'session.status', sessionId: id, status: 'working' },
+    { at: t(2), type: 'permission.request', sessionId: id, requestId: 'c1', tool: 'Bash', detail: 'ls' },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const sm = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), presets: new PresetStore(join(base, 'data', 'presets.json')), makeAdapter: () => new UnavailableAdapter('시험') } as any);
+  sm.restore();
+  const seen: HostEvent[] = [];
+  sm.subscribe((e) => seen.push(e));
+  assert.equal((seen.filter((e) => e.type === 'session.status').at(-1) as any).status, 'idle');
+  assert.ok(seen.some((e) => e.type === 'permission.resolved' && e.requestId === 'c1'));
+});

@@ -25,6 +25,7 @@ const INSTRUCTIONS = [
   '사람이 에이전트(하위 에이전트 역할)을 만들거나 고치거나 지워 달라고 하면 agent_list / agent_save / agent_delete 를 쓴다. 역할 지침은 할 일·하지 말 일·보고 형식·끝나는 조건이 드러나게 구체적으로 쓴다. 저장·삭제 전에 사람 승인 화면이 뜬다.',
   '사람이 프리셋(작업 환경: 작업 폴더·함께 연결할 폴더·작업 방식 지침·기본 메인 에이전트)을 만들거나 고치거나 지워 달라고 하면 preset_list / preset_save / preset_delete 를 쓴다. 에이전트와 프리셋은 다른 것이다.',
   '사람이 프리셋·에이전트·스킬·툴을 "공유 레포에 올려 달라"고 하면 share_push 로 이름을 주어 올린다(사람 승인 후). 목록의 shared=true 는 이미 공유받은 것이라 고칠 수 없다.',
+  '사람이 예약("매일 ○시에", "매주 월요일에" 등)을 부탁하면 새 작업을 만들지 말고 schedule_save 로 지금 이 작업에 건다. 권한·모델 같은 이 작업의 설정은 짐작하지 말고 session_info 로 확인한다. Agent Hub 의 HTTP 주소나 코드를 직접 건드려 작업·예약을 만들지 않는다.',
   SCREEN_INSTRUCTION,
 ].join('\n');
 
@@ -82,6 +83,48 @@ export const PRESET_TOOLS = [
     title: '에이전트 지우기',
     description: '에이전트을 지운다(이름 또는 id). 사람 승인 후에만 지워진다.',
     inputSchema: { type: 'object', properties: { preset: { type: 'string', description: '지울 프리셋의 이름 또는 id' } }, required: ['preset'], additionalProperties: false },
+  },
+];
+
+/** 지금 작업의 설정·예약 — 예약은 늘 "지금 이 작업"에 건다(새 작업을 만들지 않는다) */
+export const TASK_TOOLS = [
+  {
+    name: 'session_info',
+    title: '이 작업의 설정',
+    description: '지금 이 작업의 설정을 본다: 권한 묻지 않기(autoApproveThisTask = 이 작업, autoApproveAllTasks = 모든 작업, asksPermission = 결국 승인을 묻는지), 모델, 작업 폴더, 걸린 예약 수, 이 PC 의 현지 시각. 설정을 짐작하지 말고 이것으로 확인한다.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'schedule_list',
+    title: '이 작업의 예약 보기',
+    description: '지금 이 작업에 걸린 예약(오른쪽 작업 정보의 "예약" 칸에 보이는 것)을 본다.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'schedule_save',
+    title: '이 작업에 예약 걸기·고치기',
+    description: '지금 이 작업에 "정한 시각에 이 지시를 보내기"를 건다(id 없이) 또는 고친다(id 와 함께). 사람이 "매일 ○시에 해줘" 같은 예약을 부탁하면 새 작업을 만들지 말고 이것으로 이 작업에 건다. 시각은 이 PC 현지 시간(session_info 의 localTime). 예약 실행은 사람이 없을 때 돌 수 있으니 session_info 의 asksPermission 이 true 면 사람에게 알려 준다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '고칠 때만: schedule_list 의 id' },
+        prompt: { type: 'string', description: '그 시각에 이 작업에 보낼 지시(사람이 보낸 것처럼 들어온다)' },
+        repeat: { type: 'string', enum: ['once', 'daily', 'weekdays', 'weekly', 'interval'], description: 'once=한 번, daily=매일, weekdays=평일(월~금), weekly=매주, interval=N분마다' },
+        time: { type: 'string', description: 'HH:MM (interval 이 아니면 필수)' },
+        date: { type: 'string', description: 'once 일 때 YYYY-MM-DD' },
+        weekday: { type: 'integer', description: 'weekly 일 때 0=일 … 6=토' },
+        every: { type: 'integer', description: 'interval 일 때 몇 분마다(5 이상)' },
+        enabled: { type: 'boolean', description: '기본 true. false 면 걸어 두되 쉰다' },
+      },
+      required: ['prompt', 'repeat'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'schedule_delete',
+    title: '이 작업의 예약 지우기',
+    description: '지금 이 작업에 걸린 예약 하나를 지운다(schedule_list 의 id).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
   },
 ];
 
@@ -164,7 +207,7 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
     case 'ping':
       return ok({});
     case 'tools/list':
-      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS, ...SCREEN_TOOLS, SHOW_IMAGE_TOOL] });
+      return ok({ tools: [clinkTool(sessions.presetsForMain(mainId)), ...PRESET_TOOLS, ...WORK_TOOLS, ...TASK_TOOLS, ...SCREEN_TOOLS, SHOW_IMAGE_TOOL] });
     case 'tools/call': {
       const a = msg.params?.arguments ?? {};
       const text = (t: string, isError = false) => ok({ content: [{ type: 'text', text: t }], isError });
@@ -172,6 +215,34 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
       const scr = await handleScreenTool(String(msg.params?.name ?? ''), a, mainId, sessions.screen);
       if (scr) return ok(scr);
       switch (msg.params?.name) {
+        case 'session_info':
+          try {
+            const info = sessions.sessionInfoByMain(mainId);
+            return ok({ content: [{ type: 'text', text: JSON.stringify(info, null, 2) }], structuredContent: info });
+          } catch (err) {
+            return text((err as Error).message, true);
+          }
+        case 'schedule_list':
+          try {
+            const list = sessions.scheduleListByMain(mainId);
+            return ok({ content: [{ type: 'text', text: list.length ? JSON.stringify(list, null, 2) : '이 작업에 걸린 예약 없음' }], structuredContent: { schedules: list } });
+          } catch (err) {
+            return text((err as Error).message, true);
+          }
+        case 'schedule_save':
+          try {
+            const s = sessions.scheduleSaveByMain(mainId, a);
+            return text(`예약함(id ${s.id}): ${s.repeat}${s.time ? ` ${s.time}` : ''}${s.every ? ` ${s.every}분마다` : ''}, 다음 실행 ${s.nextAt ? new Date(s.nextAt).toLocaleString('ko-KR') : '없음'}. 이 작업의 오른쪽 작업 정보 "예약" 칸에 보인다.`);
+          } catch (err) {
+            return text(`예약 안 됨: ${(err as Error).message}`, true);
+          }
+        case 'schedule_delete':
+          try {
+            sessions.scheduleDeleteByMain(mainId, typeof a.id === 'string' ? a.id : '');
+            return text('예약을 지움');
+          } catch (err) {
+            return text(`지우지 않음: ${(err as Error).message}`, true);
+          }
         case 'show_image':
           try {
             return text(await sessions.showImage(mainId, a));
