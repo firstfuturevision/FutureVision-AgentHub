@@ -1,22 +1,16 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { hostname, networkInterfaces } from 'node:os';
 import { dirname } from 'node:path';
 
 /**
- * 원격 접속(사무실 네트워크만) — 같은 망의 다른 PC·폰에서 공용 비밀번호로 들어온다.
+ * 원격 접속(사무실 네트워크만) — 같은 망의 다른 PC·폰에서 이 PC 화면과 똑같이 쓴다.
  *  - 끄면(기본) 이 PC 에서만(127.0.0.1). 켜면 사설 주소(192.168·10·172.16-31·169.254, fe80·fc/fd)의 접속만 받는 서버를 하나 더 연다.
- *  - 켜져 있으면 이 PC 화면도 사무실 주소로 연다(127.0.0.1 → 302). 이 PC 에서 그 주소로 들어오면 로그인 없이 PC 앞 권한.
- *  - 비밀번호는 scrypt 해시로만 저장(data/remote.json). 로그인하면 이 서버가 기억하는 쿠키(다시 켜면 다시 로그인).
- *  - 원격 사람은 작업만 한다. 설정·키·자동 실행은 PC 앞에서만.
- *    권한 묻지 않기 켜기·뿌리 밖 폴더·터미널은 "PC 앞과 같은 권한"(full)을 켰을 때만 원격에도 된다(기본 꺼짐).
+ *  - 비밀번호도 권한 구분도 없다(사용자 결정 2026-11-12: "구분하지 말고"). 같은 네트워크의 누구나 이 PC 앞과 같은 권한.
+ *  - 그래서 문은 둘: 인터넷 주소는 받지 않고(isPrivateAddress), Host 는 이 PC 의 주소·이름이어야 한다(isOwnHost, DNS 리바인딩 차단).
+ *  - 켜져 있으면 이 PC 화면도 사무실 주소로 연다(127.0.0.1 → 302).
  */
-interface Saved { enabled: boolean; full: boolean; port: number; salt?: string; hash?: string }
-export interface RemoteSession { name: string; ip: string; at: number }
+interface Saved { enabled: boolean; port: number }
 
-const DAY = 24 * 60 * 60 * 1000;
-const MAX_FAILS = 5;
-const LOCK_MS = 60_000;
 /** 가상 네트워크 어댑터 이름(VMware·VirtualBox·Hyper-V·WSL·Docker·VPN) */
 const VIRTUAL_NIC = /vmware|virtualbox|vbox|vethernet|hyper-v|wsl|docker|hamachi|tailscale|zerotier|wireguard|tap-|tun\d|utun|loopback/i;
 
@@ -34,20 +28,23 @@ export function isPrivateAddress(addr: string | undefined): boolean {
 }
 
 /**
- * 이 PC 자신의 네트워크 주소들(가상 네트워크 포함, 127.0.0.1 은 빼고) — 이 PC 에서 자기 사무실 주소로 들어오면 보내는 쪽도 이 주소다.
- * 127.0.0.1 로 원격 포트에 들어오는 것은 원격처럼 다룬다(시험이 그렇게 원격을 흉내 낸다).
+ * Host 머리말이 이 PC 를 가리키는가 — 이 PC 의 주소(127.0.0.1·네트워크 주소)나 컴퓨터 이름, 그리고 원격 포트.
+ * 다른 이름이면 받지 않는다: 남의 사이트가 자기 이름을 이 PC 주소로 바꿔 사람 브라우저로 들어오는 것(DNS 리바인딩)을 막는다.
  */
-export function ownAddresses(): Set<string> {
-  const out = new Set<string>();
-  for (const list of Object.values(networkInterfaces())) for (const n of list ?? []) if (!n.internal) out.add(n.address.toLowerCase());
-  return out;
+export function isOwnHost(host: string | undefined, port: number): boolean {
+  const h = (host ?? '').toLowerCase();
+  const i = h.lastIndexOf(':');
+  if (i < 0 || h.slice(i + 1) !== String(port)) return false;
+  const name = h.slice(0, i).replace(/^\[|\]$/g, '');
+  const me = hostname().toLowerCase();
+  if (name === 'localhost' || name === me || name === `${me}.local`) return true;
+  for (const list of Object.values(networkInterfaces())) for (const n of list ?? []) if (n.address.toLowerCase() === name) return true;
+  return false;
 }
 
 export class RemoteAccess {
   private file: string;
   private s: Saved;
-  private sessions = new Map<string, RemoteSession>();
-  private fails = new Map<string, { n: number; until: number }>();
 
   constructor(file: string, defaultPort: number) {
     this.file = file;
@@ -55,20 +52,17 @@ export class RemoteAccess {
     try { if (existsSync(file)) v = JSON.parse(readFileSync(file, 'utf8')); } catch {}
     const port = Number(v.port);
     this.s = {
-      enabled: v.enabled === true && typeof v.hash === 'string',
-      full: v.full === true,
+      enabled: v.enabled === true,
       port: Number.isInteger(port) && port > 1024 && port < 65536 ? port : defaultPort,
-      ...(typeof v.salt === 'string' && typeof v.hash === 'string' ? { salt: v.salt, hash: v.hash } : {}),
     };
   }
 
   get enabled() { return this.s.enabled; }
   get port() { return this.s.port; }
-  get full() { return this.s.enabled && this.s.full; }
 
-  /** 화면에 보낼 상태(비밀번호는 있는지만) */
+  /** 화면에 보낼 상태 */
   public() {
-    return { enabled: this.s.enabled, full: this.s.full, port: this.s.port, hasPassword: Boolean(this.s.hash), urls: this.urls(), people: this.sessions.size };
+    return { enabled: this.s.enabled, port: this.s.port, urls: this.urls() };
   }
 
   /** 이 PC 의 사설 주소로 만든 접속 주소들(가상 머신·VPN 용 가상 네트워크는 빼고 — 사무실 PC·폰은 그 주소로 못 들어온다) */
@@ -83,56 +77,11 @@ export class RemoteAccess {
     return out;
   }
 
-  /** 켜기·끄기·비밀번호 바꾸기. 비밀번호를 바꾸거나 끄면 들어와 있던 사람은 모두 나간다 */
-  set(v: { enabled?: unknown; password?: unknown; full?: unknown }) {
-    if (typeof v.full === 'boolean') this.s.full = v.full;
-    if (typeof v.password === 'string' && v.password !== '') {
-      if (v.password.length < 8) throw new Error('비밀번호는 8자 이상');
-      const salt = randomBytes(16).toString('hex');
-      this.s.salt = salt;
-      this.s.hash = scryptSync(v.password, salt, 32).toString('hex');
-      this.sessions.clear();
-    }
-    if (typeof v.enabled === 'boolean') {
-      if (v.enabled && !this.s.hash) throw new Error('비밀번호를 먼저 정하세요');
-      this.s.enabled = v.enabled;
-      if (!v.enabled) this.sessions.clear();
-    }
+  /** 켜기·끄기 */
+  set(v: { enabled?: unknown }) {
+    if (typeof v.enabled === 'boolean') this.s.enabled = v.enabled;
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.s, null, 2));
     renameSync(`${this.file}.tmp`, this.file);
-  }
-
-  /** 로그인 — 맞으면 쿠키 토큰. 한 주소에서 5번 틀리면 1분 막는다 */
-  login(password: unknown, name: unknown, ip: string): string {
-    if (!this.s.enabled || !this.s.hash || !this.s.salt) throw new Error('원격 접속이 꺼져 있음');
-    const f = this.fails.get(ip);
-    if (f && f.until > Date.now()) throw new Error('여러 번 틀려서 잠시 막힘. 1분 뒤에 다시');
-    const given = scryptSync(typeof password === 'string' ? password : '', this.s.salt, 32);
-    if (!timingSafeEqual(given, Buffer.from(this.s.hash, 'hex'))) {
-      const n = (f && f.until <= Date.now() && f.n >= MAX_FAILS ? 0 : f?.n ?? 0) + 1;
-      this.fails.set(ip, { n, until: n >= MAX_FAILS ? Date.now() + LOCK_MS : 0 });
-      throw new Error('비밀번호가 맞지 않음');
-    }
-    this.fails.delete(ip);
-    const token = randomBytes(24).toString('hex');
-    const who = typeof name === 'string' ? name.trim().replace(/[\x00-\x1f]/g, '').slice(0, 20) : '';
-    this.sessions.set(token, { name: who || ip, ip, at: Date.now() });
-    return token;
-  }
-
-  /** 쿠키 → 들어와 있는 사람(7일 지나면 다시 로그인) */
-  who(cookie: string | undefined): RemoteSession | undefined {
-    if (!this.s.enabled) return undefined;
-    const token = cookie?.split(/;\s*/).find((c) => c.startsWith('ahs='))?.slice(4);
-    const s = token ? this.sessions.get(token) : undefined;
-    if (!s) return undefined;
-    if (Date.now() - s.at > 7 * DAY) { this.sessions.delete(token!); return undefined; }
-    return s;
-  }
-
-  logout(cookie: string | undefined) {
-    const token = cookie?.split(/;\s*/).find((c) => c.startsWith('ahs='))?.slice(4);
-    if (token) this.sessions.delete(token);
   }
 }

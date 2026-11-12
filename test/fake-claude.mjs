@@ -3,12 +3,14 @@
 // --mcp-config 를 받으면 메인 에이전트처럼 동작: "@codex 할일" / "@gemini:모델 할일" 이면 실제로 MCP clink 를 부른다.
 import { createInterface } from 'node:readline';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
-const sid = 'fake-session-1';
+const argv = process.argv;
+// --resume 이면 그 대화 id 그대로(실제 CLI 와 같이), 아니면 새 대화 id
+const sid = argv.includes('--resume') ? argv[argv.indexOf('--resume') + 1] : randomUUID();
 let turn = 0;
 
-const argv = process.argv;
 const cfgPath = argv.includes('--mcp-config') ? argv[argv.indexOf('--mcp-config') + 1] : null;
 // 메인일 때만 hub(clink) 서버가 있다. 툴만 있거나 비어 있으면 일반 세션.
 const mcpUrl = cfgPath ? JSON.parse(readFileSync(cfgPath, 'utf8')).mcpServers?.hub?.url ?? null : null;

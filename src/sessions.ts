@@ -12,6 +12,7 @@ import { withGuidelines, type WorkPreset, type WorkPresetStore } from './workpre
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from './shared.ts';
 import { skillsFor, type SkillInfo } from './skills.ts';
 import type { ScheduleStore } from './schedules.ts';
+import { ClaudeHistory, claudeHome, claudeTranscript } from './external.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -59,6 +60,7 @@ interface Live {
   ctx?: { label: string; chars: number }[]; // 이번 CLI 에 이미 넣은 것(앞 대화, 공유) — 다시 띄우면 비운다
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
   dormant?: boolean; // 호스트를 다시 켜서 CLI 가 아직 없음 — 다음 지시 때 띄운다
+  resume?: string; // 다음에 띄울 CLI 가 이어 갈 Claude 대화 id(--resume)
 }
 
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -116,6 +118,8 @@ export class SessionManager {
   private scheduleRunning = new Set<string>(); // 실행 중인 예약(같은 예약이 겹쳐 돌지 않게)
   private asks = new Map<string, { sessionId: string; resolve: (allow: boolean) => void }>(); // 호스트가 사람에게 묻는 중인 것
   private order = new WeakMap<HostEvent, number>(); // 기록된 이벤트의 순서(다시 보낼 때 정렬)
+  private claudeHome: string; // Claude Code 기록이 있는 곳(~/.claude) — 프리셋이 아닌 Claude 세션이 쓴다
+  readonly claudeCode: ClaudeHistory; // 이 PC 의 Claude Code 세션 찾기
   private seq = 0;
   private stamp(ev: HostEvent, ms = Date.now()) {
     this.order.set(ev, ms * 1000 + (this.seq++ % 1000));
@@ -137,7 +141,10 @@ export class SessionManager {
     profilesDir?: string; // 에이전트 세션의 전용 프로필 뿌리(data/profiles)
     workPresets?: WorkPresetStore; // 설정의 "프리셋" — 작업 환경(폴더·지침)
     schedules?: ScheduleStore; // 작업 정보의 "예약"
+    claudeHome?: string; // Claude Code 설정 폴더(시험용). 기본 CLAUDE_CONFIG_DIR 또는 ~/.claude
   }) {
+    this.claudeHome = opts.claudeHome ?? claudeHome();
+    this.claudeCode = new ClaudeHistory(this.claudeHome);
     this.schedules = opts.schedules;
     this.workPresets = opts.workPresets;
     this.auth = opts.auth;
@@ -193,6 +200,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') info.customTitle = e.title;
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
+        if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
       }
       const live: Live = { info, adapter: new UnavailableAdapter('다시 띄우기 전'), history: events.slice(-HISTORY_CAP), turn: null };
@@ -437,6 +445,8 @@ export class SessionManager {
         if (wp) live.guide = wp;
         return;
       }
+      case 'session.import':
+        return this.importClaude(cmd.cliSessionId, origin);
       case 'user.message': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
@@ -613,14 +623,18 @@ export class SessionManager {
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 늦게 보내는 이벤트는 버린다
     if (live.token) this.tokens.delete(live.token);
     live.token = undefined;
-    // sentNow: 방금 기록한 이번 지시는 앞 대화에서 뺀다(이번 지시로 따로 간다)
-    const upto = sentNow ? live.history.findLastIndex((e) => e.type === 'user.message') : -1;
-    const said = conversation(upto >= 0 ? live.history.slice(0, upto) : live.history);
-    if (said.length) live.carry = [live.carry, tail(said.join('\n'))].filter(Boolean).join('\n');
     live.merges = undefined;
     live.ctx = [];
-    live.role = info.preset ? this.presets?.find(info.preset.id) : undefined;
-    live.guide = info.workPreset ? this.workPresets?.find(info.workPreset.id) : undefined;
+    // Claude 대화 기록이 남아 있으면 --resume 으로 그 대화에 그대로 이어 간다(대화·지침이 이미 그 안에 있다)
+    live.resume = this.resumable(live);
+    if (!live.resume) {
+      // sentNow: 방금 기록한 이번 지시는 앞 대화에서 뺀다(이번 지시로 따로 간다)
+      const upto = sentNow ? live.history.findLastIndex((e) => e.type === 'user.message') : -1;
+      const said = conversation(upto >= 0 ? live.history.slice(0, upto) : live.history);
+      if (said.length) live.carry = [live.carry, tail(said.join('\n'))].filter(Boolean).join('\n');
+      live.role = info.preset ? this.presets?.find(info.preset.id) : undefined;
+      live.guide = info.workPreset ? this.workPresets?.find(info.workPreset.id) : undefined;
+    }
     info.status = 'starting';
     this.publish({ type: 'session.status', sessionId: info.id, status: 'starting' });
     this.publish({ type: 'context.usage', sessionId: info.id, used: 0, window: null });
@@ -833,6 +847,8 @@ export class SessionManager {
     customTitle?: string;
     extraDirs?: string[];
     autoApprove?: boolean;
+    cliSessionId?: string; // 가져온 Claude Code 대화 — 첫 CLI 부터 --resume 으로 이어 간다
+    seed?: (id: string) => void; // CLI 를 띄우기 전에 기록에 먼저 넣을 것(가져온 대화)
   }): Promise<Live> {
     const info: SessionInfo = {
       id: randomUUID(),
@@ -850,6 +866,7 @@ export class SessionManager {
       customTitle: o.customTitle,
       extraDirs: o.extraDirs?.length ? o.extraDirs : undefined,
       ...(o.autoApprove ? { autoApprove: true } : {}),
+      ...(o.cliSessionId ? { cliSessionId: o.cliSessionId, imported: true } : {}),
       title: o.title ?? (o.role === 'main' ? '메인 에이전트' : `${o.agent} 작업`),
       workdir: o.workdir,
       requestedBy: o.origin.user,
@@ -857,9 +874,10 @@ export class SessionManager {
       createdAt: new Date().toISOString(),
       status: 'starting',
     };
-    const live: Live = { info, adapter: this.makeAdapter(o.agent), history: [], turn: null };
+    const live: Live = { info, adapter: this.makeAdapter(o.agent), history: [], turn: null, ...(o.cliSessionId ? { resume: o.cliSessionId } : {}) };
     this.sessions.set(info.id, live);
     this.publish({ type: 'session.created', session: info });
+    o.seed?.(info.id);
     await this.launch(live);
     return live;
   }
@@ -888,7 +906,8 @@ export class SessionManager {
         this.hubSkills?.syncTo(join(env.CODEX_HOME, 'skills'), names);
       }
     }
-    const ctx: StartContext = { tools, configDir, env, authMethod: launch?.authMethod, extraDirs: o.extraDirs, pluginDir };
+    const ctx: StartContext = { tools, configDir, env, authMethod: launch?.authMethod, extraDirs: o.extraDirs, pluginDir, ...(live.resume ? { resume: live.resume } : {}) };
+    live.resume = undefined;
     if (o.role === 'main' && this.mcpBaseUrl) {
       live.token = randomUUID().replace(/-/g, '');
       this.tokens.set(live.token, info.id);
@@ -897,6 +916,54 @@ export class SessionManager {
     const gen = (live.gen = (live.gen ?? 0) + 1);
     await live.adapter.start(info, (ev) => { if (live.gen === gen) this.fromAdapter(live, ev); }, ctx);
     if (live.gen === gen && live.info.status === 'starting') this.setStatus(live, 'idle');
+  }
+
+  /** --resume 으로 이어 갈 수 있으면 그 대화 id. Claude 이고 그 CLI 가 쓸 설정 폴더에 기록이 있어야 한다 */
+  private resumable(live: Live): string | undefined {
+    const id = live.info.cliSessionId;
+    if (live.info.agent !== 'claude' || !id) return undefined;
+    const home = live.info.preset && this.profileDir ? this.profileDir('claude') : this.claudeHome;
+    return claudeTranscript(home, id) ? id : undefined;
+  }
+
+  /** 이 PC 의 Claude Code 세션 목록(이미 가져온 것은 빼고) — 화면의 "Claude Code 에서 이어 하기" */
+  claudeCodeSessions() {
+    const have = new Set<string>();
+    for (const l of this.sessions.values()) if (l.info.cliSessionId) have.add(l.info.cliSessionId.toLowerCase());
+    return this.claudeCode.list(have);
+  }
+
+  /**
+   * Claude Code 세션 가져오기: 같은 폴더에서 그 대화 id 로 `claude --resume` 을 띄워 그 대화에 그대로 이어 간다.
+   * 화면에는 대화 끝부분을 먼저 보여 준다. 이 PC 화면(사무실 원격 포함)에서만, FV 대시보드에서는 안 된다.
+   * 원래 창이 아직 쓰는 중이면 둘이 같은 대화에 이어 쓰게 되어 갈라질 수 있다 — 화면이 먼저 묻는다.
+   */
+  private async importClaude(id: string, origin: CommandOrigin) {
+    const fail = (message: string) => this.publish({ type: 'error', message });
+    if (origin.via !== 'local' && !origin.trusted) return fail('Claude Code 세션은 PC 앞에서만 가져올 수 있음');
+    const had = [...this.sessions.values()].find((l) => l.info.cliSessionId?.toLowerCase() === id);
+    if (had) return fail(`이미 가져온 세션: ${had.info.customTitle ?? had.info.title}`);
+    const got = this.claudeCode.read(id);
+    if (!got) return fail('Claude Code 세션을 찾지 못함');
+    const inRoot = got.cwd ? this.resolveWorkdir(relative(this.workspaceRoot, got.cwd)) : null;
+    const dir = inRoot && inRoot === resolve(got.cwd) ? inRoot : this.outsideDir(got.cwd, origin);
+    if (typeof dir !== 'string') return fail(`이어 갈 수 없음: ${dir.error}`);
+    const title = got.title.replace(/\s+/g, ' ').trim();
+    await this.create({
+      agent: 'claude',
+      role: 'main',
+      workdir: dir,
+      origin,
+      customTitle: title.length > 40 ? `${title.slice(0, 40)}…` : title || 'Claude Code',
+      cliSessionId: id,
+      seed: (sessionId) => {
+        for (const m of got.messages) {
+          if (m.role === 'user') this.publish({ type: 'user.message', sessionId, text: m.text, from: 'Claude Code' });
+          else this.publish({ type: 'agent.text', sessionId, text: m.text, partial: false });
+        }
+        this.publish({ type: 'session.imported', sessionId, shown: got.messages.length });
+      },
+    });
   }
 
   /**
@@ -932,6 +999,7 @@ export class SessionManager {
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
     if (!live.dormant) live.adapter.stop();
+    live.resume = undefined; // 설정을 바꾸면 새 대화로 시작하고 앞 대화는 글로 붙인다(새 CLI 가 새 대화 id 를 알려 준다)
     live.dormant = false;
     if (live.token) this.tokens.delete(live.token);
     live.token = undefined;
@@ -959,6 +1027,11 @@ export class SessionManager {
 
   private fromAdapter(live: Live, ev: AdapterEvent) {
     if (live.dormant) return;
+    if (ev.type === 'session.cli') {
+      // 대화 id 는 바뀔 때만 기록(다시 켠 뒤 --resume 에 쓴다)
+      if (live.info.cliSessionId === ev.cliSessionId) return;
+      live.info.cliSessionId = ev.cliSessionId;
+    }
     const full = { ...ev, sessionId: live.info.id } as HostEvent;
     this.publish(full);
     // 권한 묻지 않기: 요청과 허용을 기록에만 남기고 바로 허용한다

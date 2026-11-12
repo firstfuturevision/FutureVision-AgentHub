@@ -51,6 +51,7 @@ export class ClaudeAdapter implements AgentAdapter {
     if (!session.autoApprove) args.push('--permission-prompt-tool', 'stdio');
     for (const d of ctx.extraDirs ?? []) args.push('--add-dir', d); // 연결 폴더
     if (ctx.pluginDir) args.push('--plugin-dir', ctx.pluginDir); // 프리셋: Agent Hub 스킬
+    if (ctx.resume) args.push('--resume', ctx.resume); // 같은 대화에 이어 간다. 대화 id 는 그대로(2.1.283 확인)
     const model = session.model ?? this.opts.model;
     if (model) args.push('--model', model);
     if (ctx.configDir) {
@@ -153,7 +154,10 @@ export class ClaudeAdapter implements AgentAdapter {
       }
 
       case 'system':
-        if (ev.subtype === 'init' && typeof ev.session_id === 'string') this.claudeSessionId = ev.session_id;
+        if (ev.subtype === 'init' && typeof ev.session_id === 'string' && ev.session_id !== this.claudeSessionId) {
+          this.claudeSessionId = ev.session_id;
+          this.emit({ type: 'session.cli', cliSessionId: ev.session_id });
+        }
         return;
 
       case 'stream_event': {

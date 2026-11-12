@@ -358,7 +358,7 @@ let cliState = {}; // AI CLI 설치 여부
 let ghState = null; // GitHub: { installed, login?, pending?: { code, url } }
 let updState = null; // 업데이트: { repo, mode, state, current, latest, behind, lastCheck, checking, canRestart }
 let autoState = null; // 자동 실행: { supported, enabled }
-let remoteState = null; // 원격 접속: { enabled, port, hasPassword, urls, people, error }
+let remoteState = null; // 원격 접속: { enabled, port, urls, error, local }
 let sharedState = null; // 공유 레포: { repo, kinds, counts, lastPull, error, pulling }
 const getJson = async (url, fallback) => {
   try {
@@ -577,26 +577,18 @@ function autoRow() {
   return row;
 }
 
-/** 원격 접속 — 같은 사무실 네트워크의 PC·폰에서 공용 비밀번호로. 원격은 작업만 하고 설정은 못 바꾼다 */
+/** 원격 접속 — 같은 사무실 네트워크의 PC·폰에서 이 PC 화면과 똑같이(비밀번호·권한 구분 없음) */
 function remoteRow() {
   const r = remoteState;
   const row = el('div', 'auth-row');
   const head = el('div', 'auth-head');
   head.append(el('span', 'preset-name', '원격 접속'));
-  if (r.enabled && r.people) head.append(el('span', 'auth-state on', `${r.people}명 접속`));
   const sw = el('button', `switch${r.enabled ? ' on' : ''}`);
   sw.type = 'button';
   sw.setAttribute('role', 'switch');
   sw.setAttribute('aria-checked', String(r.enabled));
   sw.setAttribute('aria-label', r.enabled ? '원격 접속 끄기' : '원격 접속 켜기');
   sw.style.marginLeft = 'auto';
-  sw.onclick = async () => {
-    if (!r.hasPassword) { flash('비밀번호를 먼저 정하세요', true); return inp.focus(); }
-    sw.disabled = true;
-    const x = await postJson('/remote', { enabled: !r.enabled });
-    if (x) { remoteState = x; flash(x.error ?? (x.enabled ? '원격 접속 켬' : '원격 접속 끔'), Boolean(x.error)); }
-    if (!moveTo(x)) renderAuth();
-  };
   // 켜면 이 화면도 사무실 주소로(주소창을 그대로 알려 줄 수 있게), 끄면 그 주소가 닫히니 127.0.0.1 로
   const moveTo = (x) => {
     const go = x && (x.enabled && !x.error ? x.urls[0] : x.local);
@@ -604,45 +596,15 @@ function remoteRow() {
     setTimeout(() => { location.href = `${go}/`; }, 600);
     return true;
   };
+  sw.onclick = async () => {
+    sw.disabled = true;
+    const x = await postJson('/remote', { enabled: !r.enabled });
+    if (x) { remoteState = x; flash(x.error ?? (x.enabled ? '원격 접속 켬' : '원격 접속 끔'), Boolean(x.error)); }
+    if (!moveTo(x)) renderAuth();
+  };
   head.append(el('span', `auth-state${r.enabled ? ' on' : ' off'}`, r.enabled ? '켜짐' : '꺼짐'));
   head.append(sw);
   row.append(head);
-
-  const pw = el('div', 'auth-body');
-  const inp = el('input', 'key-input');
-  inp.type = 'password';
-  inp.placeholder = r.hasPassword ? '새 비밀번호 (바꿀 때만)' : '공용 비밀번호 (8자 이상)';
-  inp.autocomplete = 'new-password';
-  inp.setAttribute('aria-label', '원격 접속 비밀번호');
-  const save = el('button', 'line-btn', '저장');
-  save.type = 'button';
-  save.onclick = async () => {
-    if (!inp.value) return flash('비밀번호를 적어 주세요', true);
-    // 처음 정하는 비밀번호는 켜려고 정하는 것이니 바로 켠다
-    const x = await postJson('/remote', r.hasPassword ? { password: inp.value } : { password: inp.value, enabled: true });
-    if (x) { remoteState = x; flash(x.error ?? (r.hasPassword ? '비밀번호를 바꿨어요. 들어와 있던 사람은 다시 로그인합니다' : '비밀번호 저장, 원격 접속 켬'), Boolean(x.error)); }
-    if (r.hasPassword || !moveTo(x)) renderAuth();
-  };
-  pw.append(inp, save);
-  row.append(pw);
-
-  // PC 앞과 같은 권한 — 권한 묻지 않기 켜기·뿌리 밖 폴더·터미널을 원격에도
-  const full = el('div', 'auth-body');
-  const fsw = el('button', `switch${r.full ? ' on' : ''}`);
-  fsw.type = 'button';
-  fsw.setAttribute('role', 'switch');
-  fsw.setAttribute('aria-checked', String(r.full));
-  fsw.setAttribute('aria-label', '원격에도 PC 앞과 같은 권한');
-  fsw.onclick = async () => {
-    if (!r.full && !(await askDialog({ title: '원격에도 PC 앞과 같은 권한', text: '원격으로 들어온 사람도 권한 묻지 않기를 켜고, 작업 폴더 뿌리 밖의 폴더를 연결하고, 터미널을 열 수 있습니다(터미널 창은 이 PC 화면에 뜹니다). 비밀번호를 아는 사람은 이 PC 를 마음대로 쓸 수 있게 됩니다.', ok: '켜기', danger: true }))) return;
-    fsw.disabled = true;
-    const x = await postJson('/remote', { full: !r.full });
-    if (x) { remoteState = x; flash(x.full ? '원격에도 PC 앞과 같은 권한' : '원격은 작업만'); }
-    renderAuth();
-  };
-  full.append(el('span', 'auth-state', 'PC 앞과 같은 권한'), fsw);
-  full.append(el('div', 'hint-inline auth-help', '권한 묻지 않기 켜기, 뿌리 밖 폴더 연결, 터미널. 설정·키는 켜도 PC 앞에서만'));
-  if (r.enabled) row.append(full); // 꺼져 있을 때 이 스위치가 원격 접속 스위치처럼 보이지 않게
 
   const body = el('div', 'auth-body');
   if (r.error) body.append(el('span', 'auth-state off', r.error));
@@ -650,8 +612,8 @@ function remoteRow() {
   for (const u of r.urls) body.append(el('span', `auth-code${r.enabled ? '' : ' off'}`, u));
   if (!r.urls.length) body.append(el('span', 'auth-state off', '사무실 네트워크 주소를 찾지 못함(Wi-Fi·랜 연결 확인)'));
   body.append(el('div', 'hint-inline auth-help', r.enabled
-    ? '같은 사무실 네트워크의 PC·폰 브라우저에서 위 주소로. 설정·키는 원격에서 바꿀 수 없습니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
-    : '켜면 다른 PC·폰에서 위 주소로 비밀번호를 넣고 들어옵니다. 인터넷에는 열리지 않습니다'));
+    ? '같은 사무실 네트워크에서 위 주소로 들어오면 비밀번호 없이 이 PC 와 똑같이 씁니다. 처음 켤 때 방화벽 창이 뜨면 개인 네트워크만 허용'
+    : '켜면 같은 사무실 네트워크의 PC·폰이 위 주소로 이 PC 와 똑같이 씁니다. 인터넷에는 열리지 않습니다'));
   row.append(body);
   return row;
 }
@@ -1247,6 +1209,7 @@ function onEvent(ev) {
     if (info.forkedFrom && pendingFork === info.forkedFrom) { viewId = info.id; pendingFork = null; } // 포크하면 새 작업으로 이동
     else if (info.splitFrom && pendingFork === info.splitFrom) { viewId = info.id; pendingFork = null; } // 분담도
     else if (info.copiedFrom && pendingCopy === info.copiedFrom) { viewId = info.id; pendingCopy = null; } // 복사도
+    else if (info.cliSessionId && pendingImport === info.cliSessionId) { viewId = info.id; pendingImport = null; ccList = null; } // 가져온 Claude Code 세션으로 이동
     if (info.role === 'worker') sessions.get(info.parentId)?.items.push({ k: 'worker', id: info.id });
     if (info.role === 'main' && pendingFirst && info.via === 'local' && !info.forkedFrom) {
       viewId = info.id;
@@ -1279,6 +1242,8 @@ function onEvent(ev) {
       if (ev.reason !== '사용자가 종료함' && !ev.reason.startsWith('호스트를 다시 켜서')) s.items.push({ k: 'line err', t: `${ev.reason}. 다음 지시 때 다시 띄워요` });
       break;
     case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
+    case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
+    case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
     case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = Date.now(); break;
     case 'agent.text':
       if (ev.partial) s.draft = ev.text;
@@ -1442,7 +1407,66 @@ function render() {
   renderList();
   renderChat();
   renderPanel();
+  renderClaudeCode();
 }
+
+// ── 새 작업: 이 PC 의 Claude Code 세션 이어 하기(이 화면에서만 — FV 대시보드에는 없음) ──
+// 목록은 새 작업 화면을 열 때 읽는다(30초 동안은 다시 읽지 않음). 고르면 그 대화에 --resume 으로 이어 가는 작업이 생긴다
+let ccList = null; // null = 아직 안 읽음
+let ccAt = 0;
+let ccLoading = false;
+let ccAll = false;
+let pendingImport = null;
+function ago(iso) {
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (m < 1) return '방금';
+  if (m < 60) return `${m}분 전`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.round(h / 24)}일 전`;
+}
+async function loadClaudeCode() {
+  if (ccLoading) return;
+  ccLoading = true;
+  try {
+    const r = await fetch('/claude-code');
+    ccList = r.ok ? await r.json() : [];
+  } catch { ccList = []; }
+  ccAt = Date.now();
+  ccLoading = false;
+  renderClaudeCode();
+}
+function renderClaudeCode() {
+  const box = $('cc');
+  const show = !viewId;
+  if (!show) { box.hidden = true; return; }
+  if (ccList === null || Date.now() - ccAt > 30_000) { if (!ccLoading) void loadClaudeCode(); if (ccList === null) { box.hidden = true; return; } }
+  box.hidden = !ccList.length;
+  const list = $('cc-list');
+  const rows = ccAll ? ccList : ccList.slice(0, 5);
+  list.replaceChildren(...rows.map((c) => {
+    const b = el('button', 'cc-item');
+    b.type = 'button';
+    b.title = c.cwd;
+    b.disabled = !c.folderOk;
+    b.append(el('span', 'cc-title', c.title));
+    const meta = el('span', 'cc-meta');
+    if (c.active) meta.append(el('span', 'cc-busy', '사용 중 · '));
+    const dir = relName(c.cwd) ?? c.cwd.split(/[\\/]/).filter(Boolean).pop() ?? c.cwd; // 뿌리 밖이면 폴더 이름만(전체 경로는 title)
+    meta.append(`${c.folderOk ? dir || rootName() : '폴더 없음'} · ${ago(c.at)}${c.last ? ` · ${c.last}` : ''}`);
+    b.append(meta);
+    b.onclick = async () => {
+      if (c.active && !(await askDialog({ title: '다른 창에서 쓰는 중', text: '방금까지 다른 창에서 쓰던 세션이에요. 여기서 이어 쓰면 원래 창과 대화가 갈라질 수 있어요. 원래 창을 닫고 이어 가세요.', ok: '이어 하기' }))) return;
+      pendingImport = c.id;
+      b.disabled = true;
+      send({ type: 'session.import', cliSessionId: c.id });
+    };
+    return b;
+  }));
+  $('cc-more').hidden = ccAll || ccList.length <= 5;
+}
+$('cc-more').onclick = () => { ccAll = true; renderClaudeCode(); };
+
 
 // ── 오른쪽 패널: 지금 작업의 지침 · 환경 · 허용 · 연결된 세션 ──
 // 에이전트 설정(지침·스킬·환경·예약·허용)은 기본으로 접어 둔다. 펼친 상태는 이 브라우저에만 기억
@@ -2108,6 +2132,7 @@ function renderItems(s, live, into, skip) {
     if (it.k === 'perm') into.append(permItem(s, it, live));
     else if (it.k === 'line err') into.append(el('div', 'err-line', it.t));
     else if (it.k === 'line halt') into.append(el('div', 'halt-line', it.t));
+    else if (it.k === 'note') into.append(el('div', 'note', it.t));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
     else into.append(item(it));
@@ -2282,14 +2307,6 @@ $('wp-select').onchange = () => {
 };
 fetch('/info').then((r) => r.json()).then((info) => {
   hostInfo = info;
-  // 원격(사무실 네트워크)으로 들어왔으면 설정은 숨긴다 — 설정은 PC 앞에서만
-  if (info.remote) {
-    document.querySelector('[data-nav="settings"]').hidden = true;
-    const out = $('remote-out');
-    out.hidden = false;
-    out.title = `${info.user} · 원격`;
-    out.onclick = async () => { await fetch('/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); location.reload(); };
-  }
   $('elevated').hidden = !info.elevated;  for (const a of AGENTS) if (info.models?.[a] && !models[a].length) models[a] = info.models[a];
   if (info.mainAgent && !store.get('main', null)) store.set('main', `${info.mainAgent}|`);
   fillSelects();

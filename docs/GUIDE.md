@@ -85,7 +85,7 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 - **하위 작업**: 쉬고 있는 하위 에이전트 일(끝남·실패). 누르면 대화의 체크리스트 카드에서 펼친다.
 - **예약**: 이 작업에 정해 둔 시각의 지시(아래). 설정이 아니라 일정이라 늘 보인다.
 
-**원격 접속**(`src/remote.ts`, `GET/POST /remote`): 연동에서 공용 비밀번호를 정하고 켜면 사무실 네트워크용 서버를 `0.0.0.0:<화면 포트+2>`(기본 4319)에 연다. 화면에 이 PC 의 사설 주소로 만든 접속 주소가 나온다. 로그인 전에는 로그인 창만, 들어오면 같은 화면에서 작업한다(설정 버튼은 숨기고 "나가기"). 원격 명령은 대시보드와 같은 권한(`via: 'dashboard'`)이라 권한 묻지 않기 켜기·뿌리 밖 폴더·터미널이 막히고, 설정 경로는 403. **PC 앞과 같은 권한**(`full`, 기본 꺼짐)을 켜면 원격 명령에 `trusted: true` 가 붙어 그 셋이 되고 `/browse` 도 열린다. 설정·키·원격 설정·MCP 는 그래도 PC 앞에서만. 비밀번호를 바꾸거나 끄면 들어와 있던 사람은 모두 나간다. 켜져 있으면 `127.0.0.1` 화면(`GET /`)은 사무실 주소로 302 이동하고, 이 PC 자신의 네트워크 주소에서 Host 도 그 주소 그대로인 접속은 PC 앞(`rc = null`)으로 받는다. 끄면 답을 보낸 뒤 원격 서버를 닫고 화면은 `local` 주소로 돌아간다.
+**원격 접속**(`src/remote.ts`, `GET/POST /remote`): 연동에서 켜면 사무실 네트워크용 서버를 `0.0.0.0:<화면 포트+2>`(기본 4319)에 연다. 화면에 이 PC 의 사설 주소로 만든 접속 주소가 나온다. 비밀번호도 권한 구분도 없다: 원격 요청은 이 PC 화면과 같은 `route` 로 가고 명령은 `{via: 'local'}`. 문은 둘: 사설 주소에서 온 접속만(`isPrivateAddress`), Host 는 이 PC 의 주소·컴퓨터 이름·localhost 에 원격 포트(`isOwnHost`, DNS 리바인딩 차단). Origin 이 있으면 Host 와 같아야 한다. 켜져 있으면 `127.0.0.1` 화면(`GET /`)은 사무실 주소로 302 이동한다. 끄면 답을 보낸 뒤 원격 서버를 닫고 화면은 `local` 주소로 돌아간다. 예전 `data/remote.json` 의 비밀번호 해시·`full` 은 읽지 않고 다음 저장 때 지워진다.
 
 **자동 실행**(`src/autostart.ts`, `GET/POST /autostart`): 연동의 켜기/끄기. `npm run setup` 이 만드는 것 중 자동 시작 하나만 만들고 지운다 — Windows 시작프로그램의 `Agent Hub.lnk`(PowerShell WScript.Shell, 창 없이 --background), macOS LaunchAgent, 리눅스 `~/.config/autostart/agent-hub.desktop`. 바탕화면·시작 메뉴 아이콘은 그대로. 다음 로그인부터 적용. 시험용 `AGENT_HUB_STARTUP_DIR` 로 시작프로그램 폴더를 바꾼다.
 
@@ -99,7 +99,9 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 
 **예약**(`data/schedules.json`, `src/schedules.ts`): 작업마다 한 번·매일·평일·매주 정한 시각(이 PC 현지 시간), 또는 간격(저장한 때부터 N분·N시간마다, 5분~7일)으로 지시를 보낸다. 간격 예약은 그 차례에 작업이 아직 일하는 중이면 건너뛴다(지시가 쌓이지 않게). 호스트가 20초마다 확인한다. 그 작업에 "예약" 이름으로 보낸다. CLI 가 꺼져 있으면(호스트 재시작 등) 같은 작업에서 다시 띄워 앞 대화·에이전트·프리셋 지침을 붙여 보낸다. 호스트가 꺼져 있던 동안 지난 시각은 몰아서 실행하지 않고 건너뛴다. 작업을 지우면 예약도 지운다.
 
-호스트를 다시 켜도 작업 목록·대화는 기록(`data/sessions/*.jsonl`)에서 되살아난다. 작업에는 "끝남"이 없다: 대기로 되살아나고, 다음 지시가 오면 같은 작업에서 CLI 를 다시 띄워 지금까지의 대화(뒤쪽 8000자)와 역할·작업 환경 지침을 붙여 이어 간다. CLI 가 스스로 꺼져도 같다. 앞서 맡긴 하위 에이전트도 메인이 같은 continuation_id 로 부르면 다시 띄워 이어 간다.
+호스트를 다시 켜도 작업 목록·대화는 기록(`data/sessions/*.jsonl`)에서 되살아난다. 작업에는 "끝남"이 없다: 대기로 되살아나고, 다음 지시가 오면 같은 작업에서 CLI 를 다시 띄워 이어 간다. Claude 작업은 CLI 가 알려 준 대화 id(`session.cli` → `SessionInfo.cliSessionId`)의 기록이 그 CLI 의 설정 폴더(프리셋이면 전용 프로필, 아니면 `~/.claude`)에 있으면 `--resume` 으로 그 대화에 그대로 이어 간다. 없거나 Gemini·Codex 면 지금까지의 대화(뒤쪽 8000자)와 역할·작업 환경 지침을 붙인다. 설정을 바꿔 다시 띄울 때는 늘 글로 붙인다. CLI 가 스스로 꺼져도 같다. 앞서 맡긴 하위 에이전트도 메인이 같은 continuation_id 로 부르면 다시 띄워 이어 간다.
+
+**Claude Code 에서 이어 하기**(`src/external.ts`, `GET /claude-code`, `session.import`): `~/.claude/projects/*/<대화 id>.jsonl` 에서 사람이 연 세션을 찾는다(첫 지시의 `turnOrigin` 이 `sdk` 면 프로그램이 띄운 것이라 뺀다. `entrypoint` 는 띄운 쪽 환경을 물려받아 믿을 수 없다). 수십 MB 기록이 있어 앞 256KB·끝 512KB 만 읽는다. 가져오면 그 세션의 폴더(뿌리 밖이면 뿌리 밖 폴더 규칙)에서 메인 작업을 만들고 첫 CLI 부터 `--resume` 으로 띄운다. 화면에는 대화 끝부분(최대 30개)을 먼저 기록한다. 목록·가져오기 모두 PC 앞에서만(원격은 403, 명령은 `via: local` 또는 `trusted`). 2분 안에 바뀐 기록은 "사용 중"으로 표시하고 화면이 먼저 묻는다.
 
 **멈춤**(입력창의 ■, `/멈추기`, `session.stop`): 하던 차례만 멈춘다. Claude 는 stdin 의 `control_request`(interrupt), Codex·Gemini 는 ACP `session/cancel` 로 같은 CLI 를 그대로 두고 멈추며, 묻던 승인은 거부로 정리한다. 메인을 멈추면 일하던 하위 에이전트도 멈춘다. 10초 안에 안 멈추면 CLI 를 끄고 다음 지시 때 다시 띄운다.
 

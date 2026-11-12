@@ -113,6 +113,17 @@ select:disabled { opacity: .45; cursor: default; }
 /* 새 작업: 메인 에이전트 고르기 */
 .main-choose { display: inline-flex; align-items: center; gap: 8px; margin: 4px 0 18px; padding: 6px 8px 6px 16px; border: 1px solid var(--rule); border-radius: 999px; background: var(--panel); font-size: 13px; color: var(--ink-soft); }
 .main-choose select { font-size: 14px; color: var(--ink); font-weight: 500; max-width: 260px; }
+/* 새 작업: Claude Code 에서 이어 하기 */
+.cc { margin: 18px auto 0; max-width: 560px; text-align: left; }
+.cc-head { font-size: 12px; color: var(--ink-faint); margin: 0 0 6px 4px; }
+.cc-list { display: flex; flex-direction: column; border-top: 1px solid var(--rule); }
+.cc-item { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 9px 6px; border: 0; border-bottom: 1px solid var(--rule); background: none; color: var(--ink); font: inherit; cursor: pointer; }
+.cc-item:hover:not(:disabled) { background: var(--panel); }
+.cc-item:disabled { cursor: default; opacity: .5; }
+.cc-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-meta { font-size: 12px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-busy { color: var(--accent); }
+.cc-more { margin: 6px 0 0 4px; border: 0; background: none; color: var(--ink-soft); font-size: 12px; cursor: pointer; padding: 2px 0; }
 .log { max-width: 720px; margin: 0 auto; padding: 12px 20px 32px; display: flex; flex-direction: column; gap: 18px; }
 
 .msg { white-space: pre-wrap; word-break: break-word; }

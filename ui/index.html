@@ -18,7 +18,6 @@
       <nav id="task-list" class="task-list"></nav>
       <div class="side-bottom">
         <button type="button" data-nav="settings" aria-current="false" class="side-set"><span class="nav-ico">⚙</span>설정</button>
-        <button type="button" id="remote-out" class="side-set" hidden>나가기</button>
         <span id="link" class="link off" title="연결 중">연결 중</span>
       </div>
     </aside>
@@ -199,6 +198,12 @@
               <select id="main-select" title="이 작업의 메인 에이전트"></select>
             </label>
           </div>
+          <!-- 이 PC 의 Claude Code 세션 이어 하기 -->
+          <section id="cc" class="cc" hidden>
+            <div class="cc-head">Claude Code 에서 이어 하기</div>
+            <div id="cc-list" class="cc-list"></div>
+            <button id="cc-more" class="cc-more" type="button" hidden>더 보기</button>
+          </section>
         </div>
         <div id="log" class="log"></div>
       </div>

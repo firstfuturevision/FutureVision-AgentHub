@@ -14,7 +14,7 @@ import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
-import { isPrivateAddress, ownAddresses, type RemoteAccess, type RemoteSession } from '../remote.ts';
+import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
@@ -36,19 +36,15 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
-   * 요청 처리 — 이 PC 화면(rc 없음)과 원격(사무실 네트워크, rc = 로그인한 사람)이 함께 쓴다.
-   * 원격은 REMOTE_ALLOWED 에 있는 것만: 작업하기(명령·첨부·예약)와 읽기. 설정을 바꾸는 것은 PC 앞에서만.
+   * 요청 처리 — 이 PC 화면과 원격(같은 사무실 네트워크)이 똑같이 쓴다. 비밀번호도 권한 구분도 없다(사용자 결정 2026-11-12).
    */
-  const route = async (req: IncomingMessage, res: ServerResponse, rc: RemoteSession | null) => {
+  const route = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
-    // 폴더 찾아보기(뿌리 밖 폴더 연결)는 원격에 PC 앞과 같은 권한을 준 때만
-    const remoteOk = REMOTE_ALLOWED.has(`${req.method} ${url.pathname}`) || (req.method === 'GET' && url.pathname === '/browse' && remote?.full);
-    if (rc && !remoteOk) return send(res, 403, '원격에서는 쓸 수 없음 — 이 PC 앞에서 하세요');
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
-      if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, rc ? { ...info, remote: true, user: rc.name, full: Boolean(remote?.full) } : info);
-      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, rc ? { via: 'dashboard', user: `${rc.name}(원격)`, ...(remote?.full ? { trusted: true } : {}) } : { via: 'local', user: 'local' });
-      // 원격 접속 — 켜기·끄기·비밀번호(PC 앞에서만)
+      if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, info);
+      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local' });
+      // 원격 접속 — 켜기·끄기
       if (url.pathname === '/remote' && remote) {
         if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
         if (req.method === 'POST') {
@@ -88,6 +84,8 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return send(res, 400, (err as Error).message);
         }
       }
+      // 이 PC 의 Claude Code 세션 — 가져와 이어 가기(PC 앞에서만: 개인 대화가 들어 있다)
+      if (req.method === 'GET' && url.pathname === '/claude-code') return json(res, 200, sessions.claudeCodeSessions());
       // 작업 폴더 — 새 작업마다 고른다(뿌리 바로 아래). 새 폴더도 여기서 만든다.
       if (url.pathname === '/folders' && typeof info.workspaceRoot === 'string') {
         const root = info.workspaceRoot;
@@ -342,7 +340,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       res.writeHead(302, { location: `${lanUrl}/`, 'cache-control': 'no-store' });
       return res.end();
     }
-    void route(req, res, null);
+    void route(req, res);
   });
   // clink 는 작업자가 끝날 때까지(사람 승인 포함) 응답을 붙잡고 있으므로 요청 제한 시간을 끈다.
   server.requestTimeout = 0;
@@ -354,42 +352,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   const lanHandle = async (req: IncomingMessage, res: ServerResponse) => {
     const ip = (req.socket.remoteAddress ?? '').replace(/^::ffff:/i, '');
     if (!remote?.enabled || !isPrivateAddress(ip)) return send(res, 403, '사무실 네트워크에서만 들어올 수 있음');
+    // 비밀번호가 없으니 이것이 문이다: Host 는 이 PC 의 주소·이름 그대로여야 한다.
+    // 다른 이름(evil.example)이 이 PC 주소를 가리키게 해서 그 사이트가 사람 브라우저로 들어오는 것(DNS 리바인딩)을 막는다.
+    if (!isOwnHost(req.headers.host, lanPort)) return send(res, 403, '허용되지 않은 Host');
     // 다른 사이트에서 이 주소로 보내는 요청 차단: Origin 이 있으면 이 주소와 같아야 한다
     const origin = req.headers.origin;
     if (origin && origin.replace(/^https?:\/\//, '') !== req.headers.host) return send(res, 403, '허용되지 않은 Origin');
-    // 이 PC 에서 사무실 주소(예: 192.168.x.x:포트)로 연 화면 = PC 앞. 로그인 없이 모든 권한.
-    // Host 가 이 PC 의 주소 그대로여야 한다(다른 이름으로 이 PC 를 가리키는 DNS 리바인딩 차단).
-    const own = ownAddresses();
-    const host = (req.headers.host ?? '').toLowerCase();
-    if (own.has(ip.toLowerCase()) && host.endsWith(`:${lanPort}`) && own.has(host.slice(0, host.lastIndexOf(':')).replace(/^\[|\]$/g, ''))) {
-      return route(req, res, null);
-    }
-    const url = new URL(req.url ?? '/', 'http://x');
-    if (url.pathname === '/login' && req.method === 'POST') {
-      const body = (await readJson(req, res)) as any;
-      if (body === undefined) return;
-      try {
-        const token = remote.login(body?.password, body?.name, ip);
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': `ahs=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800` });
-        return res.end('{"ok":true}');
-      } catch (err) {
-        return send(res, 401, (err as Error).message);
-      }
-    }
-    if (url.pathname === '/logout' && req.method === 'POST') {
-      remote.logout(req.headers.cookie);
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': 'ahs=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
-      return res.end('{"ok":true}');
-    }
-    const who = remote.who(req.headers.cookie);
-    if (!who) {
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(LOGIN_PAGE);
-      }
-      return send(res, 401, '로그인 필요');
-    }
-    return route(req, res, who);
+    return route(req, res);
   };
   const syncLan = async () => {
     if (!remote) return;
@@ -418,40 +387,6 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     server.listen(port, '127.0.0.1', () => { void syncLan().then(() => ok(server)); });
   });
 }
-
-/** 원격(사무실 네트워크)에서 쓸 수 있는 것: 화면, 작업하기, 읽기 */
-const REMOTE_ALLOWED = new Set([
-  ...['/', '/index.html', '/app.js', '/md.js', '/style.css'].map((p) => `GET ${p}`),
-  'GET /events', 'GET /info', 'POST /cmd', 'POST /attach',
-  'GET /folders', 'POST /folders', 'GET /skills',
-  'GET /schedules', 'POST /schedules', 'DELETE /schedules',
-  'GET /work-presets', 'GET /presets', 'GET /tools', 'GET /hub-skills',
-]);
-
-const LOGIN_PAGE = `<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent Hub</title>
-<style>
-:root { color-scheme: light dark; --bg: #faf9f6; --ink: #1f1f1e; --soft: #76746e; --rule: #e4e2dc; --panel: #fff; --accent: #c96442; }
-@media (prefers-color-scheme: dark) { :root { --bg: #212120; --ink: #ecebe7; --soft: #9c9a94; --rule: #383835; --panel: #2a2a28; --accent: #d97757; } }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink); font: 15px/1.6 "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
-form { width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
-h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
-input { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; }
-button { font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 10px; cursor: pointer; }
-p { margin: 0; min-height: 1.6em; font-size: 13px; color: var(--soft); }
-</style></head><body>
-<form id="f"><h1>Agent Hub</h1>
-<input name="name" placeholder="이름 (기록에 남음)" autocomplete="nickname" maxlength="20">
-<input name="password" type="password" placeholder="비밀번호" autocomplete="current-password" required autofocus>
-<button>들어가기</button><p id="m"></p></form>
-<script>
-document.getElementById('f').onsubmit = async (e) => {
-  e.preventDefault();
-  const f = e.target.elements;
-  const r = await fetch('/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: f.name.value, password: f.password.value }) });
-  if (r.ok) location.reload(); else document.getElementById('m').textContent = await r.text();
-};
-</script></body></html>`;
 
 function events(req: IncomingMessage, res: ServerResponse, sessions: SessionManager) {
   res.writeHead(200, {

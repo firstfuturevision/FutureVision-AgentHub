@@ -29,6 +29,8 @@ export interface SessionInfo {
   copiedFrom?: string; // 복사한 원래 세션 id(대화는 이어받지만 공유하지 않음)
   extraDirs?: string[]; // 작업 폴더 말고 더 연결한 폴더(절대 경로, 작업 폴더 뿌리 안)
   autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
+  cliSessionId?: string; // Claude 만: CLI 의 대화 id. 다시 띄울 때 --resume 으로 그 대화에 그대로 이어 간다
+  imported?: boolean; // 이 PC 의 Claude Code 세션을 가져와 이어 가는 작업
   title: string;
   workdir: string;
   requestedBy: string; // 대시보드 사용자 이름, 로컬이면 'local'
@@ -43,6 +45,8 @@ export type HostEvent =
   | { type: 'session.status'; sessionId: string; status: SessionInfo['status'] }
   | { type: 'session.ended'; sessionId: string; reason: string } // CLI 가 꺼짐. 작업은 대기로 남고 다음 지시 때 다시 띄운다
   | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
+  | { type: 'session.cli'; sessionId: string; cliSessionId: string } // CLI 가 알려 준 대화 id(바뀔 때만)
+  | { type: 'session.imported'; sessionId: string; shown: number } // Claude Code 에서 가져옴 — 앞의 shown 개는 그 대화의 끝부분
   | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[] }
   | { type: 'agent.text'; sessionId: string; text: string; partial: boolean }
   // CLI 가 알려 준 쓸 수 있는 모델 목록 (ACP session/new 의 models) — 화면 드롭다운을 실제 목록으로 바꾼다
@@ -81,6 +85,7 @@ export type ClientCommand =
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
   | { type: 'session.split'; sessionId: string } // 분담: 포크처럼 이어받고, 원본과 서로 한 일을 주고받는다(양쪽 공유)
+  | { type: 'session.import'; cliSessionId: string } // 이 PC 의 Claude Code 세션을 가져와 그 대화에 이어 간다(PC 앞에서만)
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
   // 에이전트 설정 바꾸기: null = 없앰(기본), 없음 = 그대로. 메인 CLI 를 새 설정으로 다시 띄우고 지금까지의 대화를 다음 지시에 붙인다
@@ -97,6 +102,8 @@ export interface CommandOrigin {
 
 export const AGENTS: readonly AgentKind[] = ['claude', 'gemini', 'codex'];
 /** 모델 이름은 CLI 인자로 넘어가므로 안전한 글자만 허용한다 (예: claude-sonnet-5-5, gpt-5.5-codex, gemini-3-pro). */
+/** Claude Code 대화 id(파일 이름이 되므로 이 모양만) */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\-\/\[\]]{0,79}$/;
 
 /** 첨부: 최대 10개, 경로는 반드시 첨부/ 아래(상위 이동 불가) */
@@ -192,6 +199,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
     case 'session.delete':
       if (!str(c.sessionId)) return null;
       return { type: c.type, sessionId: c.sessionId as string };
+    case 'session.import':
+      if (typeof c.cliSessionId !== 'string' || !UUID_RE.test(c.cliSessionId)) return null;
+      return { type: 'session.import', cliSessionId: c.cliSessionId.toLowerCase() };
     case 'terminal.open':
       if (!AGENTS.includes(c.agent as AgentKind)) return null;
       return {
