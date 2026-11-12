@@ -452,11 +452,12 @@ function renderAuth() {
     list.append(row);
   }
   if (ghState) list.append(githubRow());
+  // 업데이트(프로그램)와 공유(에이전트·프리셋·스킬·툴)는 둘 다 레포에서 받아 오는 것이라 붙여 둔다
   if (updState) list.append(updateRow());
+  if (sharedState) list.append(sharedRow());
   list.append(permRow());
   if (autoState?.supported) list.append(autoRow());
   if (remoteState) list.append(remoteRow());
-  if (sharedState) list.append(sharedRow());
 }
 
 /** GitHub — 회사 계정으로 로그인. 저장소 만들기·푸시에 쓴다 */
@@ -520,6 +521,7 @@ function updateRow() {
   }
   head.append(seg);
   row.append(head);
+  row.append(el('div', 'auth-note', 'Agent Hub 프로그램을 새 버전으로 바꿉니다. 에이전트·프리셋·스킬·툴은 바로 아래 공유에서 받아요.'));
 
   const repo = el('div', 'auth-body');
   const inp = el('input', 'key-input');
