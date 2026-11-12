@@ -21,6 +21,8 @@ const store = {
 
 // ── 보내기 ──────────────────────────────────
 async function send(cmd) {
+  // 처음 일을 맡길 때 알림 허락을 묻는다(브라우저는 사람이 누를 때만 물을 수 있다)
+  if (cmd.type === 'user.message' && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
   const res = await fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd) });
   if (!res.ok) flash(`요청 실패 (${res.status}): ${await res.text()}`, true);
 }
@@ -1262,6 +1264,7 @@ es.onopen = () => {
   }).catch(() => {});
   // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 그린다.
   sessions.clear();
+  replayed = false;
   render();
   link.textContent = '';
   link.title = '이 PC 의 Agent Hub 에 연결됨';
@@ -1275,6 +1278,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
+  if (ev.type === 'replay.done') { replayed = true; return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -1286,6 +1290,7 @@ function onEvent(ev) {
 
   if (ev.type === 'session.deleted') {
     sessions.delete(ev.sessionId);
+    if (ev.sessionId in seen) { delete seen[ev.sessionId]; saveSeen(); }
     for (const s of sessions.values()) s.items = s.items.filter((it) => !(it.k === 'worker' && it.id === ev.sessionId));
     if (viewId === ev.sessionId) viewId = null;
     return renderSoon();
@@ -1309,9 +1314,12 @@ function onEvent(ev) {
 
   const s = ev.sessionId && sessions.get(ev.sessionId);
   if (!s) return;
+  const at = ev.at ?? Date.now(); // 조각 글은 시각이 없다
+  if (ev.at) s.lastAt = Math.max(s.lastAt ?? 0, ev.at);
   switch (ev.type) {
     case 'session.status':
       s.info.status = ev.status;
+      if (ev.status !== 'working') s.doing = null;
       // 쉬거나 끝나면 답 없이 남은 승인 카드는 닫는다(예전 버전 기록·놓친 소식에도 "승인 대기"로 남지 않게)
       if (ev.status === 'idle' || ev.status === 'ended') for (const it of s.items) if (it.k === 'perm' && !it.resolved) it.resolved = { allow: false, by: '차례 끝남' };
       break;
@@ -1336,9 +1344,9 @@ function onEvent(ev) {
     case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
-    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = Date.now(); break;
+    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
     case 'agent.text':
-      if (ev.partial) s.draft = ev.text;
+      if (ev.partial) { s.draft = ev.text; setDoing(s, '답 쓰는 중', at); }
       else { s.draft = null; s.items.push({ k: 'agent', t: ev.text }); }
       break;
     case 'agent.models':
@@ -1347,6 +1355,7 @@ function onEvent(ev) {
       fillSelects();
       break;
     case 'agent.tool':
+      setDoing(s, /clink/.test(ev.name) ? '하위 에이전트에게 맡김' : `${toolLabel(ev.name)} ${brief(ev.input)}`.trim(), at);
       if (s.info.role === 'main' && /clink/.test(ev.name)) break; // 메인의 맡기기는 카드가 대신 보여 준다
       s.items.push({ k: 'line tool', t: `${toolLabel(ev.name)} ${brief(ev.input)}`.trim(), toolId: ev.toolId });
       break;
@@ -1357,11 +1366,17 @@ function onEvent(ev) {
     case 'turn.done':
       // 화면에는 걸린 시간만. 비용은 기록(data/sessions/*.jsonl)에만 남긴다.
       s.items.push({ k: 'line meta', t: `${(ev.durationMs / 1000).toFixed(1)}초` });
+      s.doing = null;
+      if (s.info.role === 'main') {
+        if (ev.at) s.doneAt = ev.at; // 시각을 안 주는 예전 호스트면 안 읽음 표시는 하지 않는다
+        if (replayed) notify(s, `끝남 · ${s.items.filter((it) => it.k === 'agent').at(-1)?.t ?? ''}`);
+      }
       break;
     case 'agent.image': s.items.push({ k: 'image', url: ev.url, name: ev.name, caption: ev.caption }); break;
     case 'permission.request':
       if (ev.auto) break; // 자동 허용할 요청: 화면에는 아예 올리지 않는다(바로 뒤 허용과 사이에 "승인 대기"가 깜빡이지 않게)
       s.items.push({ k: 'perm', requestId: ev.requestId, t: ev.tool, detail: ev.detail, resolved: null });
+      if (replayed) notify(s, `승인 필요 · ${ev.tool}`);
       if (s.info.role === 'worker') opened.add(s.info.id); // 승인이 필요하면 카드를 펼친다
       break;
     case 'permission.resolved': {
@@ -1383,6 +1398,49 @@ const workersOf = (s) => s.items.filter((it) => it.k === 'worker').map((it) => s
 // 승인을 기다리는 건 일하는 중일 때뿐이다(묻는 CLI 는 차례 안에서 묻는다). 쉬는 작업에 남은 답 없는 요청은 기다리는 게 아니다
 const pendingPerm = (s) => (s.info.status === 'working' || s.info.status === 'starting') && s.items.some((it) => it.k === 'perm' && !it.resolved);
 const waitingIn = (s) => pendingPerm(s) || workersOf(s).some(pendingPerm);
+
+// ── 지금 하는 일·안 읽은 답·알림 ──
+let replayed = false; // 접속 직후 다시 받는 기록이 끝났나(그 뒤 것만 알린다)
+/** 마지막으로 본 시각(작업별, 서버 시각). 이 브라우저에만 기억. 처음 연 브라우저는 그 전 것을 다 읽은 것으로 친다 */
+const seen = (() => { try { return JSON.parse(localStorage.getItem('hub.seen') || '{}'); } catch { return {}; } })();
+const seenBase = Number(localStorage.getItem('hub.seenBase')) || (() => { const t = Date.now(); try { localStorage.setItem('hub.seenBase', String(t)); } catch {} return t; })();
+function saveSeen() { try { localStorage.setItem('hub.seen', JSON.stringify(seen)); } catch {} }
+const watching = () => document.visibilityState === 'visible' && document.hasFocus();
+const unread = (s) => (s.doneAt ?? 0) > (seen[s.info.id] ?? seenBase);
+function markSeen(s) {
+  if (!s.lastAt || s.lastAt <= (seen[s.info.id] ?? 0)) return;
+  seen[s.info.id] = s.lastAt;
+  saveSeen();
+}
+function setDoing(s, text, at) { s.doing = text; s.doingAt = at; }
+/** 작업 줄에 띄울 지금 하는 일: 메인과 하위 에이전트 중 가장 최근 것 */
+function doingOf(s) {
+  const busy = [s, ...workersOf(s)].filter((x) => x.doing && (x.info.status === 'working' || x.info.status === 'starting'));
+  return busy.sort((a, b) => b.doingAt - a.doingAt)[0]?.doing ?? '';
+}
+function sinceText(ms) {
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  return sec < 60 ? '방금 시작' : sec < 3600 ? `${Math.floor(sec / 60)}분째` : `${Math.floor(sec / 3600)}시간 ${Math.floor((sec % 3600) / 60)}분째`;
+}
+/** 브라우저 알림: 그 작업을 보고 있지 않을 때만. 누르면 그 작업으로 */
+function notify(s, body) {
+  const main = s.info.role === 'worker' ? sessions.get(s.info.parentId) : s;
+  if (!main || (main.info.id === viewId && watching())) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const n = new Notification(titleOf(main).slice(0, 60), { body: body.replace(/\s+/g, ' ').slice(0, 140), tag: main.info.id });
+  n.onclick = () => { window.focus(); viewId = main.info.id; showNav('sessions'); render(); n.close(); };
+}
+/** 탭 제목에 확인할 작업 수: (2) Agent Hub */
+const baseTitle = document.title;
+function syncTitle() {
+  const n = mains().filter((s) => waitingIn(s) || (unread(s) && !(s.info.id === viewId && watching()))).length;
+  document.title = n ? `(${n}) ${baseTitle}` : baseTitle;
+}
+// 창으로 돌아오면 보고 있던 작업을 읽은 것으로
+addEventListener('focus', () => renderSoon());
+document.addEventListener('visibilitychange', () => renderSoon());
+// 작업 줄의 "3분째"를 맞춘다
+setInterval(() => { if (mains().some(isBusy)) renderList(); }, 15000);
 const titleOf = (s) => {
   const first = s.items.find((it) => it.k === 'user');
   return s.info.customTitle || first?.t || (first?.files?.length ? first.files[0].name : '') || (s.info.forkedFrom ? '포크한 작업' : s.info.splitFrom ? '분담한 작업' : s.info.copiedFrom ? '복사한 작업' : '새 작업');
@@ -2134,6 +2192,7 @@ function renderList() {
   };
   for (const s of all) if (!parentOf(s) || !sessions.get(parentOf(s))) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
+  syncTitle();
 }
 
 /** 작업 한 줄. 포크(depth>0)는 이름만. open: 포크가 달려 있으면 펼침 여부, 없으면 null */
@@ -2142,10 +2201,17 @@ function taskRow(s, depth, open) {
   b.type = 'button';
   b.setAttribute('aria-current', String(s.info.id === viewId));
   const wait = waitingIn(s);
+  const busy = isBusy(s);
+  const fresh = !busy && unread(s) && s.info.id !== viewId; // 끝났는데 아직 안 본 답
   const time = new Date(s.info.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
   if (depth && s.info.splitFrom) head.append(el('span', 'task-tag', '분담')); // 서로 공유하는 갈래
-  head.append(el('span', 'task-title', titleOf(s)));
+  head.append(el('span', `task-title${fresh ? ' fresh' : ''}`, titleOf(s)));
+  if (fresh) {
+    const dot = el('span', 'task-dot');
+    dot.setAttribute('aria-label', '새 답');
+    head.append(dot);
+  }
   if (open !== null) {
     const fold = el('span', `task-fold${open ? '' : ' shut'}`);
     fold.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -2161,8 +2227,13 @@ function taskRow(s, depth, open) {
     head.append(fold);
   }
   b.append(head);
-  if (!depth) b.append(el('span', `task-sub${wait ? ' wait' : ''}`, `${NAMES[s.info.agent]} · ${wait ? '승인 대기' : STATUS[s.info.status]} · ${s.info.via === 'dashboard' ? '대시보드 · ' : ''}${time}`));
-  else b.title = `${wait ? '승인 대기' : STATUS[s.info.status]} · ${time}`;
+  // 일하는 중이면 지금 하는 일과 경과 시간, 아니면 AI · 상태 · 만든 시각
+  const state = wait ? '승인 대기' : busy ? `${doingOf(s) || '작업 중'} · ${sinceText(s.turnStart ?? Date.now())}` : fresh ? '새 답' : STATUS[s.info.status];
+  if (!depth) {
+    const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '대시보드 · ' : ''}${time}`);
+    sub.title = sub.textContent;
+    b.append(sub);
+  } else b.title = `${state} · ${time}`;
   b.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
   b.oncontextmenu = (e) => { e.preventDefault(); openTaskMenu(s, e.clientX, e.clientY); };
   const more = el('span', 'task-more', '⋯');
@@ -2180,6 +2251,7 @@ function taskRow(s, depth, open) {
 function renderChat() {
   const s = viewId && sessions.get(viewId);
   const live = s && s.info.status !== 'ended';
+  if (s && watching()) markSeen(s);
   $('welcome').hidden = Boolean(s);
   $('chat-title').textContent = s ? titleOf(s) : '새 작업';
   const wait = s && waitingIn(s);

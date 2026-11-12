@@ -134,6 +134,12 @@ export class SessionManager {
   private stamp(ev: HostEvent, ms = Date.now()) {
     this.order.set(ev, ms * 1000 + (this.seq++ % 1000));
   }
+
+  /** 이벤트가 일어난 시각(ms). 기록하지 않는 조각 글은 undefined */
+  timeOf(ev: HostEvent): number | undefined {
+    const o = this.order.get(ev);
+    return o === undefined ? undefined : Math.floor(o / 1000);
+  }
   private askSeq = 0;
 
   constructor(opts: {

@@ -470,7 +470,9 @@ function events(req: IncomingMessage, res: ServerResponse, sessions: SessionMana
     connection: 'keep-alive',
   });
   res.write(': connected\n\n');
-  const unsubscribe = sessions.subscribe((ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
+  // at: 일어난 시각(화면의 경과 시간·안 읽음 계산용). 기록을 다 보내면 replay.done — 그 뒤 것만 새 소식이라 알림을 띄운다
+  const unsubscribe = sessions.subscribe((ev) => res.write(`data: ${JSON.stringify({ ...ev, at: sessions.timeOf(ev) })}\n\n`));
+  res.write(`data: ${JSON.stringify({ type: 'replay.done' })}\n\n`);
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => {
     clearInterval(ping);

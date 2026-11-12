@@ -72,6 +72,11 @@ select:disabled { opacity: .45; cursor: default; }
 .task.kid .task-title { font-size: 13.5px; }
 .task-sub { font-size: 12px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-sub.wait { color: var(--accent); }
+/* 일하는 중: 지금 하는 일, 끝났는데 안 본 답: 굵은 제목과 점 */
+.task-sub.busy { color: var(--ink-soft); }
+.task-sub.fresh { color: var(--ink); }
+.task-title.fresh { font-weight: 600; }
+.task-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
 .task-more { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 6px; color: var(--ink-soft); opacity: 0; }
 .task:hover .task-more, .task[aria-current="true"] .task-more { opacity: 1; }
 .task-more:hover { background: var(--rule); color: var(--ink); }
