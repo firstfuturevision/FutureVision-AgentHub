@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as netServer, type AddressInfo } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { SessionManager } from '../src/sessions.ts';
 import { ClaudeAdapter } from '../src/adapters/claude.ts';
 import { startLocalServer } from '../src/transports/local.ts';
@@ -53,7 +54,7 @@ test('원격 서버: 로그인해야 들어오고, 작업은 되지만 설정은
   sessions.subscribe((e) => events.push(e));
   const remote = new RemoteAccess(join(base, 'data', 'remote.json'), lanPort);
   const server = await startLocalServer({ port, uiDir: ui, sessions, info: { workspaceRoot: join(base, 'ws') }, remote });
-  const local = (path: string, body?: object) => fetch(`http://127.0.0.1:${port}${path}`, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const local = (path: string, body?: object, extra: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...extra, ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
   const lan = (path: string, opts: { body?: object; cookie?: string; origin?: string } = {}) => fetch(`http://127.0.0.1:${lanPort}${path}`, {
     method: opts.body ? 'POST' : 'GET',
     headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(opts.cookie ? { cookie: opts.cookie } : {}), ...(opts.origin ? { origin: opts.origin } : {}) },
@@ -110,8 +111,29 @@ test('원격 서버: 로그인해야 들어오고, 작업은 되지만 설정은
   await local('/remote', { full: false });
   assert.equal((await lan('/browse', { cookie })).status, 403);
 
+  // 켜져 있으면 이 PC 화면(127.0.0.1)은 사무실 주소로 옮겨 가고, 이 PC 에서 그 주소로 들어오면 로그인 없이 PC 앞 권한
+  const lanUrl = remote.urls()[0];
+  if (lanUrl) {
+    const moved = await local('/', undefined, { redirect: 'manual' });
+    assert.equal(moved.status, 302);
+    assert.equal(moved.headers.get('location'), `${lanUrl}/`);
+    const self = (await (await fetch(`${lanUrl}/info`)).json()) as Record<string, unknown>;
+    assert.equal(self.remote, undefined);
+    assert.equal((await fetch(`${lanUrl}/remote`)).status, 200); // 설정도 된다
+    // 이 PC 를 다른 이름으로 가리키는 주소(DNS 리바인딩)는 PC 앞으로 치지 않는다
+    const host = new URL(lanUrl).hostname;
+    const rebound = await new Promise<number>((ok, fail) => {
+      const r = httpRequest({ host, port: lanPort, path: '/info', headers: { host: `evil.example:${lanPort}` } }, (res) => { res.resume(); ok(res.statusCode ?? 0); });
+      r.on('error', fail);
+      r.end();
+    });
+    assert.equal(rebound, 401);
+  }
+
   // 끄면 원격 포트가 닫히고, 이 PC 화면은 그대로
-  await local('/remote', { enabled: false });
+  const off = await (await local('/remote', { enabled: false })).json();
+  assert.equal(off.local, `http://127.0.0.1:${port}`);
+  assert.equal((await local('/', undefined, { redirect: 'manual' })).status, 200);
   await assert.rejects(lan('/info', { cookie }));
   assert.equal((await local('/info')).status, 200);
   sessions.stopAll();

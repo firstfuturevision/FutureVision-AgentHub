@@ -595,8 +595,16 @@ function remoteRow() {
     sw.disabled = true;
     const x = await postJson('/remote', { enabled: !r.enabled });
     if (x) { remoteState = x; flash(x.error ?? (x.enabled ? '원격 접속 켬' : '원격 접속 끔'), Boolean(x.error)); }
-    renderAuth();
+    if (!moveTo(x)) renderAuth();
   };
+  // 켜면 이 화면도 사무실 주소로(주소창을 그대로 알려 줄 수 있게), 끄면 그 주소가 닫히니 127.0.0.1 로
+  const moveTo = (x) => {
+    const go = x && (x.enabled && !x.error ? x.urls[0] : x.local);
+    if (!go || new URL(go).host === location.host) return false;
+    setTimeout(() => { location.href = `${go}/`; }, 600);
+    return true;
+  };
+  head.append(el('span', `auth-state${r.enabled ? ' on' : ' off'}`, r.enabled ? '켜짐' : '꺼짐'));
   head.append(sw);
   row.append(head);
 
@@ -610,9 +618,10 @@ function remoteRow() {
   save.type = 'button';
   save.onclick = async () => {
     if (!inp.value) return flash('비밀번호를 적어 주세요', true);
-    const x = await postJson('/remote', { password: inp.value });
-    if (x) { remoteState = x; flash(r.hasPassword ? '비밀번호를 바꿨어요. 들어와 있던 사람은 다시 로그인합니다' : '비밀번호 저장'); }
-    renderAuth();
+    // 처음 정하는 비밀번호는 켜려고 정하는 것이니 바로 켠다
+    const x = await postJson('/remote', r.hasPassword ? { password: inp.value } : { password: inp.value, enabled: true });
+    if (x) { remoteState = x; flash(x.error ?? (r.hasPassword ? '비밀번호를 바꿨어요. 들어와 있던 사람은 다시 로그인합니다' : '비밀번호 저장, 원격 접속 켬'), Boolean(x.error)); }
+    if (r.hasPassword || !moveTo(x)) renderAuth();
   };
   pw.append(inp, save);
   row.append(pw);
@@ -633,11 +642,11 @@ function remoteRow() {
   };
   full.append(el('span', 'auth-state', 'PC 앞과 같은 권한'), fsw);
   full.append(el('div', 'hint-inline auth-help', '권한 묻지 않기 켜기, 뿌리 밖 폴더 연결, 터미널. 설정·키는 켜도 PC 앞에서만'));
-  row.append(full);
+  if (r.enabled) row.append(full); // 꺼져 있을 때 이 스위치가 원격 접속 스위치처럼 보이지 않게
 
   const body = el('div', 'auth-body');
   if (r.error) body.append(el('span', 'auth-state off', r.error));
-  // 다른 PC·폰에서 들어올 주소(이 PC 의 사무실 네트워크 주소). 이 PC 자신은 그대로 127.0.0.1
+  // 다른 PC·폰에서 들어올 주소(이 PC 의 사무실 네트워크 주소). 켜져 있으면 이 PC 화면도 이 주소로 열린다
   for (const u of r.urls) body.append(el('span', `auth-code${r.enabled ? '' : ' off'}`, u));
   if (!r.urls.length) body.append(el('span', 'auth-state off', '사무실 네트워크 주소를 찾지 못함(Wi-Fi·랜 연결 확인)'));
   body.append(el('div', 'hint-inline auth-help', r.enabled

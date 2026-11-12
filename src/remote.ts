@@ -6,6 +6,7 @@ import { dirname } from 'node:path';
 /**
  * 원격 접속(사무실 네트워크만) — 같은 망의 다른 PC·폰에서 공용 비밀번호로 들어온다.
  *  - 끄면(기본) 이 PC 에서만(127.0.0.1). 켜면 사설 주소(192.168·10·172.16-31·169.254, fe80·fc/fd)의 접속만 받는 서버를 하나 더 연다.
+ *  - 켜져 있으면 이 PC 화면도 사무실 주소로 연다(127.0.0.1 → 302). 이 PC 에서 그 주소로 들어오면 로그인 없이 PC 앞 권한.
  *  - 비밀번호는 scrypt 해시로만 저장(data/remote.json). 로그인하면 이 서버가 기억하는 쿠키(다시 켜면 다시 로그인).
  *  - 원격 사람은 작업만 한다. 설정·키·자동 실행은 PC 앞에서만.
  *    권한 묻지 않기 켜기·뿌리 밖 폴더·터미널은 "PC 앞과 같은 권한"(full)을 켰을 때만 원격에도 된다(기본 꺼짐).
@@ -30,6 +31,16 @@ export function isPrivateAddress(addr: string | undefined): boolean {
     return x === 10 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 169 && y === 254);
   }
   return /^(fe8|fe9|fea|feb|fc|fd)/.test(a); // 링크 로컬·고유 로컬
+}
+
+/**
+ * 이 PC 자신의 네트워크 주소들(가상 네트워크 포함, 127.0.0.1 은 빼고) — 이 PC 에서 자기 사무실 주소로 들어오면 보내는 쪽도 이 주소다.
+ * 127.0.0.1 로 원격 포트에 들어오는 것은 원격처럼 다룬다(시험이 그렇게 원격을 흉내 낸다).
+ */
+export function ownAddresses(): Set<string> {
+  const out = new Set<string>();
+  for (const list of Object.values(networkInterfaces())) for (const n of list ?? []) if (!n.internal) out.add(n.address.toLowerCase());
+  return out;
 }
 
 export class RemoteAccess {

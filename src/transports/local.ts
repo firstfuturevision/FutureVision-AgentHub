@@ -14,7 +14,7 @@ import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
-import { isPrivateAddress, type RemoteAccess, type RemoteSession } from '../remote.ts';
+import { isPrivateAddress, ownAddresses, type RemoteAccess, type RemoteSession } from '../remote.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
 import { pickFolderNative } from '../pickfolder.ts';
@@ -50,7 +50,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, rc ? { via: 'dashboard', user: `${rc.name}(원격)`, ...(remote?.full ? { trusted: true } : {}) } : { via: 'local', user: 'local' });
       // 원격 접속 — 켜기·끄기·비밀번호(PC 앞에서만)
       if (url.pathname === '/remote' && remote) {
-        if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError });
+        if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
@@ -59,8 +59,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           } catch (err) {
             return send(res, 400, (err as Error).message);
           }
+          // 끌 때는 답을 먼저 보내고 닫는다(사무실 주소로 연 이 PC 화면이 답을 받고 127.0.0.1 로 옮겨 가게)
+          if (!remote.enabled) {
+            res.once('finish', () => void syncLan());
+            return json(res, 200, { ...remote.public(), error: null, local: `http://127.0.0.1:${port}` });
+          }
           await syncLan();
-          return json(res, 200, { ...remote.public(), error: lanError });
+          return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
         }
       }
       if (url.pathname.startsWith('/mcp/')) return await mcp(req, res, sessions, url.pathname.slice(5));
@@ -331,6 +336,12 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     if (!allowedHosts.has(req.headers.host ?? '')) return send(res, 403, '허용되지 않은 Host');
     const origin = req.headers.origin;
     if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ''))) return send(res, 403, '허용되지 않은 Origin');
+    // 원격 접속이 켜져 있으면 화면은 사무실 주소로 연다 — 주소창 주소를 그대로 다른 사람에게 알려 줄 수 있게
+    const lanUrl = lan && remote ? remote.urls()[0] : undefined;
+    if (lanUrl && req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+      res.writeHead(302, { location: `${lanUrl}/`, 'cache-control': 'no-store' });
+      return res.end();
+    }
     void route(req, res, null);
   });
   // clink 는 작업자가 끝날 때까지(사람 승인 포함) 응답을 붙잡고 있으므로 요청 제한 시간을 끈다.
@@ -346,6 +357,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     // 다른 사이트에서 이 주소로 보내는 요청 차단: Origin 이 있으면 이 주소와 같아야 한다
     const origin = req.headers.origin;
     if (origin && origin.replace(/^https?:\/\//, '') !== req.headers.host) return send(res, 403, '허용되지 않은 Origin');
+    // 이 PC 에서 사무실 주소(예: 192.168.x.x:포트)로 연 화면 = PC 앞. 로그인 없이 모든 권한.
+    // Host 가 이 PC 의 주소 그대로여야 한다(다른 이름으로 이 PC 를 가리키는 DNS 리바인딩 차단).
+    const own = ownAddresses();
+    const host = (req.headers.host ?? '').toLowerCase();
+    if (own.has(ip.toLowerCase()) && host.endsWith(`:${lanPort}`) && own.has(host.slice(0, host.lastIndexOf(':')).replace(/^\[|\]$/g, ''))) {
+      return route(req, res, null);
+    }
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname === '/login' && req.method === 'POST') {
       const body = (await readJson(req, res)) as any;
