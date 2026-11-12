@@ -1,4 +1,6 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, openSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.ts';
@@ -78,15 +80,33 @@ const sessions = new SessionManager({
   },
 });
 
-// 업데이트: 실행기(npm start)로 띄웠을 때만 받은 뒤 스스로 다시 켠다
+// 업데이트: 받은 뒤 스스로 다시 켠다. 실행기(npm start)로 띄웠으면 실행기가(종료 코드 75),
+// 아니면 같은 명령으로 새 Agent Hub 를 떼어 띄우고 꺼진다(새 것은 화면 포트가 비기를 기다린다)
 const updater = new Updater({
   root,
   file: join(cfg.dataDir, 'update.json'),
   defaultRepo: cfg.updateRepo,
   gitEnv: () => github.sessionEnv(),
   busy: () => sessions.list().some((s) => s.status === 'working' || s.status === 'starting'),
-  restart: process.env.AGENT_HUB_LAUNCHER === '1' ? () => shutdown(75) : undefined,
+  restart: () => (process.env.AGENT_HUB_LAUNCHER === '1' ? shutdown(75) : selfRestart()),
 });
+
+/** 실행기 없이 켠 경우의 다시 켜기: 같은 node·같은 인자로 떼어 띄우고(출력은 data/logs/hub.log) 이것은 끈다 */
+function selfRestart() {
+  const logFile = join(cfg.dataDir, 'logs', 'hub.log');
+  mkdirSync(dirname(logFile), { recursive: true });
+  const out = openSync(logFile, 'a');
+  const next = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: ['ignore', out, out],
+    windowsHide: true,
+    env: { ...process.env, AGENT_HUB_RESTART_WAIT: '1' },
+  });
+  next.unref();
+  console.log(`[agent-hub] 업데이트를 받아 다시 켭니다(새 프로세스 ${next.pid}, 기록 ${logFile})`);
+  shutdown(0);
+}
 
 // 공유 레포: 프리셋·에이전트·스킬·툴을 회사 GitHub 레포로 주고받는다
 const shared = new SharedRepo({
@@ -110,8 +130,10 @@ if (restored) console.log(`[agent-hub] 기록에서 작업 ${restored}개를 되
 const remote = new RemoteAccess(join(cfg.dataDir, 'remote.json'), cfg.port + 2); // 원격 접속(사무실 네트워크만)
 // 화면 제어(기본 꺼짐) — Windows 는 도우미를 처음 쓸 때 컴파일해 data/bin 에 둔다
 const screen = new ScreenControl({ file: join(cfg.dataDir, 'screen.json'), binDir: join(cfg.dataDir, 'bin'), source: join(root, 'src', 'screen-helper.cs') });
-const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
+// 스스로 다시 켤 때는 앞의 Agent Hub 가 화면 포트를 놓을 때까지 기다린다(최대 30초)
+const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,
+    bootId: randomUUID(), // 화면이 "다시 켜졌다"를 알아채고 새로 고치는 데 쓴다
     platform: process.platform,
     mainAgent: cfg.mainAgent,
     models: cfg.models,
@@ -139,7 +161,17 @@ const server = await startLocalServer({ port: cfg.port, uiDir: join(root, 'ui'),
   // 원격 접속(사무실 네트워크만, 공용 비밀번호). 끄면 이 PC 에서만. 원격 포트 기본 = 화면 포트 + 2
   remote,
   screen,
-});
+};
+const server = await (async () => {
+  for (let i = 0; ; i++) {
+    try {
+      return await startLocalServer(serverOpts);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE' || process.env.AGENT_HUB_RESTART_WAIT !== '1' || i >= 60) throw err;
+      await new Promise((ok) => setTimeout(ok, 500));
+    }
+  }
+})();
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);
 // 업데이트: 1분마다 정한 시각이 지났는지 본다(켜진 뒤 처음은 10초 뒤)

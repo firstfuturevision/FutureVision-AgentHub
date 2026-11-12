@@ -26,6 +26,7 @@ export interface UpdatePublic {
   lastCheck?: string;
   checking: boolean;
   canRestart: boolean;
+  waiting: boolean; // 받아 두었고, 진행 중인 작업이 끝나길 기다려 다시 켠다
 }
 
 type Status = { state: UpdateState; message?: string; current?: string; latest?: string; behind?: number };
@@ -82,6 +83,7 @@ export class Updater {
       lastCheck: this.saved.lastCheck,
       checking: Boolean(this.running),
       canRestart: Boolean(this.restart),
+      waiting: this.restartPending && Boolean(this.restart),
     };
   }
 
@@ -185,6 +187,13 @@ export class Updater {
     else if (dirty) this.st = { ...base, state: 'blocked', message: '이 PC 에서 고친 파일이 있어 받지 않음' };
     else this.st = { ...base, state: 'available' };
     return ref;
+  }
+
+  /** 받아 둔 업데이트로 지금 다시 켠다(진행 중인 작업이 있어도 — 대화는 다시 켠 뒤 이어진다) */
+  restartNow() {
+    if (!this.restartPending || !this.restart) return;
+    this.restartPending = false;
+    this.restart();
   }
 
   /** 받아 둔 업데이트가 있고, 진행 중인 작업이 없으면 다시 켠다 */

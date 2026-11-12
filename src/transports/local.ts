@@ -218,6 +218,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           try {
             if (body?.action === 'check') void updater.check();
             else if (body?.action === 'apply') void updater.apply();
+            else if (body?.action === 'restart') setTimeout(() => updater.restartNow(), 300); // 답을 보낸 뒤
             else updater.set(body ?? {});
           } catch (err) {
             return send(res, 400, (err as Error).message);

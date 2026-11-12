@@ -539,14 +539,24 @@ function updateRow() {
     const go = el('button', 'line-btn', '업데이트');
     go.type = 'button';
     go.onclick = async () => {
-      const text = u.canRestart ? '받은 뒤 진행 중인 작업이 끝나면 Agent Hub 를 다시 켭니다.' : '받은 뒤 Agent Hub 를 직접 다시 켜야 적용됩니다.';
+      const text = '받은 뒤 Agent Hub 를 다시 켭니다. 진행 중인 작업이 있으면 끝난 뒤에(기다리는 동안 "지금 다시 켜기" 가능).';
       if (!(await askDialog({ title: '업데이트', text, ok: '받기' }))) return;
       const r = await postJson('/update', { action: 'apply' });
       if (r) { updState = r; renderAuth(); pollAuth(); }
     };
     body.append(go);
   }
-  if (u.state === 'ready' && !u.canRestart) body.append(el('span', 'auth-state off', '다시 켜야 적용'));
+  if (u.state === 'ready' && u.waiting) {
+    // 받아 두었고 작업이 끝나길 기다리는 중 — 바로 다시 켜기
+    body.append(el('span', 'auth-state', '작업이 끝나면 다시 켬'));
+    const now = el('button', 'line-btn', '지금 다시 켜기');
+    now.type = 'button';
+    now.onclick = async () => {
+      if (!(await askDialog({ title: '지금 다시 켜기', text: '진행 중인 작업을 멈추고 다시 켭니다. 대화는 다시 켠 뒤 다음 지시부터 이어집니다. 에이전트가 띄워 둔 서버는 다시 켜 달라고 해야 합니다.', ok: '다시 켜기' }))) return;
+      if (await postJson('/update', { action: 'restart' })) flash('다시 켜는 중… 화면이 저절로 새로 고쳐집니다');
+    };
+    body.append(now);
+  }
   const when = u.lastCheck ? new Date(u.lastCheck).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const how = u.mode === 'auto'
     ? `매일 ${u.hour}시에 확인하고 받아서, 진행 중인 작업이 없을 때 다시 켭니다`
@@ -1205,7 +1215,12 @@ pform.onsubmit = async (e) => {
 // ── 이벤트 받기 ──────────────────────────────
 const link = $('link');
 const es = new EventSource('/events');
+let bootId = null; // 서버가 켜질 때마다 바뀐다 — 바뀌었으면(업데이트·다시 켜기) 새 화면을 받으려고 새로 고친다
 es.onopen = () => {
+  fetch('/info').then((r) => r.json()).then((i) => {
+    if (bootId && i.bootId && i.bootId !== bootId) location.reload();
+    bootId = i.bootId ?? bootId;
+  }).catch(() => {});
   // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 그린다.
   sessions.clear();
   render();

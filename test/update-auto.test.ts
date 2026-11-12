@@ -53,3 +53,19 @@ test('업데이트: 자동이면 정한 시각이 지났을 때 받는다, 하�
   await u.tick(new Date(slot.getTime() + 1000)); // 다음 날 정한 시각 뒤
   assert.equal(readFileSync(join(pc, 'a.txt'), 'utf8').trim(), '3');
 });
+
+test('업데이트 버튼: 받아 두고 작업이 끝나길 기다리는 동안 "지금 다시 켜기"로 바로 다시 켠다', async () => {
+  const { pc, origin, url, base } = setup();
+  let restarted = 0;
+  const u = make(pc, join(base, 'update.json'), url, () => restarted++, () => true); // 작업이 계속 돈다
+  push(origin, '2\n');
+  await u.apply();
+  assert.equal(u.public().state, 'ready');
+  assert.equal(u.public().waiting, true); // 기다리는 중
+  assert.equal(restarted, 0);
+  u.restartNow();
+  assert.equal(restarted, 1);
+  assert.equal(u.public().waiting, false);
+  u.restartNow(); // 받아 둔 것이 없으면 아무것도 안 한다
+  assert.equal(restarted, 1);
+});
