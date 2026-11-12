@@ -2155,7 +2155,9 @@ function renderChat() {
 }
 
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
-const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail';
+// 자동 허용된 승인 요청은 카드 대신 "도구 N개 사용" 접힌 줄 안에 한 줄로(사람이 누를 것이 아니니)
+const isAutoPerm = (it) => it.k === 'perm' && it.resolved?.by === '자동 허용';
+const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || isAutoPerm(it);
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');
 const openFolds = new Set(); // 펼친 "도구 N개 사용" 줄
 
@@ -2194,7 +2196,7 @@ function renderItems(s, live, into, skip) {
 
 /** "도구 3개 사용 ›" — 누르면 펼쳐서 무엇을 했는지 보여 준다 */
 function foldGroup(run, key) {
-  const tools = run.filter((it) => it.k === 'line tool').length || run.length;
+  const tools = run.filter((it) => it.k === 'line tool').length || run.filter((it) => !isAutoPerm(it)).length || run.length;
   const fails = run.filter((it) => it.k === 'line fail').length;
   const open = openFolds.has(key);
   const b = el('button', `fold${open ? ' open' : ''}`, `도구 ${tools}개 사용${fails ? ` · 실패 ${fails}` : ''}`);
@@ -2203,7 +2205,10 @@ function foldGroup(run, key) {
   b.onclick = () => { open ? openFolds.delete(key) : openFolds.add(key); render(); };
   if (!open) return [b];
   const body = el('div', 'fold-body');
-  for (const it of run) body.append(el('div', `fold-line${it.k === 'line fail' ? ' fail' : ''}`, it.k === 'line tool' ? it.t : `→ ${it.t}`));
+  for (const it of run) {
+    if (isAutoPerm(it)) { body.append(el('div', 'fold-line auto', `자동 허용 · ${it.t}${it.detail ? ` — ${it.detail}` : ''}`)); continue; }
+    body.append(el('div', `fold-line${it.k === 'line fail' ? ' fail' : ''}`, it.k === 'line tool' ? it.t : `→ ${it.t}`));
+  }
   return [b, body];
 }
 
