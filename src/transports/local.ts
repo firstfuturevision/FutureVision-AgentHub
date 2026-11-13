@@ -457,6 +457,18 @@ async function screenRoute(req: IncomingMessage, res: ServerResponse, url: URL, 
       return send(res, 503, (err as Error).message);
     }
   }
+  // 클립보드: 보는 사람이 이 PC 클립보드 글을 가져가고(GET), 자기 글을 넣는다(POST {text}, 그다음 원격 화면에서 Ctrl+V)
+  if (url.pathname === '/screen/clipboard') {
+    if (req.method === 'GET') {
+      try { return json(res, 200, { text: await screen.clipboard.get() }); } catch (err) { return send(res, 503, (err as Error).message); }
+    }
+    if (req.method === 'POST') {
+      const body = (await readJson(req, res)) as any;
+      if (body === undefined) return;
+      try { await screen.clipboard.set(body?.text); return json(res, 200, { ok: true }); } catch (err) { return send(res, 400, (err as Error).message); }
+    }
+    return send(res, 405, '허용되지 않은 방식');
+  }
   if (req.method === 'POST' && url.pathname === '/screen/input') {
     const body = (await readJson(req, res)) as any;
     if (body === undefined) return;

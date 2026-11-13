@@ -244,3 +244,60 @@ $('screen-text').addEventListener('keydown', (e) => {
 for (const b of document.querySelectorAll('.screen-keys [data-vk]')) {
   b.onclick = () => { const vk = Number(b.dataset.vk); push({ t: 'key', d: true, vk }); push({ t: 'key', d: false, vk }); };
 }
+
+// ── 클립보드: PC ↔ 이 기기. 브라우저는 사람이 누를 때만 클립보드를 읽고 쓰게 한다 ──
+let noteTimer = 0;
+function note(text, keep) {
+  const n = $('screen-note');
+  n.replaceChildren(text);
+  n.hidden = false;
+  clearTimeout(noteTimer);
+  if (keep) return n;
+  noteTimer = setTimeout(() => { n.hidden = true; }, 3500);
+  return n;
+}
+/** 이 기기 클립보드에 쓴다. https 가 아니면(사무실 주소 http) 예전 방식으로 */
+async function writeLocal(text) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
+  const t = document.createElement('textarea');
+  t.value = text;
+  t.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+  document.body.append(t);
+  t.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  t.remove();
+  return ok;
+}
+$('screen-clip-get').onclick = async () => {
+  try {
+    const r = await fetch('/screen/clipboard');
+    if (!r.ok) return note(await r.text());
+    const { text } = await r.json();
+    if (!text) return note('PC 클립보드에 글이 없어요');
+    if (await writeLocal(text)) return note(`복사했어요 (${text.length.toLocaleString()}자) — 이 기기에서 붙여 넣으세요`);
+    // 복사가 막힌 브라우저: 글을 띄워 직접 복사하게
+    const n = note('이 브라우저는 자동 복사를 막아요. 아래 글을 길게 눌러(또는 Ctrl+C) 복사하세요', true);
+    const box = document.createElement('textarea');
+    box.value = text;
+    box.readOnly = true;
+    box.onblur = () => { n.hidden = true; };
+    n.append(box);
+    box.focus();
+    box.select();
+  } catch { note('Agent Hub 에 연결하지 못함'); }
+};
+$('screen-clip-put').onclick = async () => {
+  const field = $('screen-text');
+  let text = field.value;
+  if (!text) {
+    try { if (navigator.clipboard?.readText && window.isSecureContext) text = await navigator.clipboard.readText(); } catch {}
+  }
+  if (!text) return note('글자 칸에 붙여 넣은 뒤 누르세요 (이 브라우저는 클립보드를 바로 못 읽어요)');
+  try {
+    const r = await fetch('/screen/clipboard', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+    if (!r.ok) return note(await r.text());
+    field.value = '';
+    note(`PC 클립보드에 넣었어요 (${text.length.toLocaleString()}자) — PC 화면에서 Ctrl+V`);
+  } catch { note('Agent Hub 에 연결하지 못함'); }
+};

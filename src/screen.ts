@@ -1,4 +1,5 @@
 import { spawn, spawnSync, execFile, type ChildProcess } from 'node:child_process';
+import { Clipboard } from './clipboard.ts';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { userInfo } from 'node:os';
@@ -89,6 +90,8 @@ export class ScreenControl {
   private unlockedByHub = false; // Agent Hub 가 잠금을 풀었으면 다 보고 나서 다시 잠근다
   private unlockTried = 0;
   readonly supported: boolean;
+  /** 원격으로 보는 사람과 이 PC 사이 클립보드 글 주고받기 */
+  readonly clipboard: Clipboard;
   error: string | null = null;
 
   /**
@@ -103,6 +106,7 @@ export class ScreenControl {
     this.x11Source = opts.x11Source ?? join(dirname(opts.source), 'screen-helper-x11.py');
     this.grdSource = join(dirname(opts.source), 'screen-helper-grd.ts');
     this.rdpFile = join(dirname(opts.file), 'screen-rdp.json');
+    this.clipboard = new Clipboard({ script: join(dirname(opts.source), 'clipboard-x11.py') });
     this.helperCommand = opts.helperCommand;
     const c = opts.helperCommand ? { kind: null, reason: null } : platformCheck(this.source, this.x11Source, this.grdSource);
     this.kind = c.kind;
