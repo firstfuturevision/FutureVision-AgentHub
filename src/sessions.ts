@@ -82,16 +82,34 @@ const remoteKey = (app: string, label: string) => `${app}\u0000${label}`;
 /** 대화 기록 → 줄(사람·에이전트 말, 합친 포크). upTo: 사람 지시 몇 번째 차례까지(그다음 지시 앞에서 끊음) */
 function conversation(history: HostEvent[], upTo?: number): string[] {
   const lines: string[] = [];
+  const turnAt: number[] = []; // 사람 지시마다 그 줄이 시작한 자리(되감기에 쓴다)
   let users = 0;
   for (const e of history) {
-    if (e.type === 'user.message') {
+    if (e.type === 'session.rewound') {
+      // 되감기: 그 차례 뒤로 쌓인 줄은 없던 것으로
+      if (e.upTo < users) {
+        lines.length = turnAt[e.upTo];
+        turnAt.length = e.upTo;
+        users = e.upTo;
+      }
+    } else if (e.type === 'user.message') {
       if (upTo !== undefined && users >= upTo) break;
+      turnAt.push(lines.length);
       users++;
       lines.push(`${speaker(e)}: ${e.text}`);
     } else if (e.type === 'agent.text' && !e.partial) lines.push(`에이전트: ${e.text}`);
     else if (e.type === 'session.merged') lines.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${e.text}`);
   }
   return lines;
+}
+/** 지금 살아 있는 사람 지시 차례 수(되감은 것은 뺀다) */
+function turnsOf(history: HostEvent[]): number {
+  let n = 0;
+  for (const e of history) {
+    if (e.type === 'user.message') n++;
+    else if (e.type === 'session.rewound' && e.upTo < n) n = e.upTo;
+  }
+  return n;
 }
 const clip = (text: string, n: number) => (text.length > n ? text.slice(0, n) + ' …(줄임)' : text);
 /** 공유용 요약: 차례마다 사람 지시 + 그 차례의 마지막 보고, 다른 갈래에서 받은 공유(이어 넘기기용, 길면 줄임) */
@@ -261,6 +279,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') info.customTitle = e.title;
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode });
@@ -880,7 +899,35 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         if (live.info.role === 'worker') return this.publish({ type: 'error', sessionId: cmd.sessionId, message: '하위 에이전트는 분담할 수 없음. 메인 작업을 분담하세요' });
-        await this.forkLive(live, origin, ' (분담)', undefined, 'split');
+        await this.forkLive(live, origin, ' (분담)', cmd.upTo, 'split');
+        return;
+      }
+      case 'session.rewind': {
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        const no = (message: string) => this.publish({ type: 'error', sessionId: cmd.sessionId, message });
+        if (live.info.role === 'worker') return no('하위 에이전트는 되감을 수 없음');
+        if (live.info.status === 'working' || live.info.status === 'starting') return no('일하는 중에는 되감을 수 없음. 멈춘(■) 뒤에 되감으세요');
+        const turns = turnsOf(live.history);
+        if (cmd.upTo >= turns) return no(`되감을 차례가 없음 (지금 ${turns}번째 차례까지 있음)`);
+        // 지금 CLI 는 뒤쪽 대화를 기억하므로 내리고, 다음 지시 때 그 앞까지만 글로 붙여 새로 띄운다(wake). 파일은 되돌리지 않는다
+        live.gen = (live.gen ?? 0) + 1;
+        if (!live.dormant) live.adapter.stop();
+        live.dormant = true;
+        live.resume = undefined;
+        live.carry = undefined;
+        live.ctx = [];
+        if (live.token) this.tokens.delete(live.token);
+        live.token = undefined;
+        for (const [id, a] of this.asks) if (a.sessionId === live.info.id) { this.asks.delete(id); a.resolve(false); }
+        delete live.info.cliSessionId;
+        this.publish({ type: 'session.rewound', sessionId: live.info.id, upTo: cmd.upTo, by: origin.user });
+        this.publish({ type: 'context.usage', sessionId: live.info.id, used: 0, window: null });
+        this.publishContext(live);
+        if (live.info.status !== 'idle') {
+          live.info.status = 'idle';
+          this.publish({ type: 'session.status', sessionId: live.info.id, status: 'idle' });
+        }
         return;
       }
       case 'session.copy': {
@@ -997,7 +1044,7 @@ export class SessionManager {
       origin,
       forkedFrom: kind === 'fork' ? o.id : undefined, // 포크: 포크 → 원본 공유
       splitFrom: kind === 'split' ? o.id : undefined, // 분담: 서로 공유
-      splitLines: kind === 'split' ? conversation(live.history).length : undefined,
+      splitLines: kind === 'split' ? conversation(live.history, upTo).length : undefined,
       copiedFrom: kind === 'copy' ? o.id : undefined, // 복사: 공유 없음
       customTitle: o.customTitle ? `${o.customTitle}${suffix}` : undefined,
       extraDirs: o.extraDirs,

@@ -133,6 +133,9 @@ test('parseCommand: 포크 차례·복사', () => {
   assert.deepEqual(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: -1.5 }), { type: 'session.reorder', sessionId: 'a', rank: -1.5 });
   assert.equal(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: 'x' }), null);
   assert.equal(parseCommand({ type: 'session.reorder', sessionId: 'a', rank: Infinity }), null);
+  assert.deepEqual(parseCommand({ type: 'session.rewind', sessionId: 'a', upTo: 2 }), { type: 'session.rewind', sessionId: 'a', upTo: 2 });
+  assert.equal(parseCommand({ type: 'session.rewind', sessionId: 'a', upTo: -1 }), null);
+  assert.deepEqual(parseCommand({ type: 'session.split', sessionId: 'a', upTo: 1 }), { type: 'session.split', sessionId: 'a', upTo: 1 });
 });
 
 test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 되돌려 보내지 않는다', async () => {
@@ -220,6 +223,40 @@ test('분담의 분담: 분담 2 가 한 일이 분담을 거쳐 바로 원래 �
   assert.match(merged(leaf.id)[0].text, /^\[분담 공유: 계획 세우기\]\n사람\(local\): 방향 바꿈/);
   assert.equal(merged(mid.id).length, 2);
   assert.match(merged(mid.id)[1].text, /^사람\(local\): 방향 바꿈/);
+  sessions.stopAll();
+});
+
+test('되감기: 고른 차례 뒤 대화는 잊고, 다음 지시는 그 앞까지만 이어받는다(포크 · 분담에도 반영)', async () => {
+  const { sessions, events } = setup();
+  const orig = await newMain(sessions, events);
+  await say(sessions, events, orig.id, '첫째 계획');
+  await say(sessions, events, orig.id, '둘째 시도');
+  await say(sessions, events, orig.id, '셋째 시도');
+  await sessions.handle({ type: 'session.rewind', sessionId: orig.id, upTo: 1 }, local);
+  const rw = await waitFor(events, (e) => e.type === 'session.rewound' && e.sessionId === orig.id);
+  assert.equal(rw.upTo, 1);
+  const reply = await say(sessions, events, orig.id, '다른 둘째');
+  assert.match(reply.text, /사람\(local\): 첫째 계획/); // 앞 대화는 이어받고
+  assert.doesNotMatch(reply.text, /둘째 시도|셋째 시도/); // 되감은 뒤쪽은 모른다
+  assert.match(reply.text, /다른 둘째$/);
+
+  // 그 뒤 포크도 되감긴 대화를 이어받는다
+  await sessions.handle({ type: 'session.fork', sessionId: orig.id }, local);
+  const fork = (await waitFor(events, (e) => e.type === 'session.created' && e.session.forkedFrom === orig.id)).session;
+  const fr = await say(sessions, events, fork.id, '포크에서');
+  assert.match(fr.text, /다른 둘째/);
+  assert.doesNotMatch(fr.text, /셋째 시도/);
+
+  // 여기서 분담: 정한 차례까지만 가져간다
+  await sessions.handle({ type: 'session.split', sessionId: orig.id, upTo: 1 }, local);
+  const part = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === orig.id)).session;
+  const pr = await say(sessions, events, part.id, '분담에서');
+  assert.match(pr.text, /첫째 계획/);
+  assert.doesNotMatch(pr.text, /다른 둘째/);
+
+  // 없는 차례 · 하위 에이전트는 되감지 않는다
+  await sessions.handle({ type: 'session.rewind', sessionId: orig.id, upTo: 9 }, local);
+  assert.ok(events.some((e) => e.type === 'error' && e.sessionId === orig.id && /되감/.test(e.message)));
   sessions.stopAll();
 });
 

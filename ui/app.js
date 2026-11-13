@@ -1441,6 +1441,15 @@ function onEvent(ev) {
       break;
     case 'session.renamed': s.info.customTitle = ev.title; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
+    case 'session.rewound': {
+      // 되감기: upTo 번째 사람 지시까지만 남기고 그 뒤는 화면에서도 걷는다(기록 파일에는 남음)
+      let n = 0;
+      const cut = s.items.findIndex((it) => it.k === 'user' && ++n > ev.upTo);
+      if (cut >= 0) s.items.length = cut;
+      s.items.push({ k: 'note', t: `여기로 되감음${ev.by && ev.by !== 'local' ? ` · ${ev.by}` : ''} — 이 뒤 대화는 에이전트가 모릅니다. 파일은 되돌리지 않았습니다` });
+      s.usage = null;
+      break;
+    }
     case 'session.dirs': s.info.extraDirs = ev.dirs; break;
     case 'session.configured': {
       Object.assign(s.info, ev.session);
@@ -1605,6 +1614,40 @@ function forkTask(s, upTo) {
   pendingFork = s.info.id;
   send({ type: 'session.fork', sessionId: s.info.id, ...(upTo !== undefined ? { upTo } : {}) });
 }
+function splitTask(s, upTo) {
+  pendingFork = s.info.id;
+  send({ type: 'session.split', sessionId: s.info.id, ...(upTo !== undefined ? { upTo } : {}) });
+}
+/**
+ * 메시지 우클릭(폰은 길게 누르기): 여기로 되감기 · 여기서 포크 · 여기서 분담.
+ * turn = 이 메시지가 속한 사람 지시 차례(1부터). 사람 지시에서 되감으면 그 지시 앞으로 돌아가고 글을 입력칸에 돌려놓는다
+ */
+function messageMenu(s, it, turn, e) {
+  if (s.info.role !== 'main') return;
+  e.preventDefault();
+  closeMenu();
+  menu.replaceChildren();
+  const busy = s.info.status === 'working' || s.info.status === 'starting';
+  const back = it.k === 'user' ? turn - 1 : turn;
+  const items = [
+    [it.k === 'user' ? '이 지시 앞으로 되감기' : '이 답까지 되감기', async () => {
+      if (busy) return flash('일하는 중에는 되감을 수 없어요. 멈춘(■) 뒤에 되감으세요', true);
+      const text = '이 뒤 대화를 에이전트가 잊고 다음 지시부터 여기서 다시 이어 갑니다. 화면에서도 걷히고, 파일은 되돌리지 않습니다.';
+      if (!(await askDialog({ title: '되감기', text, ok: '되감기' }))) return;
+      send({ type: 'session.rewind', sessionId: s.info.id, upTo: back });
+      if (it.k === 'user') { input.value = it.t; input.dispatchEvent(new Event('input')); input.focus(); }
+    }],
+    ['여기서 포크', () => forkTask(s, turn)],
+    ['여기서 분담', () => splitTask(s, turn)],
+  ];
+  for (const [label, fn] of items) {
+    const b = el('button', '', label);
+    b.type = 'button';
+    b.onclick = () => { closeMenu(); fn(); };
+    menu.append(b);
+  }
+  placeMenu(e.clientX, e.clientY);
+}
 const menu = el('div', 'ctx-menu');
 menu.hidden = true;
 document.body.append(menu);
@@ -1626,7 +1669,7 @@ function openTaskMenu(s, x, y) {
       ];
     })(),
     ['포크', () => forkTask(s)],
-    ['분담', () => { pendingFork = s.info.id; send({ type: 'session.split', sessionId: s.info.id }); }],
+    ['분담', () => splitTask(s)],
     ['복사', () => {
       pendingCopy = s.info.id;
       send({ type: 'session.copy', sessionId: s.info.id });
@@ -2661,7 +2704,12 @@ function renderItems(s, live, into, skip, from = 0) {
     else if (it.k === 'image') into.append(imageItem(it));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
-    else into.append(item(it));
+    else if (it.k === 'user' && s.info.role === 'main') {
+      const div = item(it);
+      const turn = users;
+      div.oncontextmenu = (e) => messageMenu(s, it, turn, e);
+      into.append(div);
+    } else into.append(item(it));
     i++;
   }
 }
@@ -2769,6 +2817,7 @@ function agentItem(s, it, upTo) {
   b.title = '이 답까지의 대화를 이어받아 새 작업으로';
   b.onclick = () => forkTask(s, upTo);
   div.append(b);
+  div.oncontextmenu = (e) => messageMenu(s, it, upTo, e);
   return div;
 }
 
