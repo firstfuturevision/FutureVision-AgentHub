@@ -1461,7 +1461,10 @@ function onEvent(ev) {
     case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
-    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
+    // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 커뮤니케이션 #테스트)
+    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
+    case 'session.remotes': s.remotes = ev.remotes; break;
+    case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
       if (ev.partial) { s.draft = ev.text; setDoing(s, '답 쓰는 중', at); }
       else { s.draft = null; s.items.push({ k: 'agent', t: ev.text }); }
@@ -1914,6 +1917,7 @@ function renderPanel() {
 
   renderContext(s);
   renderLinks(s);
+  renderRemotes(s);
   renderSchedules(s); // 예약은 설정이 아니라 일정 — 늘 보인다
   $('p-settings').hidden = !settingsOpen;
   $('p-settings-toggle').setAttribute('aria-expanded', String(settingsOpen));
@@ -2147,6 +2151,42 @@ function renderLinks(s) {
   fillLinks($('p-sessions'), forks);
   fillLinks($('p-running'), running);
   fillLinks($('p-subtasks'), rest);
+}
+
+/** 연결된 원격 접속: 바깥 시스템(사내 대시보드 등)이 /cmd 로 이 작업에 글을 보낸 곳. 막으면 그곳 글은 받지 않는다 */
+function renderRemotes(s) {
+  const box = $('p-remotes');
+  box.replaceChildren();
+  box.closest('.psec').hidden = s.info.role === 'worker'; // 하위 에이전트는 메인만 지시한다
+  const list = s.remotes ?? [];
+  if (!list.length) return box.append(el('div', 'p-empty', '바깥에서 이 작업에 연결한 곳이 없습니다'));
+  for (const r of list) {
+    const row = el('div', 'p-item col remote' + (r.blocked ? ' off' : ''));
+    const head = el('div', 'remote-head');
+    const name = el('span', 'p-name');
+    name.title = `${r.app} · ${r.label}`;
+    name.append(el('span', 'remote-app', r.app), document.createTextNode(r.label));
+    const btn = el('button', 'p-mini', r.blocked ? '풀기' : '막기');
+    btn.type = 'button';
+    btn.title = r.blocked ? '다시 받기 — PC 앞(이 화면·사무실 원격)에서만 풀 수 있어요' : '이 연결로 오는 글을 받지 않습니다';
+    btn.onclick = async () => {
+      if (!r.blocked && !(await askDialog({ title: '원격 접속 막기', text: `${r.app} · ${r.label}\n이 연결로 오는 글을 받지 않습니다. 푸는 것은 PC 앞에서만 할 수 있어요.`, ok: '막기', danger: true }))) return;
+      send({ type: 'session.remote', sessionId: s.info.id, app: r.app, label: r.label, blocked: !r.blocked });
+    };
+    head.append(name, btn);
+    const meta = el('div', 'remote-meta');
+    const bits = [r.blocked ? '막음' : '', `${ago(r.lastAt)}`, r.messages ? `글 ${r.messages}개` : '', r.createdSession ? '작업을 만든 연결' : ''].filter(Boolean);
+    meta.append(bits.join(' · '));
+    if (r.ref) {
+      const a = el('a', 'remote-ref', '열기');
+      a.href = r.ref;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      meta.append(' · ', a);
+    }
+    row.append(head, meta);
+    box.append(row);
+  }
 }
 
 function workerState(w) {

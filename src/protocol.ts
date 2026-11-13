@@ -15,6 +15,20 @@ export type SessionRole = 'main' | 'worker' | 'direct';
 
 export type PermMode = 'ask' | 'readonly';
 
+/**
+ * 원격 접속 — 바깥 시스템(사내 대시보드 등)이 HTTP(/events + /cmd)로 이 작업에 붙어 글을 주고받을 때 자기를 밝히는 표.
+ * app = 시스템 이름(예: 대시보드), label = 그 안의 자리(예: 커뮤니케이션 #테스트), ref = 그 자리를 여는 주소(있으면)
+ */
+export interface RemoteVia { app: string; label: string; ref?: string }
+/** 작업에 연결된 원격 접속 하나 — 작업 기록에서 모은다(app + label 이 같으면 같은 연결) */
+export interface RemoteLink extends RemoteVia {
+  firstAt: string; // ISO
+  lastAt: string; // ISO
+  messages: number; // 이 연결로 받은 지시 수
+  createdSession: boolean; // 이 연결이 작업을 만들었나
+  blocked: boolean; // 막음 — 이 연결로 오는 글은 받지 않는다
+}
+
 export interface SessionInfo {
   id: string;
   agent: AgentKind;
@@ -46,13 +60,17 @@ export interface SessionInfo {
 
 // 호스트 → 화면
 export type HostEvent =
-  | { type: 'session.created'; session: SessionInfo }
+  | { type: 'session.created'; session: SessionInfo; via?: RemoteVia }
   | { type: 'session.status'; sessionId: string; status: SessionInfo['status'] }
   | { type: 'session.ended'; sessionId: string; reason: string } // CLI 가 꺼짐. 작업은 대기로 남고 다음 지시 때 다시 띄운다
   | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
   | { type: 'session.cli'; sessionId: string; cliSessionId: string } // CLI 가 알려 준 대화 id(바뀔 때만)
   | { type: 'session.imported'; sessionId: string; shown: number } // Claude Code 에서 가져옴 — 앞의 shown 개는 그 대화의 끝부분
-  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[] }
+  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia }
+  // 원격 접속 막기·풀기(기록에 남아 다시 켜도 그대로)
+  | { type: 'session.remoteBlocked'; sessionId: string; app: string; label: string; blocked: boolean; by: string }
+  // 연결된 원격 접속 목록 — 바뀔 때마다 전체. 기록에서 모은 것이라 기록하지 않고, 화면이 붙을 때 다시 보낸다
+  | { type: 'session.remotes'; sessionId: string; remotes: RemoteLink[] }
   | { type: 'agent.text'; sessionId: string; text: string; partial: boolean }
   // CLI 가 알려 준 쓸 수 있는 모델 목록 (ACP session/new 의 models) — 화면 드롭다운을 실제 목록으로 바꾼다
   | { type: 'agent.models'; sessionId: string; agent: AgentKind; models: ModelOption[]; current: string | null }
@@ -86,8 +104,10 @@ export interface ContextItem { label: string; chars: number; pending: boolean }
 
 // 화면 → 호스트
 export type ClientCommand =
-  | { type: 'session.create'; agent: AgentKind; role: 'main' | 'direct'; model?: string; defaultWorker?: DefaultWorker; preset?: string; workPreset?: string; workdir?: string; title?: string }
-  | { type: 'user.message'; sessionId: string; text: string; attachments?: Attachment[] }
+  | { type: 'session.create'; agent: AgentKind; role: 'main' | 'direct'; model?: string; defaultWorker?: DefaultWorker; preset?: string; workPreset?: string; workdir?: string; title?: string; via?: RemoteVia }
+  | { type: 'user.message'; sessionId: string; text: string; attachments?: Attachment[]; via?: RemoteVia }
+  // 원격 접속 막기·풀기: 막는 것은 어디서든, 푸는 것은 PC 앞에서만
+  | { type: 'session.remote'; sessionId: string; app: string; label: string; blocked: boolean }
   | { type: 'permission.respond'; sessionId: string; requestId: string; allow: boolean }
   | { type: 'session.stop'; sessionId: string }
   | { type: 'session.rename'; sessionId: string; title: string }
@@ -141,14 +161,42 @@ function parseDefaultWorker(v: unknown): DefaultWorker | undefined {
   return { agent: agent as AgentKind, ...(typeof model === 'string' && MODEL_RE.test(model) ? { model } : {}) };
 }
 
+/** 원격 접속 이름: 앞뒤 공백·제어 글자를 빼고 n 자까지. 비면 undefined */
+function remoteName(v: unknown, n: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, n).trim();
+  return t || undefined;
+}
+
+/** 원격 접속 표: app 40자·label 80자(둘 다 있어야 함), ref 는 http(s) 주소 300자까지(아니면 뺀다). 모양이 틀리면 undefined */
+export function parseVia(v: unknown): RemoteVia | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const app = remoteName(o.app, 40);
+  const label = remoteName(o.label, 80);
+  if (!app || !label) return undefined;
+  let ref: string | undefined;
+  if (typeof o.ref === 'string' && o.ref.length <= 300) {
+    try {
+      const u = new URL(o.ref.trim());
+      if (u.protocol === 'http:' || u.protocol === 'https:') ref = u.href.length <= 300 ? u.href : undefined;
+    } catch {}
+  }
+  return { app, label, ...(ref ? { ref } : {}) };
+}
+
+/** 원격 접속을 사람에게 보이는 이름: "대시보드 · 커뮤니케이션 #테스트" */
+export const viaLabel = (v: RemoteVia) => `${v.app} · ${v.label}`;
+
 /** 바깥에서 들어온 JSON을 명령으로 확인한다. 모르는 모양은 null. */
 export function parseCommand(raw: unknown): ClientCommand | null {
   if (!raw || typeof raw !== 'object') return null;
   const c = raw as Record<string, unknown>;
   const str = (v: unknown) => typeof v === 'string' && v.length > 0;
   switch (c.type) {
-    case 'session.create':
+    case 'session.create': {
       if (!AGENTS.includes(c.agent as AgentKind)) return null;
+      const via = parseVia(c.via); // 바깥 시스템이 만든 작업이면 그 연결
       return {
         type: 'session.create',
         agent: c.agent as AgentKind,
@@ -159,12 +207,21 @@ export function parseCommand(raw: unknown): ClientCommand | null {
         workPreset: str(c.workPreset) ? (c.workPreset as string).slice(0, 80) : undefined, // 작업 환경 프리셋(폴더·지침)
         workdir: str(c.workdir) ? (c.workdir as string) : undefined,
         title: str(c.title) ? (c.title as string) : undefined,
+        ...(via ? { via } : {}),
       };
+    }
     case 'user.message': {
       const attachments = parseAttachments(c.attachments);
+      const via = parseVia(c.via);
       // 글 없이 첨부만 보내도 된다
       if (!str(c.sessionId) || (!str(c.text) && !attachments)) return null;
-      return { type: 'user.message', sessionId: c.sessionId as string, text: str(c.text) ? (c.text as string) : '', ...(attachments ? { attachments } : {}) };
+      return { type: 'user.message', sessionId: c.sessionId as string, text: str(c.text) ? (c.text as string) : '', ...(attachments ? { attachments } : {}), ...(via ? { via } : {}) };
+    }
+    case 'session.remote': {
+      const app = remoteName(c.app, 40);
+      const label = remoteName(c.label, 80);
+      if (!str(c.sessionId) || !app || !label || typeof c.blocked !== 'boolean') return null;
+      return { type: 'session.remote', sessionId: c.sessionId as string, app, label, blocked: c.blocked };
     }
     case 'permission.respond':
       if (!str(c.sessionId) || !str(c.requestId) || typeof c.allow !== 'boolean') return null;

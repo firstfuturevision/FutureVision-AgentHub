@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute, extname, basename } from 'node:path';
-import { AGENTS, MODEL_RE } from './protocol.ts';
-import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, SessionInfo, SessionRole } from './protocol.ts';
+import { AGENTS, MODEL_RE, viaLabel } from './protocol.ts';
+import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, RemoteLink, RemoteVia, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
 import type { ToolStore } from './tools.ts';
@@ -64,6 +64,7 @@ interface Live {
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
   dormant?: boolean; // 호스트를 다시 켜서 CLI 가 아직 없음 — 다음 지시 때 띄운다
   resume?: string; // 다음에 띄울 CLI 가 이어 갈 Claude 대화 id(--resume)
+  remotes?: Map<string, RemoteLink>; // 연결된 원격 접속(app + label → 연결). 기록 전체에서 모은다 — 기록이 길어 앞이 잘려도 남게
 }
 
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -74,6 +75,10 @@ function formatSize(n: number): string {
   return n < 1024 ? `${n}B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
+/** 지시한 사람: 원격 접속으로 온 글이면 그 연결 이름(대시보드 · 커뮤니케이션 #테스트), 아니면 보낸 사람 */
+const speaker = (e: { from: string; via?: RemoteVia }) => `사람(${e.via ? viaLabel(e.via) : e.from})`;
+const remoteKey = (app: string, label: string) => `${app}\u0000${label}`;
+
 /** 대화 기록 → 줄(사람·에이전트 말, 합친 포크). upTo: 사람 지시 몇 번째 차례까지(그다음 지시 앞에서 끊음) */
 function conversation(history: HostEvent[], upTo?: number): string[] {
   const lines: string[] = [];
@@ -82,7 +87,7 @@ function conversation(history: HostEvent[], upTo?: number): string[] {
     if (e.type === 'user.message') {
       if (upTo !== undefined && users >= upTo) break;
       users++;
-      lines.push(`사람(${e.from}): ${e.text}`);
+      lines.push(`${speaker(e)}: ${e.text}`);
     } else if (e.type === 'agent.text' && !e.partial) lines.push(`에이전트: ${e.text}`);
     else if (e.type === 'session.merged') lines.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${e.text}`);
   }
@@ -95,7 +100,7 @@ export function digest(events: HostEvent[]): string[] {
   let last: string | undefined;
   const flush = () => { if (last) out.push(`에이전트: ${clip(last, 4000)}`); last = undefined; };
   for (const e of events) {
-    if (e.type === 'user.message') { flush(); out.push(`사람(${e.from}): ${clip(e.text, 1500)}`); }
+    if (e.type === 'user.message') { flush(); out.push(`${speaker(e)}: ${clip(e.text, 1500)}`); }
     else if (e.type === 'agent.text' && !e.partial) last = e.text;
     else if (e.type === 'turn.done') flush();
     else if (e.type === 'session.merged') { flush(); out.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${clip(e.text, 3000)}`); }
@@ -262,8 +267,9 @@ export class SessionManager {
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
       const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
-      this.trimLog(f, lines, info);
+      this.trimLog(f, lines, info, created.via);
       const live: Live = { info, adapter: new UnavailableAdapter('다시 띄우기 전'), history, turn: null };
+      for (const e of events) this.trackRemote(live, e); // 원격 접속은 잘라 내기 전 기록 전체에서
       info.status = 'idle';
       live.dormant = true;
       restored.push(live);
@@ -284,7 +290,7 @@ export class SessionManager {
    * 기록 파일이 너무 크면(LOG_TRIM_BYTES) 통째로 archive 에 압축해 두고, 파일에는 지금 정보로 쓴 만든 기록 + 최근 줄만 남긴다.
    * 기록은 AX 근거라 지우지 않고 옮긴다.
    */
-  private trimLog(file: string, lines: string[], info: SessionInfo) {
+  private trimLog(file: string, lines: string[], info: SessionInfo, via?: RemoteVia) {
     const path = join(this.logDir, file);
     try {
       if (statSync(path).size <= LOG_TRIM_BYTES || lines.length <= HISTORY_CAP) return;
@@ -292,7 +298,7 @@ export class SessionManager {
       mkdirSync(archive, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       writeFileSync(join(archive, `${file.replace(/\.jsonl$/, '')}-${stamp}.jsonl.gz`), gzipSync(lines.join('\n') + '\n'));
-      const head = JSON.stringify({ at: info.createdAt, type: 'session.created', session: { ...info, status: 'idle' } });
+      const head = JSON.stringify({ at: info.createdAt, type: 'session.created', session: { ...info, status: 'idle' }, ...(via ? { via } : {}) });
       const keep = lines.slice(-(HISTORY_CAP - 1)).filter((l) => !l.includes('"type":"session.created"'));
       writeFileSync(`${path}.tmp`, [head, ...keep].join('\n') + '\n');
       renameSync(`${path}.tmp`, path);
@@ -306,6 +312,8 @@ export class SessionManager {
     for (const live of this.sessions.values()) for (const ev of live.history) all.push([this.order.get(ev) ?? 0, ev]);
     all.sort((a, b) => a[0] - b[0]);
     for (const [, ev] of all) listener(ev);
+    // 원격 접속 목록은 기록하지 않으므로 지금 것을 따로 보낸다
+    for (const live of this.sessions.values()) if (live.remotes?.size) listener({ type: 'session.remotes', sessionId: live.info.id, remotes: this.remotesOf(live.info.id) });
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -316,6 +324,39 @@ export class SessionManager {
 
   info(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
+  }
+
+  /** 이 작업에 연결된 원격 접속(최근에 쓴 것부터) */
+  remotesOf(id: string): RemoteLink[] {
+    const m = this.sessions.get(id)?.remotes;
+    return m ? [...m.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).map((r) => ({ ...r })) : [];
+  }
+
+  /**
+   * 기록된 이벤트 하나로 원격 접속 목록을 고친다(바뀌었으면 true).
+   * 원격 접속으로 만든 작업·받은 지시·막기/풀기만 본다. 같은 app + label 이면 같은 연결이고 주소(ref)는 마지막 것
+   */
+  private trackRemote(live: Live, ev: HostEvent): boolean {
+    const via = ev.type === 'user.message' || ev.type === 'session.created' ? ev.via : undefined;
+    const at = new Date(this.timeOf(ev) ?? Date.now()).toISOString();
+    const m = (live.remotes ??= new Map());
+    if (via) {
+      const key = remoteKey(via.app, via.label);
+      const r = m.get(key) ?? { app: via.app, label: via.label, firstAt: at, lastAt: at, messages: 0, createdSession: false, blocked: false };
+      if (via.ref) r.ref = via.ref;
+      if (at > r.lastAt) r.lastAt = at;
+      if (ev.type === 'session.created') r.createdSession = true;
+      else r.messages++;
+      m.set(key, r);
+      return true;
+    }
+    if (ev.type === 'session.remoteBlocked') {
+      const r = m.get(remoteKey(ev.app, ev.label));
+      if (!r) return false;
+      r.blocked = ev.blocked;
+      return true;
+    }
+    return false;
   }
 
   /** 오른쪽 패널의 스킬: 프리셋 세션은 Agent Hub 스킬 중 고른 것, 아니면 그 CLI 가 계정에서 읽는 것 */
@@ -710,6 +751,7 @@ export class SessionManager {
           title: cmd.title,
           origin,
           autoApprove: preset?.autoApprove,
+          via: cmd.via,
         });
         if (preset) live.role = preset;
         if (wp) live.guide = wp;
@@ -720,8 +762,12 @@ export class SessionManager {
       case 'user.message': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
+        // 막은 원격 접속에서 온 글은 받지 않는다(기록·에이전트 어디에도 넣지 않고 알리기만)
+        if (cmd.via && live.remotes?.get(remoteKey(cmd.via.app, cmd.via.label))?.blocked) {
+          return this.publish({ type: 'error', sessionId: cmd.sessionId, message: `막힌 원격 접속에서 온 글이라 받지 않았습니다: ${viaLabel(cmd.via)}` });
+        }
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
-        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}) });
+        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
         // 첨부: 모든 파일은 작업 폴더 경로로 알려 주고(에이전트가 열어 봄), 이미지는 이미지째 함께 보낸다
         let text = cmd.text;
         if (atts.length) {
@@ -811,6 +857,18 @@ export class SessionManager {
       case 'session.configure':
         await this.configure(cmd, origin);
         return;
+      case 'session.remote': {
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        // 막는 것은 어디서든, 푸는 것은 PC 앞에서만(늘 묻기·읽기만과 같은 규칙) — 바깥에서 막힌 연결을 스스로 풀지 못하게
+        const fail = (message: string) => this.publish({ type: 'error', sessionId: cmd.sessionId, message });
+        const r = live.remotes?.get(remoteKey(cmd.app, cmd.label));
+        if (!r) return fail(`이 작업에 연결한 적 없는 원격 접속: ${cmd.app} · ${cmd.label}`);
+        if (r.blocked === cmd.blocked) return;
+        if (!cmd.blocked && origin.via !== 'local' && !origin.trusted) return fail('막힌 원격 접속을 푸는 것은 PC 앞에서만 할 수 있음');
+        this.publish({ type: 'session.remoteBlocked', sessionId: cmd.sessionId, app: r.app, label: r.label, blocked: cmd.blocked, by: origin.user });
+        return;
+      }
       case 'session.fork': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
@@ -1148,6 +1206,7 @@ export class SessionManager {
     autoApprove?: boolean;
     permMode?: PermMode;
     cliSessionId?: string; // 가져온 Claude Code 대화 — 첫 CLI 부터 --resume 으로 이어 간다
+    via?: RemoteVia; // 원격 접속으로 만든 작업
     seed?: (id: string) => void; // CLI 를 띄우기 전에 기록에 먼저 넣을 것(가져온 대화)
   }): Promise<Live> {
     const info: SessionInfo = {
@@ -1177,7 +1236,7 @@ export class SessionManager {
     };
     const live: Live = { info, adapter: this.makeAdapter(o.agent), history: [], turn: null, ...(o.cliSessionId ? { resume: o.cliSessionId } : {}) };
     this.sessions.set(info.id, live);
-    this.publish({ type: 'session.created', session: info });
+    this.publish({ type: 'session.created', session: info, ...(o.via ? { via: o.via } : {}) });
     o.seed?.(info.id);
     await this.launch(live);
     return live;
@@ -1540,20 +1599,23 @@ export class SessionManager {
 
   private publish(ev: HostEvent) {
     const sessionId = 'sessionId' in ev ? ev.sessionId : ev.type === 'session.created' ? ev.session.id : undefined;
+    let remotes = false; // 원격 접속 목록이 바뀜 — 이 이벤트 뒤에 목록을 알린다
     if (sessionId) {
       const live = this.sessions.get(sessionId);
       if (live) {
-        // 실시간 조각 글은 기록·재전송하지 않는다(완성본만 남긴다).
-        const isPartial = ev.type === 'agent.text' && ev.partial;
+        // 실시간 조각 글은 기록·재전송하지 않는다(완성본만 남긴다). 원격 접속 목록도 기록에서 모은 것이라 남기지 않는다
+        const isPartial = (ev.type === 'agent.text' && ev.partial) || ev.type === 'session.remotes';
         if (!isPartial) {
           this.stamp(ev);
           live.history.push(ev);
           // 넘치면 오래된 것부터 버리되 만든 기록(맨 앞 session.created)은 남긴다
           if (live.history.length > HISTORY_CAP) live.history.splice(live.history[0]?.type === 'session.created' ? 1 : 0, 1);
           appendFileSync(join(this.logDir, `${sessionId}.jsonl`), JSON.stringify({ at: new Date().toISOString(), ...ev }) + '\n');
+          remotes = this.trackRemote(live, ev);
         }
       }
     }
     for (const l of this.listeners) l(ev);
+    if (remotes && sessionId) this.publish({ type: 'session.remotes', sessionId, remotes: this.remotesOf(sessionId) });
   }
 }
