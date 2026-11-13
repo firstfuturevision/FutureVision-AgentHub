@@ -13,6 +13,8 @@ export interface ModelOption { id: string; name: string }
 // main = 사람과 대화하며 일을 맡기는 메인, worker = 메인이 맡긴 작업자, direct = 사람이 AI 하나와 직접
 export type SessionRole = 'main' | 'worker' | 'direct';
 
+export type PermMode = 'ask' | 'readonly';
+
 export interface SessionInfo {
   id: string;
   agent: AgentKind;
@@ -30,6 +32,8 @@ export interface SessionInfo {
   copiedFrom?: string; // 복사한 원래 세션 id(대화는 이어받지만 공유하지 않음)
   extraDirs?: string[]; // 작업 폴더 말고 더 연결한 폴더(절대 경로, 작업 폴더 뿌리 안)
   autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
+  // 이 작업만의 권한: ask = 늘 사람에게 묻기, readonly = 묻는 도구는 모두 거절(읽기만). "권한 묻지 않기(모든 작업)"보다 앞선다. 없으면 기본
+  permMode?: PermMode;
   cliSessionId?: string; // Claude 만: CLI 의 대화 id. 다시 띄울 때 --resume 으로 그 대화에 그대로 이어 간다
   imported?: boolean; // 이 PC 의 Claude Code 세션을 가져와 이어 가는 작업
   title: string;
@@ -62,6 +66,7 @@ export type HostEvent =
   | { type: 'notice'; agent?: AgentKind; message: string }
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다
+  | { type: 'agent.health'; agent: AgentKind; state: 'ok' | 'error'; message: string } // AI 연결 상태(로그인 만료·크레딧 부족 등). GET /health 로도
   | { type: 'session.renamed'; sessionId: string; title: string }
   | { type: 'session.reordered'; sessionId: string; rank: number }
   | { type: 'session.deleted'; sessionId: string }
@@ -70,7 +75,7 @@ export type HostEvent =
   | { type: 'session.configured'; sessionId: string; session: SessionInfo }
   // 포크 공유: 포크의 답이 끝날 때마다 새로 생긴 대화를 원본 기록에 남긴다. 원본이 진행 중이면 다음 지시에 붙어 간다.
   // lines = 지금까지 공유한 포크 대화 줄 수(다음엔 그 뒤만). 이름은 기록 파일과 맞추려고 merged 그대로
-  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split' } // kind 없으면 포크 공유
+  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split'; until?: number } // until: 여기까지 보낸 원본 이벤트의 순서 값 — 다음엔 그 뒤만 // kind 없으면 포크 공유
   // 컨텍스트: 에이전트가 지금 들고 있는 양(used 토큰 / window 컨텍스트 창). 모르면 window 는 null. used 0 은 새로 띄워 아직 없음
   | { type: 'context.usage'; sessionId: string; used: number; window: number | null }
   // 컨텍스트에 호스트가 넣은 것: 앞 대화, 포크·분담 공유. pending 이면 다음 지시에 붙어 간다. 바뀔 때마다 전체 목록
@@ -94,7 +99,7 @@ export type ClientCommand =
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
   // 에이전트 설정 바꾸기: null = 없앰(기본), 없음 = 그대로. 메인 CLI 를 새 설정으로 다시 띄우고 지금까지의 대화를 다음 지시에 붙인다
-  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null; autoApprove?: boolean }
+  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null; autoApprove?: boolean; permMode?: PermMode | null }
   // 공용 PC 화면에 진짜 터미널 창을 띄운다 — PC 앞(local)에서만 허용
   | { type: 'terminal.open'; agent: AgentKind; sessionId?: string; workdir?: string; profile?: boolean }; // profile: Agent Hub 전용 프로필로 로그인
 
@@ -195,6 +200,8 @@ export function parseCommand(raw: unknown): ClientCommand | null {
         if (v !== undefined) out[k] = v;
       }
       if (typeof c.autoApprove === 'boolean') out.autoApprove = c.autoApprove;
+      if (c.permMode === null || c.permMode === '') out.permMode = null;
+      else if (c.permMode === 'ask' || c.permMode === 'readonly') out.permMode = c.permMode;
       return out;
     }
     case 'session.fork': {

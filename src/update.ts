@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 /**
  * Agent Hub 업데이트 — 정한 레포에서 새 버전을 받아 다시 켠다.
@@ -27,6 +27,7 @@ export interface UpdatePublic {
   checking: boolean;
   canRestart: boolean;
   waiting: boolean; // 받아 두었고, 진행 중인 작업이 끝나길 기다려 다시 켠다
+  codeChanged: boolean; // 켠 뒤로 서버 코드가 바뀜 — 다시 켜야 반영된다
 }
 
 type Status = { state: UpdateState; message?: string; current?: string; latest?: string; behind?: number };
@@ -46,6 +47,8 @@ export class Updater {
   private st: Status = { state: 'unknown' };
   private running?: Promise<void>;
   private restartPending = false;
+  private bootStamp: number; // 켤 때 서버 코드(src/, 실행기)의 마지막 수정 시각 — 그 뒤 바뀌었으면 "새 코드 있음"
+  private stampCache?: { at: number; value: number };
   private onChange?: () => void;
 
   constructor(opts: { root: string; file: string; defaultRepo: string; gitEnv?: () => Record<string, string>; busy?: () => boolean; restart?: () => void; onChange?: () => void }) {
@@ -55,6 +58,7 @@ export class Updater {
     this.gitEnv = opts.gitEnv ?? (() => ({}));
     this.busy = opts.busy ?? (() => false);
     this.restart = opts.restart;
+    this.bootStamp = codeStamp(opts.root);
     this.onChange = opts.onChange;
     if (existsSync(this.file)) {
       try {
@@ -84,6 +88,7 @@ export class Updater {
       checking: Boolean(this.running),
       canRestart: Boolean(this.restart),
       waiting: this.restartPending && Boolean(this.restart),
+      codeChanged: this.codeChanged(),
     };
   }
 
@@ -189,6 +194,23 @@ export class Updater {
     return ref;
   }
 
+  /** 켠 뒤로 이 폴더의 서버 코드가 바뀌었나(이 PC 에서 고치거나 git 으로 받은 것). 화면 코드(ui/)는 새로 고침이면 되므로 보지 않는다 */
+  codeChanged(): boolean {
+    const now = Date.now();
+    if (!this.stampCache || now - this.stampCache.at > 10_000) this.stampCache = { at: now, value: codeStamp(this.root) };
+    return this.stampCache.value > this.bootStamp;
+  }
+
+  /** 바뀐 코드로 다시 켠다: now 면 바로, 아니면 진행 중인 작업이 끝난 뒤(1분마다 확인) */
+  restartForCode(now: boolean): boolean {
+    if (!this.restart || !this.codeChanged()) return false;
+    this.restartPending = true;
+    if (now) this.restartNow();
+    else this.maybeRestart();
+    this.onChange?.();
+    return true;
+  }
+
   /** 받아 둔 업데이트로 지금 다시 켠다(진행 중인 작업이 있어도 — 대화는 다시 켠 뒤 이어진다) */
   restartNow() {
     if (!this.restartPending || !this.restart) return;
@@ -221,6 +243,26 @@ export class Updater {
     }
     this.maybeRestart();
   }
+}
+
+/** 서버 코드의 마지막 수정 시각(ms): src/ 아래 모든 파일과 실행기 */
+export function codeStamp(root: string): number {
+  let max = 0;
+  const walk = (dir: string) => {
+    let names: string[];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const n of names) {
+      const p = join(dir, n);
+      try {
+        const st = statSync(p);
+        if (st.isDirectory()) walk(p);
+        else if (st.mtimeMs > max) max = st.mtimeMs;
+      } catch {}
+    }
+  };
+  walk(join(root, 'src'));
+  for (const f of ['scripts/launch.mjs', 'package.json']) try { max = Math.max(max, statSync(join(root, f)).mtimeMs); } catch {}
+  return max;
 }
 
 function lastLine(s: string) {

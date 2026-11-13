@@ -58,7 +58,7 @@ test('예약 저장: 확인 · 고치기 · 실행 기록 · 한 번짜리는 �
   assert.equal(ran.sessionId, 's2'); // 작업을 따라간다
   assert.equal(ran.enabled, false);
   assert.equal(ran.nextAt, null);
-  assert.equal(ran.lastResult, '보냄');
+  assert.match(ran.lastResult ?? '', /^보냄/);
   assert.equal(store.due(at11).length, 0);
 
   store.removeForSession('s1');
@@ -110,7 +110,7 @@ test('예약 실행: 진행 중인 작업이면 그 작업에 보낸다', async 
   await waitFor(events, (e) => e.type === 'agent.text' && !e.partial && e.text === 'turn 1: 아침 점검');
   assert.ok(events.some((e) => e.type === 'schedules.changed'));
   const s = schedules.forSession(id)[0];
-  assert.equal(s.lastResult, '보냄');
+  assert.match(s.lastResult ?? '', /^보냄/);
   assert.equal(new Date(s.nextAt!).getDate(), 11);
   sessions.stopAll();
 });
@@ -164,6 +164,6 @@ test('간격 예약: N분마다, 5분 미만은 안 되고, 작업이 일하는 
   await sessions.runSchedules(new Date(2026, 10, 10, 11, 0, 10));
   await waitFor(events, (e) => e.type === 'user.message' && e.sessionId === id && e.text === '확인');
   x = schedules.forSession(id)[0];
-  assert.equal(x.lastResult, '보냄');
+  assert.match(x.lastResult ?? '', /^보냄/);
   sessions.stopAll();
 });

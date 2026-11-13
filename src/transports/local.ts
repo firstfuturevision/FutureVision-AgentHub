@@ -45,6 +45,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
       if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, info);
+      if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, sessions.health); // AI 마다 연결 상태
       if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local' });
       // 원격 접속 — 켜기·끄기
       if (url.pathname === '/remote' && remote) {
@@ -138,7 +139,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       }
       // 예약 — 작업마다 정한 시각에 지시를 보낸다
       if (url.pathname === '/schedules' && schedules) {
-        if (req.method === 'GET') return json(res, 200, schedules.forSession(url.searchParams.get('sessionId') ?? ''));
+        if (req.method === 'GET') return json(res, 200, url.searchParams.get('all') ? schedules.list() : schedules.forSession(url.searchParams.get('sessionId') ?? '')); // all=1: 왼쪽 예약 탭
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
@@ -220,6 +221,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
             if (body?.action === 'check') void updater.check();
             else if (body?.action === 'apply') void updater.apply();
             else if (body?.action === 'restart') setTimeout(() => updater.restartNow(), 300); // 답을 보낸 뒤
+            else if (body?.action === 'restart-code') setTimeout(() => updater.restartForCode(body?.now === true), 300); // 바뀐 코드로: 지금 또는 작업이 끝난 뒤
             else updater.set(body ?? {});
           } catch (err) {
             return send(res, 400, (err as Error).message);

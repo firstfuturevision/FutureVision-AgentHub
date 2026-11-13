@@ -503,3 +503,31 @@ select:disabled { opacity: .45; cursor: default; }
 /* 분담 표시 */
 .task-tag { flex: none; font-size: 11px; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 0 4px; line-height: 16px; }
 body:has(#chat[hidden]) .task[aria-current="true"] { background: transparent; }
+
+/* 왼쪽 위 Agent Hub: 홈페이지 링크 */
+a.brand { color: inherit; text-decoration: none; }
+a.brand[href]:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 왼쪽 "예약" 탭(새 작업 위) */
+.new-task.side-sched { margin-bottom: 0; }
+.side-sched[aria-current="true"] { background: var(--hover); }
+.sched-count { margin-left: auto; font-size: 12px; color: var(--ink-faint); }
+.sched-count.fail { color: var(--warn); }
+/* 왼쪽 위 알림: AI 연결 문제, 새 코드 */
+.side-alerts { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; }
+.side-alerts:empty { display: none; }
+.side-alert { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; text-align: left; white-space: normal; width: 100%; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; color: var(--ink-soft); background: var(--hover); border-radius: 8px; padding: 7px 10px; }
+.side-alert.bad { color: var(--warn); }
+.side-alert > span { flex: 1 1 100%; }
+.side-alert-btn { font-size: 12px; padding: 2px 8px; border: 1px solid var(--rule); border-radius: 6px; }
+/* 모든 예약 화면 */
+.sched-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.sched-row { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.sched-row.off { opacity: .55; }
+.sched-top { display: flex; align-items: center; gap: 10px; }
+.sched-when { font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.sched-task { flex: 1; min-width: 0; text-align: left; font-size: 13px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-task:disabled { color: var(--ink-faint); }
+.sched-del { font-size: 12px; padding: 3px 8px !important; }
+.sched-prompt { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-meta { font-size: 12px; color: var(--ink-faint); }
+.sched-meta.fail { color: var(--warn); }

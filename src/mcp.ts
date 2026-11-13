@@ -25,7 +25,8 @@ const INSTRUCTIONS = [
   '사람이 에이전트(하위 에이전트 역할)을 만들거나 고치거나 지워 달라고 하면 agent_list / agent_save / agent_delete 를 쓴다. 역할 지침은 할 일·하지 말 일·보고 형식·끝나는 조건이 드러나게 구체적으로 쓴다. 저장·삭제 전에 사람 승인 화면이 뜬다.',
   '사람이 프리셋(작업 환경: 작업 폴더·함께 연결할 폴더·작업 방식 지침·기본 메인 에이전트)을 만들거나 고치거나 지워 달라고 하면 preset_list / preset_save / preset_delete 를 쓴다. 에이전트와 프리셋은 다른 것이다.',
   '사람이 프리셋·에이전트·스킬·툴을 "공유 레포에 올려 달라"고 하면 share_push 로 이름을 주어 올린다(사람 승인 후). 목록의 shared=true 는 이미 공유받은 것이라 고칠 수 없다.',
-  '사람이 예약("매일 ○시에", "매주 월요일에" 등)을 부탁하면 새 작업을 만들지 말고 schedule_save 로 지금 이 작업에 건다. 권한·모델 같은 이 작업의 설정은 짐작하지 말고 session_info 로 확인한다. Agent Hub 의 HTTP 주소나 코드를 직접 건드려 작업·예약을 만들지 않는다.',
+  '사람이 예약("매일 ○시에", "매주 월요일에" 등)을 부탁하면 새 작업을 만들지 말고 schedule_save 로 건다. 다른 작업(예: 영업)에 걸어 달라면 session 에 그 작업 이름을 준다. 권한·모델 같은 이 작업의 설정은 짐작하지 말고 session_info 로 확인한다. Agent Hub 의 HTTP 주소나 코드를 직접 건드려 작업·예약을 만들지 않는다.',
+  '다른 작업(왼쪽 작업 목록의 작업)에 알릴 일이 있거나 사람이 "○○ 작업에 전해 줘"라고 하면 session_list 로 이름을 확인하고 session_send 로 보낸다. 분담을 만들어 달라면 session_split 으로 만든다. 사람에게 복사해 붙여 달라고 하지 않는다.',
   SCREEN_INSTRUCTION,
 ].join('\n');
 
@@ -96,9 +97,9 @@ export const TASK_TOOLS = [
   },
   {
     name: 'schedule_list',
-    title: '이 작업의 예약 보기',
-    description: '지금 이 작업에 걸린 예약(오른쪽 작업 정보의 "예약" 칸에 보이는 것)을 본다.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    title: '예약 보기',
+    description: '예약을 본다. 기본은 지금 이 작업(오른쪽 작업 정보의 "예약" 칸), session 을 주면 그 작업, all=true 면 모든 작업의 예약(왼쪽 "예약" 탭에 보이는 것).',
+    inputSchema: { type: 'object', properties: { session: { type: 'string', description: '다른 작업 이름 또는 id' }, all: { type: 'boolean', description: 'true 면 모든 작업' } }, additionalProperties: false },
   },
   {
     name: 'schedule_save',
@@ -108,6 +109,7 @@ export const TASK_TOOLS = [
       type: 'object',
       properties: {
         id: { type: 'string', description: '고칠 때만: schedule_list 의 id' },
+        session: { type: 'string', description: '다른 작업에 걸 때만: 그 작업 이름(session_list 의 name) 또는 id. 없으면 이 작업' },
         prompt: { type: 'string', description: '그 시각에 이 작업에 보낼 지시(사람이 보낸 것처럼 들어온다)' },
         repeat: { type: 'string', enum: ['once', 'daily', 'weekdays', 'weekly', 'interval'], description: 'once=한 번, daily=매일, weekdays=평일(월~금), weekly=매주, interval=N분마다' },
         time: { type: 'string', description: 'HH:MM (interval 이 아니면 필수)' },
@@ -123,8 +125,26 @@ export const TASK_TOOLS = [
   {
     name: 'schedule_delete',
     title: '이 작업의 예약 지우기',
-    description: '지금 이 작업에 걸린 예약 하나를 지운다(schedule_list 의 id).',
-    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+    description: '예약 하나를 지운다(schedule_list 의 id). 다른 작업의 예약이면 session 에 그 작업 이름.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, session: { type: 'string' } }, required: ['id'], additionalProperties: false },
+  },
+  {
+    name: 'session_list',
+    title: '작업 목록',
+    description: '이 Agent Hub 의 메인 작업들(왼쪽 작업 목록)을 본다: 이름, id 앞 8자, 상태, 분담해 온 원본, 예약 수. 다른 작업에 보내거나 예약을 걸기 전에 이름을 확인한다.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'session_send',
+    title: '다른 작업에 보내기',
+    description: '다른 작업에 지시나 알림을 보낸다. 그 작업 대화에 "작업 <이 작업 이름>"이 보낸 글로 들어가고, 그 작업이 일하는 중이면 지금 차례가 끝난 뒤 받는다. 답은 기다리지 않는다(그 작업이 분담이면 결과가 공유로 돌아온다).',
+    inputSchema: { type: 'object', properties: { session: { type: 'string', description: '받을 작업 이름(session_list 의 name) 또는 id' }, text: { type: 'string', description: '보낼 글. 받는 쪽이 앞 대화를 모르니 필요한 맥락을 함께 적는다' } }, required: ['session', 'text'], additionalProperties: false },
+  },
+  {
+    name: 'session_split',
+    title: '분담 만들기',
+    description: '작업을 분담해 이름을 붙인 새 작업을 만든다. 분담은 앞 대화를 이어받고, 원본과 서로 한 일(사람 지시와 마지막 보고)을 주고받는다. from 이 없으면 이 작업을 분담한다. 만든 뒤 첫 지시는 session_send 로.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string', description: '새 분담의 이름(작업 목록에 보임)' }, from: { type: 'string', description: '분담할 작업 이름 또는 id(없으면 이 작업)' } }, required: ['name'], additionalProperties: false },
   },
 ];
 
@@ -224,24 +244,40 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
           }
         case 'schedule_list':
           try {
-            const list = sessions.scheduleListByMain(mainId);
-            return ok({ content: [{ type: 'text', text: list.length ? JSON.stringify(list, null, 2) : '이 작업에 걸린 예약 없음' }], structuredContent: { schedules: list } });
+            const list = sessions.scheduleListByMain(mainId, a.session, a.all === true);
+            return ok({ content: [{ type: 'text', text: list.length ? JSON.stringify(list, null, 2) : '걸린 예약 없음' }], structuredContent: { schedules: list } });
           } catch (err) {
             return text((err as Error).message, true);
           }
         case 'schedule_save':
           try {
             const s = sessions.scheduleSaveByMain(mainId, a);
-            return text(`예약함(id ${s.id}): ${s.repeat}${s.time ? ` ${s.time}` : ''}${s.every ? ` ${s.every}분마다` : ''}, 다음 실행 ${s.nextAt ? new Date(s.nextAt).toLocaleString('ko-KR') : '없음'}. 이 작업의 오른쪽 작업 정보 "예약" 칸에 보인다.`);
+            return text(`예약함(id ${s.id}, 작업 ${s.task}): ${s.repeat}${s.time ? ` ${s.time}` : ''}${s.every ? ` ${s.every}분마다` : ''}, 다음 실행 ${s.nextAt ? new Date(s.nextAt).toLocaleString('ko-KR') : '없음'}. 그 작업의 오른쪽 "예약" 칸과 왼쪽 "예약" 탭에 보인다.`);
           } catch (err) {
             return text(`예약 안 됨: ${(err as Error).message}`, true);
           }
         case 'schedule_delete':
           try {
-            sessions.scheduleDeleteByMain(mainId, typeof a.id === 'string' ? a.id : '');
+            sessions.scheduleDeleteByMain(mainId, typeof a.id === 'string' ? a.id : '', a.session);
             return text('예약을 지움');
           } catch (err) {
             return text(`지우지 않음: ${(err as Error).message}`, true);
+          }
+        case 'session_list': {
+          const list = sessions.taskList();
+          return ok({ content: [{ type: 'text', text: JSON.stringify(list, null, 2) }], structuredContent: { sessions: list } });
+        }
+        case 'session_send':
+          try {
+            return text(await sessions.taskSendByMain(mainId, a.session, a.text));
+          } catch (err) {
+            return text(`안 보냄: ${(err as Error).message}`, true);
+          }
+        case 'session_split':
+          try {
+            return text(await sessions.taskSplitByMain(mainId, a.name, a.from));
+          } catch (err) {
+            return text(`못 만듦: ${(err as Error).message}`, true);
           }
         case 'show_image':
           try {

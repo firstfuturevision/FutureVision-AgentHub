@@ -469,7 +469,7 @@ test('MCP: initialize 는 지침을, tools/list 는 clink 와 프리셋 도구�
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.match(init.result.instructions, /메인 에이전트/);
   const list = await call('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'session_info', 'schedule_list', 'schedule_save', 'schedule_delete', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'session_info', 'schedule_list', 'schedule_save', 'schedule_delete', 'session_list', 'session_send', 'session_split', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
   assert.deepEqual(list.result.tools[0].inputSchema.properties.preset.enum, ['리뷰어']); // 프리셋이 도구에 실린다
   assert.match(init.result.instructions, /맡길 수 있는 하위 에이전트: 리뷰어/);
   assert.ok(events.length > 0);
@@ -531,7 +531,7 @@ test('MCP 예약·설정: 메인은 지금 이 작업에만 예약을 걸고·�
   assert.equal(list[0].time, '10:00');
   // 잘못된 값·다른 작업의 예약
   assert.match((await call('schedule_save', { prompt: 'x', repeat: 'daily', time: '25:00' })).content[0].text, /시각은 HH:MM/);
-  assert.match((await call('schedule_delete', { id: 'nope' })).content[0].text, /이 작업의 예약이 아님/);
+  assert.match((await call('schedule_delete', { id: 'nope' })).content[0].text, /의 예약이 아님/);
   assert.match((await call('schedule_delete', { id: list[0].id })).content[0].text, /지움/);
   assert.equal((await call('schedule_list')).structuredContent.schedules.length, 0);
   sessions.setAutoApproveAll(false);

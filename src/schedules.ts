@@ -137,6 +137,14 @@ export class ScheduleStore {
     this.flush();
   }
 
+  /** 실행한 차례가 끝난 뒤 결과만 고친다(다음 실행 시각은 그대로) */
+  markResult(id: string, result: string) {
+    const s = this.items.find((x) => x.id === id);
+    if (!s) return;
+    s.lastResult = result.slice(0, 200);
+    this.flush();
+  }
+
   private flush() {
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 2));

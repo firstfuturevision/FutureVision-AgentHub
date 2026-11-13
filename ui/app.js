@@ -291,6 +291,8 @@ function showNav(nav) {
   for (const b of document.querySelectorAll('[data-nav]')) b.setAttribute('aria-current', String(b.dataset.nav === nav));
   $('chat').hidden = nav !== 'sessions';
   $('settings').hidden = nav !== 'settings';
+  $('schedules-view').hidden = nav !== 'schedules';
+  if (nav === 'schedules') void loadAllSchedules();
   if (nav === 'settings') {
     renderSettings();
     loadPresets();
@@ -303,6 +305,110 @@ function showNav(nav) {
   renderPanel();
 }
 for (const b of document.querySelectorAll('[data-nav]')) b.onclick = () => showNav(b.dataset.nav);
+
+// ── 모든 예약(왼쪽 "예약" 탭): 시각순, 마지막 결과, 켜고 끄기·지우기, 같은 시각에 몰리면 알림 ──
+let allSchedules = [];
+async function loadAllSchedules() {
+  allSchedules = await getJson('/schedules?all=1', []);
+  syncSchedCount();
+  if (!$('schedules-view').hidden) renderAllSchedules();
+}
+function syncSchedCount() {
+  const on = allSchedules.filter((x) => x.enabled);
+  const failed = on.filter((x) => /^실패|→ 실패/.test(x.lastResult ?? '')).length;
+  const c = $('sched-count');
+  c.textContent = failed ? `실패 ${failed}` : on.length ? String(on.length) : '';
+  c.classList.toggle('fail', Boolean(failed));
+}
+function renderAllSchedules() {
+  const box = $('sched-all');
+  box.replaceChildren();
+  const on = allSchedules.filter((x) => x.enabled);
+  box.append(el('p', 'hint', `모든 작업에 걸린 예약 ${allSchedules.length}개(켜짐 ${on.length}). 작업 이름을 누르면 그 작업으로 갑니다. 예약을 만들거나 고치려면 그 작업에서 "매일 ○시에 해줘"라고 하거나 오른쪽 작업 정보의 예약 칸을 씁니다.`));
+  // 같은 시각(분)에 셋 이상이면 사용 한도에 걸리기 쉽다
+  const slot = {};
+  for (const x of on) if (x.repeat !== 'interval' && x.time) (slot[x.time] ??= []).push(x);
+  const crowded = Object.entries(slot).filter(([, v]) => v.length >= 3);
+  if (crowded.length) box.append(el('p', 'p-warn', `같은 시각에 몰림: ${crowded.map(([t, v]) => `${t} ${v.length}개`).join(', ')}. 같은 AI 계정을 같이 써서 사용 한도에 걸리기 쉬우니 10분씩 나눠 주세요.`));
+  const key = (x) => (x.repeat === 'interval' ? '00:00' : x.time ?? '99:99');
+  const list = el('div', 'sched-list');
+  for (const x of [...allSchedules].sort((a, b) => Number(b.enabled) - Number(a.enabled) || key(a).localeCompare(key(b)))) {
+    const s = sessions.get(x.sessionId);
+    const row = el('div', `sched-row${x.enabled ? '' : ' off'}`);
+    const top = el('div', 'sched-top');
+    top.append(el('span', 'sched-when', whenText(x)));
+    const task = el('button', 'sched-task', s ? titleOf(s) : '(지워진 작업)');
+    task.type = 'button';
+    task.disabled = !s;
+    task.onclick = () => { viewId = x.sessionId; showNav('sessions'); render(); };
+    top.append(task);
+    const sw = el('button', `switch${x.enabled ? ' on' : ''}`);
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch');
+    sw.setAttribute('aria-checked', String(x.enabled));
+    sw.setAttribute('aria-label', x.enabled ? '예약 끄기' : '예약 켜기');
+    sw.onclick = async () => {
+      const r = await fetch('/schedules', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...x, enabled: !x.enabled }) });
+      if (!r.ok) return flash(await r.text(), true);
+      void loadAllSchedules();
+    };
+    const del = el('button', 'line-btn sched-del', '지우기');
+    del.type = 'button';
+    del.onclick = async () => {
+      if (!(await askDialog({ title: '예약 지우기', text: `${whenText(x)} · ${x.prompt.slice(0, 80)}`, ok: '지우기', danger: true }))) return;
+      await fetch(`/schedules?id=${encodeURIComponent(x.id)}&sessionId=${encodeURIComponent(x.sessionId)}`, { method: 'DELETE' });
+      void loadAllSchedules();
+    };
+    top.append(sw, del);
+    row.append(top, el('div', 'sched-prompt', x.prompt.replace(/\s+/g, ' ').slice(0, 160)));
+    const failed = /^실패|→ 실패/.test(x.lastResult ?? '');
+    const meta = [x.enabled ? `다음 ${nextText(x.nextAt)}` : '꺼짐', x.lastAt ? `마지막 ${new Date(x.lastAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${x.lastResult ?? ''}` : '아직 실행 안 함'].filter(Boolean).join('  ·  ');
+    row.append(el('div', `sched-meta${failed ? ' fail' : ''}`, meta));
+    list.append(row);
+  }
+  if (!allSchedules.length) list.append(el('p', 'hint', '걸린 예약이 없어요.'));
+  box.append(list);
+}
+
+// ── 왼쪽 위 알림: AI 연결 문제(로그인 만료·크레딧 부족), 다시 켜야 반영되는 새 코드 ──
+let health = {};
+let codeState = null; // /update 의 codeChanged·waiting
+async function loadAlerts() {
+  health = await getJson('/health', health);
+  const u = await getJson('/update', null);
+  if (u) codeState = { changed: Boolean(u.codeChanged), waiting: Boolean(u.waiting), canRestart: Boolean(u.canRestart) };
+  renderAlerts();
+}
+function renderAlerts() {
+  const box = $('side-alerts');
+  box.replaceChildren();
+  for (const [agent, h] of Object.entries(health)) {
+    if (h?.state !== 'error') continue;
+    const a = el('button', 'side-alert bad', `${NAMES[agent] ?? agent} · ${h.message}`);
+    a.type = 'button';
+    a.title = '설정 → 연동 열기';
+    a.onclick = () => showNav('settings');
+    box.append(a);
+  }
+  if (codeState?.changed && codeState.canRestart) {
+    const a = el('div', 'side-alert');
+    a.append(el('span', '', codeState.waiting ? '새 코드 · 작업이 끝나면 다시 켜요' : '새 코드 있음 · 다시 켜야 반영돼요'));
+    const later = el('button', 'side-alert-btn', '끝나면');
+    later.type = 'button';
+    later.title = '진행 중인 작업이 모두 끝나면 다시 켭니다';
+    later.hidden = codeState.waiting;
+    later.onclick = async () => { await postJson('/update', { action: 'restart-code', now: false }); flash('작업이 끝나면 다시 켜요'); setTimeout(loadAlerts, 800); };
+    const now = el('button', 'side-alert-btn', '지금');
+    now.type = 'button';
+    now.onclick = async () => {
+      if (!(await askDialog({ title: '지금 다시 켜기', text: '일하는 작업이 있으면 중간에 끊깁니다. 대화는 다시 켠 뒤 이어서 할 수 있어요.', ok: '다시 켜기' }))) return;
+      await postJson('/update', { action: 'restart-code', now: true });
+    };
+    a.append(later, now);
+    box.append(a);
+  }
+}
+setInterval(loadAlerts, 60000);
 
 $('new-task').onclick = () => { viewId = null; showNav('sessions'); render(); input.focus(); };
 $('halt').onclick = () => viewId && send({ type: 'session.stop', sessionId: viewId });
@@ -1266,10 +1372,14 @@ es.onopen = () => {
   fetch('/info').then((r) => r.json()).then((i) => {
     if (bootId && i.bootId && i.bootId !== bootId) location.reload();
     bootId = i.bootId ?? bootId;
+    // 왼쪽 위 Agent Hub: 홈페이지 링크(포크는 config.json 의 homepage, 비우면 링크 없음)
+    if (typeof i.homepage === 'string') { if (i.homepage) $('brand').href = i.homepage; else $('brand').removeAttribute('href'); }
   }).catch(() => {});
   // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 그린다.
   sessions.clear();
   replayed = false;
+  void loadAlerts();
+  void loadAllSchedules();
   render();
   link.textContent = '';
   link.title = '이 PC 의 Agent Hub 에 연결됨';
@@ -1291,7 +1401,8 @@ function onEvent(ev) {
     if (!$('settings').hidden) void getJson('/shared', sharedState).then((s) => { sharedState = s; renderAuth(); });
     return;
   }
-  if (ev.type === 'schedules.changed') { scheduleCache.clear(); return renderPanel(); } // 예약이 바뀌거나 실행됨
+  if (ev.type === 'schedules.changed') { scheduleCache.clear(); void loadAllSchedules(); return renderPanel(); } // 예약이 바뀌거나 실행됨
+  if (ev.type === 'agent.health') { health[ev.agent] = { state: ev.state, message: ev.message }; return renderAlerts(); } // AI 연결 상태
 
   if (ev.type === 'session.deleted') {
     sessions.delete(ev.sessionId);
@@ -1335,7 +1446,7 @@ function onEvent(ev) {
       Object.assign(s.info, ev.session);
       skillsCache.delete(s.info.id);
       const who = ev.session.preset ? ev.session.preset.name : '기본';
-      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : '', ev.session.autoApprove ? '권한 묻지 않음' : ''].filter(Boolean).join(' · ');
+      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : '', ev.session.permMode === 'readonly' ? '읽기만' : ev.session.permMode === 'ask' ? '늘 묻기' : ev.session.autoApprove ? '권한 묻지 않음' : ''].filter(Boolean).join(' · ');
       s.items.push({ k: 'line meta', t: `설정 바꿈: ${what}. 다음 지시에 앞 대화를 붙여 이어갑니다` });
       break;
     }
@@ -1393,7 +1504,10 @@ function onEvent(ev) {
       else if (at >= 0) s.items[at].resolved = { allow: ev.allow, by: ev.by };
       break;
     }
-    case 'error': s.items.push({ k: 'line err', t: ev.message }); break;
+    case 'error':
+      s.items.push({ k: 'line err', t: ev.message });
+      if (replayed) notify(s, ev.message.split('\n')[0]); // 예약 실패·로그인 만료 등
+      break;
   }
   renderSoon();
 }
@@ -1820,7 +1934,8 @@ function renderPanel() {
   } else {
     role.append(el('div', 'p-item-title', `기본 · ${NAMES[s.info.agent]}${s.info.model ? ` · ${modelName(s.info.agent, s.info.model)}` : ''}`), el('div', 'p-text', '계정 설정 그대로'));
   }
-  if (s.info.autoApprove || permState?.autoApproveAll) role.append(el('div', 'p-warn', `권한 묻지 않음${s.info.autoApprove ? '' : '(모든 작업)'} · 도구를 허용 없이 바로 실행`));
+  if (s.info.permMode) role.append(el('div', 'p-meta', s.info.permMode === 'readonly' ? '읽기만 · 파일·명령 등 바꾸는 도구는 거절(모든 작업 설정보다 우선)' : '늘 묻기 · 도구마다 허용을 물음(모든 작업 설정보다 우선)'));
+  else if (s.info.autoApprove || permState?.autoApproveAll) role.append(el('div', 'p-warn', `권한 묻지 않음${s.info.autoApprove ? '' : '(모든 작업)'} · 도구를 허용 없이 바로 실행`));
   if (s.info.role !== 'worker') {
     const acts = el('div', 'p-acts');
     const change = el('button', 'p-mini', confEdit === s.info.id ? '닫기' : '바꾸기');
@@ -1905,7 +2020,7 @@ let confEdit = null; // 바꾸기 창이 열린 세션 id
 let confDraft = null; // 고르는 중인 값 — 다른 이벤트로 패널을 다시 그려도 지킨다
 function configForm(s) {
   const f = el('div', 'p-conf');
-  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '', auto: Boolean(s.info.autoApprove) });
+  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '', auto: s.info.permMode ?? (s.info.autoApprove ? '1' : '') });
   const field = (label, sel) => {
     const l = el('label', 'p-conf-row');
     l.append(el('span', 'p-meta', label), sel);
@@ -1923,8 +2038,9 @@ function configForm(s) {
   aiSel.value = d.ai;
   const mSel = field('모델', el('select'));
   const auSel = field('권한', el('select'));
-  auSel.append(new Option('묻기', ''), new Option('묻지 않기', '1'));
-  auSel.value = d.auto ? '1' : '';
+  // 기본·묻지 않기는 "권한 묻지 않기(모든 작업)"를 따른다. 늘 묻기·읽기만은 그보다 앞선다(바깥 글을 받는 작업용)
+  auSel.append(new Option(permState?.autoApproveAll ? '기본 (모든 작업 설정: 묻지 않음)' : '묻기', ''), new Option('묻지 않기', '1'), new Option('늘 묻기 (모든 작업 설정보다 우선)', 'ask'), new Option('읽기만 (바꾸는 도구는 거절)', 'readonly'));
+  auSel.value = d.auto;
   const aiRow = aiSel.parentElement;
   // 에이전트를 고르면 AI 는 그 에이전트 것. 모델은 고른 에이전트·AI 기준으로 다시 채운다
   const sync = (keepModel) => {
@@ -1939,8 +2055,8 @@ function configForm(s) {
     Object.assign(d, { wp: wpSel.value, ag: agSel.value, ai: aiSel.value, m: mSel.value });
   };
   sync(d.m);
-  agSel.onchange = () => { sync(); d.auto = Boolean(presets.find((x) => x.id === agSel.value)?.autoApprove); auSel.value = d.auto ? '1' : ''; };
-  auSel.onchange = () => { d.auto = auSel.value === '1'; };
+  agSel.onchange = () => { sync(); if (d.auto === '' || d.auto === '1') { d.auto = presets.find((x) => x.id === agSel.value)?.autoApprove ? '1' : ''; auSel.value = d.auto; } };
+  auSel.onchange = () => { d.auto = auSel.value; };
   aiSel.onchange = () => sync('');
   wpSel.onchange = mSel.onchange = () => Object.assign(d, { wp: wpSel.value, m: mSel.value });
   const busy = s.info.status === 'working' || s.info.status === 'starting';
@@ -1958,6 +2074,7 @@ function configForm(s) {
       ...(agSel.value ? {} : { agent: aiSel.value }),
       model: mSel.value || null,
       autoApprove: auSel.value === '1',
+      permMode: auSel.value === 'ask' || auSel.value === 'readonly' ? auSel.value : null,
     });
     confEdit = null;
     confDraft = null;

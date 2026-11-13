@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFil
 import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute, extname, basename } from 'node:path';
 import { AGENTS, MODEL_RE } from './protocol.ts';
-import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, SessionInfo, SessionRole } from './protocol.ts';
+import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
 import type { ToolStore } from './tools.ts';
@@ -51,6 +51,7 @@ interface Turn {
 
 interface Live {
   info: SessionInfo;
+  schedRun?: { id: string; skip: number; started: number; note: string; error?: string }; // 예약으로 보낸 지시의 차례 — 끝나면 예약 결과를 고친다
   adapter: AgentAdapter;
   history: HostEvent[]; // 나중에 붙은 화면이 이어서 볼 수 있게
   token?: string; // main 만: MCP 주소의 비밀 토큰
@@ -87,6 +88,32 @@ function conversation(history: HostEvent[], upTo?: number): string[] {
   }
   return lines;
 }
+const clip = (text: string, n: number) => (text.length > n ? text.slice(0, n) + ' …(줄임)' : text);
+/** 공유용 요약: 차례마다 사람 지시 + 그 차례의 마지막 보고, 다른 갈래에서 받은 공유(이어 넘기기용, 길면 줄임) */
+export function digest(events: HostEvent[]): string[] {
+  const out: string[] = [];
+  let last: string | undefined;
+  const flush = () => { if (last) out.push(`에이전트: ${clip(last, 4000)}`); last = undefined; };
+  for (const e of events) {
+    if (e.type === 'user.message') { flush(); out.push(`사람(${e.from}): ${clip(e.text, 1500)}`); }
+    else if (e.type === 'agent.text' && !e.partial) last = e.text;
+    else if (e.type === 'turn.done') flush();
+    else if (e.type === 'session.merged') { flush(); out.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${clip(e.text, 3000)}`); }
+  }
+  flush();
+  return out;
+}
+/** CLI 오류 → 사람이 할 일을 알려 주는 한국어. 모르는 오류면 undefined. kind: 연결 상태(health)에 남길 종류 */
+export function friendlyError(msg: string): { text: string; auth: boolean } | undefined {
+  const m = String(msg ?? '');
+  if (/credit balance is too low/i.test(m)) return { text: '크레딧이 부족해요. 결제 페이지에서 충전하거나 설정 → 연동에서 로그인 방식으로 바꾸세요', auth: true };
+  if (/oauth session expired|failed to authenticate|not logged in|please run .*login|authentication required|-32000/i.test(m)) return { text: '로그인이 만료됐어요. 설정 → 연동에서 다시 로그인하세요', auth: true };
+  if (/invalid api key|incorrect api key|api key not valid/i.test(m)) return { text: 'API 키가 맞지 않아요. 설정 → 연동에서 키를 다시 넣으세요', auth: true };
+  if (/not scoped to a workspace/i.test(m)) return { text: '이 API 키는 워크스페이스에 속하지 않아요. 콘솔에서 워크스페이스 안의 키를 새로 만드세요', auth: true };
+  if (/rate.?limit|usage limit|limit reached|\b429\b|quota/i.test(m)) return { text: '사용 한도에 걸렸어요. 잠시 뒤 다시 하거나 예약 시각을 나누세요', auth: false };
+  if (/overloaded|\b529\b/i.test(m)) return { text: 'AI 서버가 붐벼요. 잠시 뒤 다시 하세요', auth: false };
+  return undefined;
+}
 const tail = (text: string) => (text.length > 8000 ? '…' + text.slice(-8000) : text);
 /** 대화 기록 → 이어받기용 글(뒤쪽 8000자) */
 function transcript(history: HostEvent[], upTo?: number): string {
@@ -112,6 +139,15 @@ export class SessionManager {
   screen?: ScreenControl;
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
   autoApproveAll = false;
+  /** AI 마다 연결 상태: 로그인 만료·크레딧 부족 같은 오류가 나면 error, 그 AI 의 차례가 잘 끝나면 ok. 화면 위쪽 알림과 GET /health */
+  health: Partial<Record<AgentKind, { state: 'ok' | 'error'; message: string; at: string }>> = {};
+  private setHealth(agent: AgentKind, state: 'ok' | 'error', message: string) {
+    const cur = this.health[agent];
+    if (cur?.state === state && cur.message === message) return;
+    if (!cur && state === 'ok') { this.health[agent] = { state, message, at: new Date().toISOString() }; return; }
+    this.health[agent] = { state, message, at: new Date().toISOString() };
+    this.publish({ type: 'agent.health', agent, state, message });
+  }
   private makeAdapter: AdapterFactory;
   private openTerminal?: TerminalOpener;
   private mcpBaseUrl?: string;
@@ -222,7 +258,7 @@ export class SessionManager {
         if (e.type === 'session.reordered') info.rank = e.rank;
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
-        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove });
+        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode });
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
       const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
@@ -454,7 +490,8 @@ export class SessionManager {
       workPreset: i.workPreset?.name ?? null,
       autoApproveThisTask: Boolean(i.autoApprove),
       autoApproveAllTasks: this.autoApproveAll,
-      asksPermission: !(i.autoApprove || this.autoApproveAll),
+      permMode: i.permMode ?? null, // ask = 늘 묻기, readonly = 묻는 도구는 거절. 모든 작업 설정보다 앞선다
+      asksPermission: Boolean(i.permMode) || !(i.autoApprove || this.autoApproveAll),
       schedules: this.schedules?.forSession(i.id).length ?? 0,
       localTime: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -462,27 +499,105 @@ export class SessionManager {
   }
 
   /** 메인이 자기 작업(오른쪽 작업 정보의 "예약")에 걸린 예약을 본다 */
-  scheduleListByMain(mainId: string) {
+  /** 예약 보기: session(작업 이름)을 주면 그 작업, 없으면 이 작업. all 이면 모든 작업 */
+  scheduleListByMain(mainId: string, key?: unknown, all = false) {
     if (!this.schedules) throw new Error('예약 기능이 없음');
-    if (!this.sessions.has(mainId)) throw new Error('없는 작업');
-    return this.schedules.forSession(mainId);
+    if (all) return this.schedules.list().map((x) => ({ ...x, task: this.sessions.get(x.sessionId) ? this.nameOf(this.sessions.get(x.sessionId)!) : '(지워진 작업)' }));
+    const { target } = this.crossTask(mainId, key);
+    return this.schedules.forSession(target.info.id);
   }
 
-  /** 메인이 자기 작업에 예약을 걸거나(id 없이) 고친다. 다른 작업의 예약은 건드리지 못한다 */
+  /** 예약 걸기(id 없이)·고치기(id 와 함께). session(작업 이름)을 주면 그 작업에, 없으면 이 작업에 */
   scheduleSaveByMain(mainId: string, a: Record<string, unknown>) {
     if (!this.schedules) throw new Error('예약 기능이 없음');
-    if (!this.sessions.has(mainId)) throw new Error('없는 작업');
-    if (typeof a.id === 'string' && a.id && !this.schedules.forSession(mainId).some((s) => s.id === a.id)) throw new Error(`이 작업의 예약이 아님: ${a.id}`);
-    const s = this.schedules.save({ ...a, sessionId: mainId });
+    const { target } = this.crossTask(mainId, a.session);
+    const id = target.info.id;
+    if (typeof a.id === 'string' && a.id && !this.schedules.forSession(id).some((s) => s.id === a.id)) throw new Error(`${this.nameOf(target)} 의 예약이 아님: ${a.id}`);
+    const { session: _s, ...rest } = a;
+    const s = this.schedules.save({ ...rest, sessionId: id });
     this.schedulesChanged();
-    return s;
+    return { ...s, task: this.nameOf(target) };
   }
 
-  scheduleDeleteByMain(mainId: string, id: string) {
+  scheduleDeleteByMain(mainId: string, id: string, key?: unknown) {
     if (!this.schedules) throw new Error('예약 기능이 없음');
-    if (!this.schedules.forSession(mainId).some((s) => s.id === id)) throw new Error(`이 작업의 예약이 아님: ${id}`);
+    const { target } = this.crossTask(mainId, key);
+    if (!this.schedules.forSession(target.info.id).some((s) => s.id === id)) throw new Error(`${this.nameOf(target)} 의 예약이 아님: ${id}`);
     this.schedules.remove(id);
     this.schedulesChanged();
+  }
+
+  // ── 메인이 다른 작업 다루기: 작업 이름으로 찾아 보기·보내기·분담·예약 ──
+  // 늘 묻기·읽기만인 작업은 쓰지 못한다(다른 작업을 시켜 제 권한을 넘지 않게)
+
+  /** 작업 이름(사람이 붙인 이름, 없으면 첫 지시) */
+  private nameOf(live: Live): string {
+    const first = live.history.find((e) => e.type === 'user.message');
+    return live.info.customTitle ?? (first && first.type === 'user.message' ? first.text.replace(/\s+/g, ' ').slice(0, 40) : '새 작업');
+  }
+
+  /** 이름(같음 → 시작 → 포함, 대소문자 무시) 또는 id 앞부분으로 메인 작업 하나를 찾는다. 여럿이면 후보를 알려 준다 */
+  findTask(key: string): Live {
+    const k = String(key ?? '').trim().toLowerCase();
+    if (!k) throw new Error('작업 이름을 주세요(session_list 의 name)');
+    const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main');
+    const byId = mains.filter((l) => l.info.id.toLowerCase().startsWith(k));
+    if (byId.length === 1 && k.length >= 4) return byId[0];
+    for (const test of [(n: string) => n === k, (n: string) => n.startsWith(k), (n: string) => n.includes(k)]) {
+      const hit = mains.filter((l) => test(this.nameOf(l).toLowerCase()));
+      if (hit.length === 1) return hit[0];
+      if (hit.length > 1) throw new Error(`"${key}" 에 맞는 작업이 여럿: ${hit.map((l) => `${this.nameOf(l)}(${l.info.id.slice(0, 8)})`).join(', ')}. id 앞 8자로 고르세요`);
+    }
+    throw new Error(`없는 작업: ${key}. session_list 로 이름을 확인하세요`);
+  }
+
+  private crossTask(mainId: string, key?: unknown): { me: Live; target: Live } {
+    const me = this.sessions.get(mainId);
+    if (!me) throw new Error('없는 작업');
+    if (key === undefined || key === null || key === '') return { me, target: me };
+    const target = this.findTask(String(key));
+    if (target !== me && me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 다른 작업을 다루지 못함');
+    return { me, target };
+  }
+
+  /** 메인 작업 목록: 이름, id, 상태, 분담 원본, 예약 수, 권한 */
+  taskList() {
+    return [...this.sessions.values()].filter((l) => l.info.role === 'main').map((l) => {
+      const from = l.info.splitFrom ?? l.info.forkedFrom;
+      const src = from ? this.sessions.get(from) : undefined;
+      return {
+        name: this.nameOf(l),
+        id: l.info.id.slice(0, 8),
+        status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
+        schedules: this.schedules?.forSession(l.info.id).length ?? 0,
+        ...(l.info.permMode ? { permMode: l.info.permMode } : {}),
+        workdir: l.info.workdir,
+      };
+    });
+  }
+
+  /** 다른 작업에 지시를 보낸다(그 작업 대화에 "작업 <보낸 작업 이름>" 이 보낸 것으로 들어간다). 일하는 중이면 다음 차례에 */
+  async taskSendByMain(mainId: string, key: unknown, text: unknown): Promise<string> {
+    const { me, target } = this.crossTask(mainId, key);
+    if (target === me) throw new Error('자기 작업에는 보낼 수 없음');
+    const body = String(text ?? '').trim();
+    if (!body) throw new Error('보낼 글이 비어 있음');
+    const busy = target.info.status === 'working' || target.info.status === 'starting';
+    await this.handle({ type: 'user.message', sessionId: target.info.id, text: body.slice(0, 20000) }, { via: 'local', user: `작업 ${this.nameOf(me)}` });
+    return `${this.nameOf(target)} 에 보냄${busy ? '(일하는 중이라 지금 차례가 끝나면 이어서 받음)' : ''}`;
+  }
+
+  /** 분담 만들기: from(없으면 이 작업)을 분담하고 이름을 붙인다. 분담끼리는 서로 한 일을 공유한다 */
+  async taskSplitByMain(mainId: string, name: unknown, fromKey?: unknown): Promise<string> {
+    const { me, target: from } = this.crossTask(mainId, fromKey);
+    if (me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 분담을 만들지 못함');
+    const title = String(name ?? '').trim().slice(0, 80);
+    if (!title) throw new Error('분담 이름을 주세요');
+    const copy = await this.forkLive(from, { via: 'local', user: `작업 ${this.nameOf(me)}` }, ' (분담)', undefined, 'split');
+    copy.info.customTitle = title;
+    this.publish({ type: 'session.renamed', sessionId: copy.info.id, title });
+    return `${this.nameOf(from)} 에서 분담 "${title}"(${copy.info.id.slice(0, 8)}) 을 만듦. 첫 지시는 session_send 로 보낸다`;
   }
 
   /** 메인이 이 PC 의 프리셋·에이전트·스킬·툴을 공유 레포에 올린다(이름으로). 사람 승인 후 */
@@ -543,7 +658,7 @@ export class SessionManager {
     writeFileSync(this.permFile, JSON.stringify({ autoApproveAll: on }, null, 2));
     if (!on) return;
     for (const live of this.sessions.values()) {
-      if (live.dormant) continue;
+      if (live.dormant || live.info.permMode) continue; // 이 작업만의 권한(늘 묻기·읽기만)이 앞선다
       const done = new Set(live.history.filter((e) => e.type === 'permission.resolved').map((e: any) => e.requestId));
       for (const e of live.history) {
         if (e.type !== 'permission.request' || done.has(e.requestId) || this.asks.has(e.requestId)) continue;
@@ -829,6 +944,7 @@ export class SessionManager {
       customTitle: o.customTitle ? `${o.customTitle}${suffix}` : undefined,
       extraDirs: o.extraDirs,
       autoApprove: o.autoApprove,
+      permMode: o.permMode,
     });
     const role = o.preset ? this.presets?.find(o.preset.id) : undefined;
     const guide = o.workPreset ? this.workPresets?.find(o.workPreset.id) : undefined;
@@ -860,8 +976,11 @@ export class SessionManager {
       }
       this.scheduleRunning.add(s.id);
       try {
-        const r = await this.runScheduled(s.sessionId, s.prompt);
-        this.schedules.markRun(s.id, now, r.result, r.sessionId);
+        const r = await this.runScheduled(s.sessionId, s.prompt, s.id);
+        // 보내는 사이에 그 차례가 벌써 끝났으면 끝난 결과를 남긴다
+        const done = this.schedDone.get(s.id);
+        this.schedDone.delete(s.id);
+        this.schedules.markRun(s.id, now, done ?? r.result, r.sessionId);
       } catch (err) {
         this.schedules.markRun(s.id, now, `실패: ${(err as Error).message}`);
       } finally {
@@ -871,11 +990,26 @@ export class SessionManager {
     }
   }
 
+  /** 예약으로 보낸 지시의 차례가 끝남: 예약 결과를 고치고, 실패면 화면이 알림을 띄운다(error 이벤트) */
+  private schedDone = new Map<string, string>(); // 보내는 사이에 끝난 예약 차례의 결과
+  private finishScheduled(live: Live, result: string) {
+    const run = live.schedRun;
+    live.schedRun = undefined;
+    if (!run || !this.schedules) return;
+    result = `${run.note} → ${result}`;
+    if (this.scheduleRunning.has(run.id)) this.schedDone.set(run.id, result); // 아직 보내는 중: 보낸 뒤 남긴다
+    else this.schedules.markResult(run.id, result);
+    this.schedulesChanged();
+    if (result.startsWith('실패')) this.publish({ type: 'error', sessionId: live.info.id, message: `예약 실행 ${result}` });
+  }
+
   /** 같은 작업에 보낸다. 끝났거나 호스트를 다시 켜서 쉬는 작업이면 다시 띄워 앞 대화를 붙여 이어 간다. */
-  private async runScheduled(sessionId: string, prompt: string): Promise<{ result: string; sessionId?: string }> {
+  private async runScheduled(sessionId: string, prompt: string, scheduleId?: string): Promise<{ result: string; sessionId?: string }> {
     const live = this.sessions.get(sessionId);
     if (!live) return { result: '작업이 없어 건너뜀' };
     const woke = live.dormant;
+    // 이 지시의 차례가 끝나면 결과(끝남 · 걸린 시간 / 실패: 이유)로 고친다. 하던 차례가 있으면 그다음 차례
+    if (scheduleId) live.schedRun = { id: scheduleId, skip: live.info.status === 'working' ? 1 : 0, started: Date.now(), note: woke ? '쉬던 작업을 다시 띄워 보냄' : '보냄' };
     await this.handle({ type: 'user.message', sessionId, text: prompt }, { via: 'local', user: '예약' });
     if (live.dormant) return { result: '작업을 다시 띄우지 못함' };
     return { result: woke ? '쉬던 작업을 다시 띄워 보냄' : '보냄' };
@@ -935,7 +1069,9 @@ export class SessionManager {
         workdir: main.info.workdir, // 메인과 같은 작업 폴더
         extraDirs: main.info.extraDirs, // 메인에 연결한 폴더도 같이
         workPreset: main.info.workPreset,
-        autoApprove: Boolean(preset?.autoApprove || main.info.autoApprove), // 메인이 묻지 않으면 맡긴 일도 묻지 않는다
+        // 메인이 묻지 않으면 맡긴 일도 묻지 않는다. 메인이 늘 묻기·읽기만이면 맡긴 일도 같다
+        autoApprove: !main.info.permMode && Boolean(preset?.autoApprove || main.info.autoApprove),
+        permMode: main.info.permMode,
         title: prompt.slice(0, 60),
         origin: { via: main.info.via, user: main.info.requestedBy },
       });
@@ -1010,6 +1146,7 @@ export class SessionManager {
     customTitle?: string;
     extraDirs?: string[];
     autoApprove?: boolean;
+    permMode?: PermMode;
     cliSessionId?: string; // 가져온 Claude Code 대화 — 첫 CLI 부터 --resume 으로 이어 간다
     seed?: (id: string) => void; // CLI 를 띄우기 전에 기록에 먼저 넣을 것(가져온 대화)
   }): Promise<Live> {
@@ -1028,7 +1165,8 @@ export class SessionManager {
       copiedFrom: o.copiedFrom,
       customTitle: o.customTitle,
       extraDirs: o.extraDirs?.length ? o.extraDirs : undefined,
-      ...(o.autoApprove ? { autoApprove: true } : {}),
+      ...(o.autoApprove && !o.permMode ? { autoApprove: true } : {}),
+      ...(o.permMode ? { permMode: o.permMode } : {}),
       ...(o.cliSessionId ? { cliSessionId: o.cliSessionId, imported: true } : {}),
       title: o.title ?? (o.role === 'main' ? '메인 에이전트' : `${o.agent} 작업`),
       workdir: o.workdir,
@@ -1162,6 +1300,10 @@ export class SessionManager {
     // 권한 묻지 않기: 정했으면 그 값, 에이전트를 새로 고르면 그 에이전트의 값, 아니면 그대로. 켜는 건 PC 앞에서만
     let autoApprove = cmd.autoApprove ?? (presetChanged ? Boolean(preset?.autoApprove) : Boolean(info.autoApprove));
     if (autoApprove && !info.autoApprove && origin.via !== 'local' && !origin.trusted) return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
+    // 이 작업만의 권한: 조이는 것(늘 묻기·읽기만)은 어디서든, 푸는 것은 PC 앞에서만. 정하면 묻지 않기는 꺼진다
+    const permMode = cmd.permMode !== undefined ? (cmd.permMode ?? undefined) : info.permMode;
+    if (info.permMode && !permMode && origin.via !== 'local' && !origin.trusted) return fail('늘 묻기·읽기만을 푸는 것은 PC 앞에서만 할 수 있음');
+    if (permMode) autoApprove = false;
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
     if (!live.dormant) live.adapter.stop();
@@ -1185,6 +1327,8 @@ export class SessionManager {
     info.workPreset = wp ? { id: wp.id, name: wp.name } : undefined;
     if (autoApprove) info.autoApprove = true;
     else delete info.autoApprove;
+    if (permMode) info.permMode = permMode;
+    else delete info.permMode;
     info.status = 'starting';
     this.publish({ type: 'session.configured', sessionId: info.id, session: { ...info } });
     live.adapter = this.makeAdapter(agent);
@@ -1198,13 +1342,28 @@ export class SessionManager {
       if (live.info.cliSessionId === ev.cliSessionId) return;
       live.info.cliSessionId = ev.cliSessionId;
     }
-    const auto = ev.type === 'permission.request' && (live.info.autoApprove || this.autoApproveAll);
-    const full = { ...ev, sessionId: live.info.id, ...(auto ? { auto: true } : {}) } as HostEvent;
+    // 이 작업만의 권한이 먼저: 읽기만이면 묻는 도구는 바로 거절, 늘 묻기면 사람에게. 그다음 권한 묻지 않기(이 작업 또는 모든 작업)
+    const mode = live.info.permMode;
+    const ask = ev.type === 'permission.request';
+    const auto = ask && !mode && Boolean(live.info.autoApprove || this.autoApproveAll);
+    const deny = ask && mode === 'readonly';
+    // 아는 오류는 사람이 할 일로 바꿔 보여 주고(원문은 뒤에), 로그인·결제 문제면 그 AI 의 연결 상태에 남긴다
+    let shown: AdapterEvent = ev;
+    if (ev.type === 'error') {
+      const f = friendlyError(ev.message);
+      if (f) {
+        shown = { ...ev, message: `${f.text}\n(원문: ${ev.message.slice(0, 300)})` };
+        if (f.auth) this.setHealth(live.info.agent, 'error', f.text);
+      }
+      if (live.schedRun) live.schedRun.error = f?.text ?? ev.message.slice(0, 120);
+    }
+    if (ev.type === 'turn.done' && !ev.isError) this.setHealth(live.info.agent, 'ok', '');
+    const full = { ...shown, sessionId: live.info.id, ...(auto || deny ? { auto: true } : {}) } as HostEvent;
     this.publish(full);
-    // 권한 묻지 않기(이 작업 또는 모든 작업): 요청과 허용을 기록에만 남기고 바로 허용한다
-    if (ev.type === 'permission.request' && auto) {
-      this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: true, by: '자동 허용' });
-      live.adapter.respondPermission(ev.requestId, true);
+    // 자동으로 정한 것은 요청과 답을 기록에만 남긴다
+    if (ev.type === 'permission.request' && (auto || deny)) {
+      this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: auto, by: auto ? '자동 허용' : '읽기만' });
+      live.adapter.respondPermission(ev.requestId, auto);
     }
     const turn = live.turn;
     if (turn) {
@@ -1219,6 +1378,9 @@ export class SessionManager {
       this.closePerms(live, '차례 끝남');
       this.setStatus(live, 'idle');
       this.share(live);
+      const run = live.schedRun;
+      if (run && run.skip > 0) run.skip--; // 예약 지시 앞에 하던 차례
+      else if (run) this.finishScheduled(live, ev.isError || run.error ? `실패: ${run.error ?? '오류로 끝남'}` : `끝남 · ${Math.round((Date.now() - run.started) / 1000)}초`);
     }
     if (ev.type === 'session.ended') {
       // CLI 가 꺼짐: 작업은 대기로 남기고 다음 지시 때 다시 띄운다(wake)
@@ -1226,6 +1388,7 @@ export class SessionManager {
       if (live.token) this.tokens.delete(live.token);
       live.token = undefined;
       this.closePerms(live, 'CLI 꺼짐'); // 꺼진 CLI 에서 묻던 것은 거부로 정리
+      if (live.schedRun && ev.reason !== '사용자가 종료함') this.finishScheduled(live, `실패: ${live.schedRun.error ?? ev.reason}`);
       if (live.info.status !== 'idle') {
         live.info.status = 'idle';
         this.publish({ type: 'session.status', sessionId: live.info.id, status: 'idle' });
@@ -1268,23 +1431,28 @@ export class SessionManager {
   }
 
   /**
-   * from 의 대화 중 지난번에 target 에게 보낸 뒤로 새로 생긴 것을 target 기록에 남기고, 진행 중이면 다음 지시에 붙인다.
+   * from 이 지난번에 target 에게 보낸 뒤로 한 일을 target 기록에 남기고, 진행 중이면 다음 지시에 붙인다.
+   * 보내는 것은 차례마다 사람 지시와 그 차례의 마지막 보고뿐(중간 진행 말은 빼서 받는 쪽 컨텍스트를 아낀다).
    * target 에게서 받은 공유는 빼고 센다(양쪽 공유가 서로 메아리치지 않게).
    */
   private shareTo(from: Live, target: Live, kind: 'fork' | 'split') {
-    const lines = conversation(from.history.filter((e) => !(e.type === 'session.merged' && e.fromId === target.info.id)));
     const prev = target.history.filter((e) => e.type === 'session.merged' && e.fromId === from.info.id).at(-1);
-    // 처음 보낼 때: 원본 → 분담이면 분담할 때까지의 대화는 이미 이어받았으니 그 뒤부터
-    const base = target.info.splitFrom === from.info.id ? (target.info.splitLines ?? 0) : 0;
-    const fresh = lines.slice(prev && prev.type === 'session.merged' ? prev.lines : base);
+    // 어디부터: 지난번 보낸 데까지(예전 기록은 그 공유가 일어난 시각), 처음이면 원본 → 분담은 분담한 때부터(그 앞은 이미 이어받음)
+    const created = target.history.find((e) => e.type === 'session.created');
+    const since = prev && prev.type === 'session.merged'
+      ? (prev.until ?? this.order.get(prev) ?? 0)
+      : target.info.splitFrom === from.info.id && created ? (this.order.get(created) ?? 0) : 0;
+    const events = from.history.filter((e) => (this.order.get(e) ?? 0) > since && !(e.type === 'session.merged' && e.fromId === target.info.id));
+    const fresh = digest(events);
     if (!fresh.length) return;
+    const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
     const firstUser = from.history.find((e) => e.type === 'user.message');
     const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : kind === 'split' ? '분담' : '포크');
     const text = tail(fresh.join('\n'));
-    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: lines.length, ...(kind === 'split' ? { kind } : {}) });
+    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}) });
     const head = kind === 'split'
-      ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 진행한 대화. 겹치지 않게 반영한다]`
-      : `[포크 공유: ${title} — 원본에서 갈라져 따로 진행한 대화. 결과를 반영한다]`;
+      ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`
+      : `[포크 공유: ${title} — 원본에서 갈라져 따로 한 일(사람 지시와 마지막 보고). 결과를 반영한다]`;
     (target.merges ??= []).push({ label: `${kind === 'split' ? '분담' : '포크'} 공유 · ${title}`, text: `${head}\n${text}` });
     this.publishContext(target);
   }

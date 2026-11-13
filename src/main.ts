@@ -141,6 +141,7 @@ claudeCli.onModels = (m) => { cfg.models.claude = m; };
 const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,
     bootId: randomUUID(), // 화면이 "다시 켜졌다"를 알아채고 새로 고치는 데 쓴다
+    homepage: cfg.homepage, // 왼쪽 위 Agent Hub 를 누르면 여는 곳
     claudeCommand: cfg.claude.command,
     platform: process.platform,
     mainAgent: cfg.mainAgent,
