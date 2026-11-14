@@ -162,6 +162,7 @@ export class SessionManager {
   private permFile: string;
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
+  private aboutLine = false;
   peers?: Peers; // 다른 PC 의 Agent Hub(왼쪽 "연결") — 작업 목록·보내기가 PC 를 넘는다
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
   autoApproveAll = false;
@@ -220,7 +221,9 @@ export class SessionManager {
     workPresets?: WorkPresetStore; // 설정의 "프리셋" — 작업 환경(폴더·지침)
     schedules?: ScheduleStore; // 작업 정보의 "예약"
     claudeHome?: string; // Claude Code 설정 폴더(시험용). 기본 CLAUDE_CONFIG_DIR 또는 ~/.claude
+    aboutLine?: boolean; // 메인 지시 앞에 [이 작업 역할: …] 한 줄(Agent Hub 는 켬, 시험은 기본 꺼짐)
   }) {
+    this.aboutLine = Boolean(opts.aboutLine);
     this.claudeHome = opts.claudeHome ?? claudeHome();
     this.claudeCode = new ClaudeHistory(this.claudeHome);
     this.schedules = opts.schedules;
@@ -556,6 +559,7 @@ export class SessionManager {
       autoApproveAllTasks: this.autoApproveAll,
       permMode: i.permMode ?? null, // ask = 늘 묻기, readonly = 묻는 도구는 거절. 모든 작업 설정보다 앞선다
       asksPermission: Boolean(i.permMode) || !(i.autoApprove || this.autoApproveAll),
+      about: i.about ?? null, // 역할 설명
       schedules: this.schedules?.forSession(i.id).length ?? 0,
       localTime: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -1072,6 +1076,8 @@ export class SessionManager {
       text = withGuidelines(live.guide, text);
       live.guide = undefined;
     }
+    // 역할 설명: 지시마다 지금 역할을 한 줄 앞에 붙인다 — 맡는 일이 바뀌었으면 에이전트가 session_about 으로 고친다(지침은 hub 안내에, 따로 AI 를 부르지 않는다)
+    if (this.aboutLine && live.info.role === 'main' && !text.trimStart().startsWith('/')) text = `${aboutNote(live.info.about)}\n${text}`;
     const sent = this.pendingContext(live).map(({ label, chars }) => ({ label, chars }));
     if (live.merges?.length) {
       text = `${live.merges.map((m) => m.text).join('\n\n')}\n\n[이어서 할 일]\n${text}`;
@@ -1763,4 +1769,9 @@ export class SessionManager {
     for (const l of this.listeners) l(ev);
     if (remotes && sessionId) this.publish({ type: 'session.remotes', sessionId, remotes: this.remotesOf(sessionId) });
   }
+}
+
+/** 지시 앞에 붙는 역할 한 줄(화면·기록에는 남지 않는다) */
+export function aboutNote(about?: string): string {
+  return `[이 작업 역할: ${about ? about.replace(/\s+/g, ' ') : '비어 있음'}]`;
 }

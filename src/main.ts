@@ -49,6 +49,7 @@ const workPresets = new WorkPresetStore(join(cfg.dataDir, 'work-presets.json'));
 const schedules = new ScheduleStore(join(cfg.dataDir, 'schedules.json'));
 
 const sessions = new SessionManager({
+  aboutLine: true, // 메인 지시 앞에 이 작업 역할 한 줄 — 맡는 일이 바뀌면 에이전트가 session_about 으로 고친다
   workspaceRoot: cfg.workspaceRoot,
   dataDir: cfg.dataDir,
   presets,

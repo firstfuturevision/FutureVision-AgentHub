@@ -60,3 +60,9 @@ test('Peers: 손으로 더한 PC 의 요약을 읽고 "PC/작업"으로 보낸�
     srv.close();
   }
 });
+
+test('역할 한 줄: 비었으면 "비어 있음", 있으면 줄바꿈 없이 한 줄', async () => {
+  const { aboutNote } = await import('../src/sessions.ts');
+  assert.equal(aboutNote(), '[이 작업 역할: 비어 있음]');
+  assert.equal(aboutNote('영업 담당.\n크몽 문의'), '[이 작업 역할: 영업 담당. 크몽 문의]');
+});
