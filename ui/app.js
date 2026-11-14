@@ -3006,10 +3006,40 @@ function moveTask(moved, index) {
   renderList();
 }
 
+/**
+ * 화면 고치기(morph): 새로 그린 것(b)과 지금 것(a)을 견주어 바뀐 글자·속성·이벤트만 고친다 — 요소는 그대로 둔다.
+ * 답이 실시간으로 올 때 목록·대화를 통째로 지우고 다시 만들면, 누르는 사이 요소가 바뀌어 클릭이 안 먹고
+ * 마우스 올림·글 고르기가 풀려 깜빡인다. data-key(작업 id 등)가 다르면 다른 것이라 통째로 바꾼다(그 요소에 붙은 끌어 놓기 처리가 섞이지 않게).
+ */
+const MORPH_PROPS = ['onclick', 'oncontextmenu', 'ondragstart', 'ondragend', 'ondragover', 'ondragleave', 'ondrop', 'ontoggle', 'onscroll', 'onmousedown', 'onkeydown', 'draggable', 'disabled', 'title'];
+function morph(a, b) {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName || (a.nodeType === 1 && a.dataset.key !== b.dataset.key)) { a.replaceWith(b); return b; }
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return a; }
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  for (const p of MORPH_PROPS) if (a[p] !== b[p]) a[p] = b[p];
+  if (a.nodeName === 'DETAILS' && a.open !== b.open) a.open = b.open;
+  morphChildren(a, b);
+  return a;
+}
+function morphChildren(a, b) {
+  const ac = [...a.childNodes];
+  const bc = [...b.childNodes];
+  for (let i = 0; i < bc.length; i++) { if (i < ac.length) morph(ac[i], bc[i]); else a.appendChild(bc[i]); }
+  for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+}
+// 목록을 누르고 있는 동안(누름~뗌)은 목록을 고치지 않는다 — 뗄 때 한 번에
+let listHeld = false;
+let listPending = false;
+$('task-list').addEventListener('pointerdown', () => { listHeld = true; });
+addEventListener('pointerup', () => { if (!listHeld) return; listHeld = false; if (listPending) { listPending = false; setTimeout(renderList, 0); } });
+addEventListener('pointercancel', () => { listHeld = false; });
+
 /** 작업 목록: 포크 · 분담은 원본 아래 나무 모양, 원본이 지워진 갈래는 맨 위 단계로 */
 function renderList() {
-  const list = $('task-list');
-  list.replaceChildren();
+  if (listHeld || draggingTask || draggingRemote) { listPending = true; return; } // 누르거나 끄는 중에는 나중에
+  const real = $('task-list');
+  const list = el('nav', real.className); // 새로 그린 뒤 지금 목록에 바뀐 것만 옮긴다
   const all = mains();
   const parentOf = parentOfTask;
   const kidsOf = (s) => all.filter((k) => parentOf(k) === s.info.id).sort(byRank);
@@ -3018,6 +3048,7 @@ function renderList() {
   const remote = remoteTasks();
   const group = (s, depth) => {
     const g = el('div', 'task-group');
+    g.dataset.key = `g:${s.info.id}`;
     const kids = kidsOf(s);
     const rkids = remote.under.get(s.info.id) ?? [];
     const open = !folded.has(s.info.id) || holds(s, viewId); // 보고 있는 포크가 안에 있으면 펼친다
@@ -3050,11 +3081,13 @@ function renderList() {
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
   for (const [pc, tops] of remote.byPc) {
     const head = el('div', 'side-pc', pc.name);
+    head.dataset.key = `pc:${pc.url}`;
     head.title = `${pc.name} 의 Agent Hub 작업 — 누르면 그 PC 화면이 열려요. 이 PC 작업 위로 끌어 놓으면 그 아래 하위 작업이 돼요`;
     remoteDropTop(head, pc);
     list.append(head);
     for (const r of tops) list.append(remoteGroup(r, 0, false));
   }
+  morphChildren(real, list);
   syncTitle();
 }
 
@@ -3125,7 +3158,9 @@ function remoteTasks() {
 }
 function remoteGroup(n, depth, tagged) {
   const g = el('div', 'task-group');
+  g.dataset.key = `g:${n.pc.url}|${n.t.id}`;
   const b = el('button', depth ? 'task kid remote' : 'task remote');
+  b.dataset.key = `${n.pc.url}|${n.t.id}`;
   b.type = 'button';
   const head = el('span', 'task-head');
   if (tagged) head.append(el('span', 'task-tag', n.pc.name));
@@ -3137,7 +3172,7 @@ function remoteGroup(n, depth, tagged) {
   b.oncontextmenu = (e) => { e.preventDefault(); window.open(`${n.pc.url}/`, '_blank', 'noopener'); }; // 우클릭: 그 PC 화면 새 탭
   b.draggable = true;
   b.ondragstart = (e) => { draggingRemote = { pc: n.pc, t: n.t }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', n.t.id); b.classList.add('dragging'); };
-  b.ondragend = () => { draggingRemote = null; b.classList.remove('dragging'); for (const x of document.querySelectorAll('.drop-inside, .drop-top')) x.classList.remove('drop-inside', 'drop-top'); };
+  b.ondragend = () => { draggingRemote = null; if (listPending) { listPending = false; setTimeout(renderList, 0); } b.classList.remove('dragging'); for (const x of document.querySelectorAll('.drop-inside, .drop-top')) x.classList.remove('drop-inside', 'drop-top'); };
   g.append(b);
   if (n.kids.length) {
     const box = el('div', 'task-kids');
@@ -3285,6 +3320,7 @@ function dragTask(b, s) {
   };
   b.ondragend = () => {
     draggingTask = null;
+    if (listPending) { listPending = false; setTimeout(renderList, 0); } // 끄는 동안 미뤄 둔 목록 고치기
     for (const x of document.querySelectorAll('.task.drop-before, .task.drop-after, .task.drop-inside, .task.dragging, .task-list.drop-top')) x.classList.remove('drop-before', 'drop-after', 'drop-inside', 'dragging', 'drop-top');
   };
   const where = (e) => {
@@ -3358,6 +3394,7 @@ function dragTask(b, s) {
 /** 작업 한 줄. 포크(depth>0)는 이름만. open: 포크가 달려 있으면 펼침 여부, 없으면 null */
 function taskRow(s, depth, open) {
   const b = el('button', depth ? 'task kid' : 'task');
+  b.dataset.key = s.info.id; // 화면 고치기(morph)가 다른 작업 줄에 덮어쓰지 않게
   b.type = 'button';
   b.setAttribute('aria-current', String(s.info.id === viewId));
   const wait = waitingIn(s);
@@ -3438,8 +3475,9 @@ function renderChat() {
 
   const scroll = $('scroll');
   const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
-  const log = $('log');
-  log.replaceChildren();
+  // 대화도 새로 그린 뒤 바뀐 것만 옮긴다(답이 올 때마다 통째로 바꾸면 글 고르기·복사·누르기가 끊기고 깜빡인다). 다른 작업으로 바꾸면 통째로
+  const realLog = $('log');
+  const log = el('div', realLog.className);
   if (s) {
     if (s.info.remotePc) {
       const n = el('div', 'note remote-note');
@@ -3463,6 +3501,9 @@ function renderChat() {
     if (s.draft) log.append(item({ k: 'agent', t: s.draft }));
     if (live && isBusy(s) && !waitingIn(s)) log.append(workingLine(s));
   }
+  const sid = s ? s.info.id : '';
+  if (realLog.dataset.sid !== sid) { realLog.replaceChildren(...log.childNodes); realLog.dataset.sid = sid; }
+  else morphChildren(realLog, log);
   if (atBottom) scroll.scrollTop = scroll.scrollHeight;
 }
 
