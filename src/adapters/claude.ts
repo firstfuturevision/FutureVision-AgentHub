@@ -1,3 +1,4 @@
+import { DATA_DISALLOWED } from '../permits.ts';
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -46,10 +47,12 @@ export class ClaudeAdapter implements AgentAdapter {
       '--verbose',
       '--include-partial-messages',
       // 권한 묻지 않기면 확인 없이 실행(bypassPermissions). 아니면 설정값
-      '--permission-mode', session.autoApprove ? 'bypassPermissions' : this.opts.permissionMode,
+      '--permission-mode', session.autoApprove && !session.permMode ? 'bypassPermissions' : this.opts.permissionMode,
     ];
+    // 데이터만: 파일 쓰기·고치기·화면 제어 도구를 아예 빼고 띄운다(권한을 물을 일도 없게)
+    if (session.permMode === 'data') args.push('--disallowedTools', DATA_DISALLOWED.join(','));
     // 물어야 하는 도구는 stdout 의 control_request(can_use_tool)로 오고, 화면의 허용·거부를 stdin 의 control_response 로 돌려준다
-    if (!session.autoApprove) args.push('--permission-prompt-tool', 'stdio');
+    if (!session.autoApprove || session.permMode) args.push('--permission-prompt-tool', 'stdio');
     for (const d of ctx.extraDirs ?? []) args.push('--add-dir', d); // 연결 폴더
     if (ctx.pluginDir) args.push('--plugin-dir', ctx.pluginDir); // 프리셋: Agent Hub 스킬
     if (ctx.resume) args.push('--resume', ctx.resume); // 같은 대화에 이어 간다. 대화 id 는 그대로(2.1.283 확인)
@@ -151,7 +154,9 @@ export class ClaudeAdapter implements AgentAdapter {
         this.permissions.set(requestId, { requestId: ev.request_id, input: r.input ?? {} });
         const what = r.description ?? brief(r.input);
         const why = r.decision_reason_type === 'workingDir' ? '작업 폴더 밖' : '';
-        this.emit({ type: 'permission.request', requestId, tool: r.display_name ?? r.tool_name ?? '도구 실행', detail: [what, why].filter(Boolean).join(' · ') });
+        const raw = typeof r.tool_name === 'string' ? r.tool_name : undefined;
+        const command = raw === 'Bash' ? String(r.input?.command ?? '') : raw === 'WebFetch' ? String(r.input?.url ?? '') : undefined;
+        this.emit({ type: 'permission.request', requestId, tool: r.display_name ?? r.tool_name ?? '도구 실행', detail: [what, why].filter(Boolean).join(' · '), ...(raw ? { toolName: raw } : {}), ...(command !== undefined ? { command: command.slice(0, 4000) } : {}) });
         return;
       }
 

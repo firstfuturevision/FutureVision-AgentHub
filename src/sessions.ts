@@ -18,6 +18,7 @@ import type { ScreenControl } from './screen.ts';
 import type { Peers, PeerSummary } from './peers.ts';
 import type { MemoryStore } from './memory.ts';
 import { forwardedText, intakePrompt, type IntakeStore } from './intake.ts';
+import { dataAllows } from './permits.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -299,7 +300,7 @@ export class SessionManager {
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
-        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode });
+        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow });
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
       const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
@@ -1766,7 +1767,10 @@ export class SessionManager {
     if (autoApprove && !info.autoApprove && origin.via !== 'local' && !origin.trusted) return fail('권한 묻지 않기는 PC 앞에서만 켤 수 있음');
     // 이 작업만의 권한: 조이는 것(늘 묻기·읽기만)은 어디서든, 푸는 것은 PC 앞에서만. 정하면 묻지 않기는 꺼진다
     const permMode = cmd.permMode !== undefined ? (cmd.permMode ?? undefined) : info.permMode;
-    if (info.permMode && !permMode && origin.via !== 'local' && !origin.trusted) return fail('늘 묻기·읽기만을 푸는 것은 PC 앞에서만 할 수 있음');
+    if (info.permMode && !permMode && origin.via !== 'local' && !origin.trusted) return fail('늘 묻기·읽기만·데이터만을 푸는 것은 PC 앞에서만 할 수 있음');
+    // 데이터만의 허락 주소(http(s) 주소만). 늘리는 것도 푸는 것이라 PC 앞에서만
+    const allowList = cmd.permAllow?.map((u) => String(u).trim()).filter((u) => /^https?:\/\/\S+$/i.test(u)).slice(0, 20);
+    if (allowList?.some((u) => !(info.permAllow ?? []).includes(u)) && origin.via !== 'local' && !origin.trusted) return fail('허락 주소를 더하는 것은 PC 앞에서만 할 수 있음');
     if (permMode) autoApprove = false;
 
     live.gen = (live.gen ?? 0) + 1; // 앞 CLI 가 끝나며 보내는 이벤트는 버린다
@@ -1793,6 +1797,7 @@ export class SessionManager {
     else delete info.autoApprove;
     if (permMode) info.permMode = permMode;
     else delete info.permMode;
+    if (allowList !== undefined) { if (allowList.length) info.permAllow = allowList; else delete info.permAllow; }
     info.status = 'starting';
     this.publish({ type: 'session.configured', sessionId: info.id, session: { ...info } });
     live.adapter = this.makeAdapter(agent);
@@ -1810,7 +1815,10 @@ export class SessionManager {
     const mode = live.info.permMode;
     const ask = ev.type === 'permission.request';
     const auto = ask && !mode && Boolean(live.info.autoApprove || this.autoApproveAll);
-    const deny = ask && mode === 'readonly';
+    // 데이터만: 읽기 명령과 허락한 주소로 보내는 요청만 묻지 않고 허용, 나머지는 묻지 않고 거절(채팅 작업은 사람이 승인 버튼을 못 본다)
+    const data = ask && mode === 'data' ? dataAllows(ev.toolName, ev.command, live.info.permAllow ?? []) : null;
+    const deny = ask && (mode === 'readonly' || (data !== null && !data.ok));
+    const dataOk = Boolean(data?.ok);
     // 아는 오류는 사람이 할 일로 바꿔 보여 주고(원문은 뒤에), 로그인·결제 문제면 그 AI 의 연결 상태에 남긴다
     let shown: AdapterEvent = ev;
     if (ev.type === 'error') {
@@ -1822,12 +1830,13 @@ export class SessionManager {
       if (live.schedRun) live.schedRun.error = f?.text ?? ev.message.slice(0, 120);
     }
     if (ev.type === 'turn.done' && !ev.isError) this.setHealth(live.info.agent, 'ok', '');
-    const full = { ...shown, sessionId: live.info.id, ...(auto || deny ? { auto: true } : {}) } as HostEvent;
+    const full = { ...shown, sessionId: live.info.id, ...(auto || deny || dataOk ? { auto: true } : {}) } as HostEvent;
     this.publish(full);
     // 자동으로 정한 것은 요청과 답을 기록에만 남긴다
-    if (ev.type === 'permission.request' && (auto || deny)) {
-      this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow: auto, by: auto ? '자동 허용' : '읽기만' });
-      live.adapter.respondPermission(ev.requestId, auto);
+    if (ev.type === 'permission.request' && (auto || deny || dataOk)) {
+      const allow = auto || dataOk;
+      this.publish({ type: 'permission.resolved', sessionId: live.info.id, requestId: ev.requestId, allow, by: auto ? '자동 허용' : mode === 'data' ? (allow ? '데이터만 · 허용' : `데이터만 · 거절(${data?.why ?? ''})`) : '읽기만' });
+      live.adapter.respondPermission(ev.requestId, allow);
     }
     const turn = live.turn;
     if (turn) {

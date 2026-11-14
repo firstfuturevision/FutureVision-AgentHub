@@ -71,6 +71,8 @@ node --experimental-strip-types src/main.ts --config test/config.fake.json   # h
 
 **Claude 모델 목록·CLI 버전**(`src/models.ts`, `GET/POST /claude-cli`, `data/claude-models.json`): Claude 모델은 코드에 고정하지 않고 CLI 에게 묻는다 — `claude -p --input-format stream-json` 에 `control_request {subtype:"initialize"}` 를 보내면 응답의 `models`(value·displayName)가 그 CLI 가 아는 모델이다(토큰 안 씀, 2.1.283 확인). CLI 가 모르는 모델은 `--model` 로 줘도 "unrecognized_model" 로 거절되므로 이 목록이 곧 쓸 수 있는 목록. "default" 는 Agent Hub 의 "기본"과 겹쳐 뺀다. 켜고 8초 뒤·6시간마다·연동을 열 때(10분 넘었으면) 다시 묻고 `cfg.models.claude`(=`/info` 의 models)를 바꾼다. 버전은 `claude --version` 과 `npm view @anthropic-ai/claude-code version` 을 견주어 새 버전이면 연동의 Claude 칸에 "CLI 업데이트"(터미널 창에서 `claude update`), 끝날 즈음(45초·2분·5분) 다시 묻는다.
 
+**데이터만**(작업별 권한 `permMode: data`, 작업 정보 → 에이전트 설정 → 권한, `src/permits.ts`): 채팅으로 일을 받는 작업처럼 사람이 승인 버튼을 못 보는 작업용. 파일 쓰기·고치기(Edit·MultiEdit·Write·NotebookEdit)와 화면 제어 도구는 CLI 를 띄울 때 `--disallowedTools` 로 아예 빼고, 묻는 요청은 묻지 않고 규칙으로 정한다: 읽기 도구·읽기 명령(cat·head·tail·ls·grep·jq·wc·echo 등)과 **허락 주소**(`permAllow`, 한 줄에 하나, 앞부분이 같으면)로 보내는 curl·WebFetch 만 허용, 따옴표 밖의 `> <`·`&`·백틱·다른 명령·curl 의 파일 쓰기·올리기(-o, -T, @파일)는 거절(`$( )` 안은 읽기 명령만). "권한 묻지 않기(모든 작업)"보다 먼저. 무슨 도구인지 알 수 없는 AI(Codex·Gemini)의 요청은 거절. 푸는 것과 허락 주소를 더하는 것은 PC 앞에서만. 기록에는 "데이터만 · 허용/거절(이유)".
+
 **권한 묻지 않기(모든 작업)**(`GET/POST /permissions`, `data/permissions.json`): 설정 → 연동의 스위치. 켜면 모든 작업의 승인 요청을 호스트가 바로 허용하고("자동 허용"), 켜는 순간 기다리던 요청도 허용한다. 작업별 설정과 상관없이 앞선다. 이 PC 화면·원격 접속에서만(대시보드는 이 서버를 거치지 않는다). 작업 정보에 "권한 묻지 않음(모든 작업)"으로 보인다. 자동 허용된 요청은 카드로 띄우지 않고 "도구 N개 사용" 접힌 줄 안에 "자동 허용 · 도구 — 내용" 한 줄로 넣는다(사람이 누를 것만 카드).
 
 작업 목록에서 우클릭(또는 ⋯) → **이름 바꾸기 · 포크 · 분담 · 복사 · 삭제**.

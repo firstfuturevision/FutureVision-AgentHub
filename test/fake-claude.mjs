@@ -170,6 +170,18 @@ async function handle(text) {
     out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu_q${turn}`, content: ok ? `읽음 ${answer.updatedInput?.file_path}` : answer.message, is_error: !ok }] }, parent_tool_use_id: null, session_id: sid });
   }
 
+  // 셸 명령 승인: "bash <명령>" → Bash 의 can_use_tool, 답을 받아 "bash 허용/거절" 을 함께 말한다. "빠진 도구?" → --disallowedTools 값
+  if (askTool === 'stdio' && /^bash /.test(text)) {
+    const request_id = `req-b${turn}`;
+    const command = text.slice(5);
+    const answer = await new Promise((done) => {
+      waiting.set(request_id, done);
+      out({ type: 'control_request', request_id, request: { subtype: 'can_use_tool', tool_name: 'Bash', display_name: 'Bash', input: { command }, description: command, tool_use_id: `tu_b${turn}` } });
+    });
+    text = `${text} → bash ${answer.behavior === 'allow' ? '허용' : '거절'}`;
+  }
+  if (/^빠진 도구\?/.test(text)) text = `${text} ${argv.includes('--disallowedTools') ? argv[argv.indexOf('--disallowedTools') + 1] : '없음'}`;
+
   if (text.includes('tool')) {
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: 'a.txt' } }] }, parent_tool_use_id: null, session_id: sid });
     out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '파일 내용 한 줄', is_error: false }] }, parent_tool_use_id: null, session_id: sid });

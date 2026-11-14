@@ -13,7 +13,7 @@ export interface ModelOption { id: string; name: string }
 // main = 사람과 대화하며 일을 맡기는 메인, worker = 메인이 맡긴 작업자, direct = 사람이 AI 하나와 직접
 export type SessionRole = 'main' | 'worker' | 'direct';
 
-export type PermMode = 'ask' | 'readonly';
+export type PermMode = 'ask' | 'readonly' | 'data'; // data = 데이터만: 파일 수정 도구 없음, 셸은 읽기 명령과 허락한 주소로 보내는 curl 만(src/permits.ts)
 
 /**
  * 원격 접속 — 바깥 시스템(회사 업무 웹 등)이 HTTP(/events + /cmd)로 이 작업에 붙어 글을 주고받을 때 자기를 밝히는 표.
@@ -52,6 +52,7 @@ export interface SessionInfo {
   autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
   // 이 작업만의 권한: ask = 늘 사람에게 묻기, readonly = 묻는 도구는 모두 거절(읽기만). "권한 묻지 않기(모든 작업)"보다 앞선다. 없으면 기본
   permMode?: PermMode;
+  permAllow?: string[]; // 데이터만: 요청을 보내도 되는 주소(앞부분)
   aliases?: string[]; // 예전 이름(최근 5개). 작업 이름으로 찾는 곳(session_send·바깥 시스템)이 이 이름도 알아듣는다
   cliSessionId?: string; // Claude 만: CLI 의 대화 id. 다시 띄울 때 --resume 으로 그 대화에 그대로 이어 간다
   imported?: boolean; // 이 PC 의 Claude Code 세션을 가져와 이어 가는 작업
@@ -83,7 +84,7 @@ export type HostEvent =
   | { type: 'agent.tool_result'; sessionId: string; toolId: string; ok: boolean; summary: string }
   // 에이전트가 채팅에 띄운 그림(show_image). url = 이 Agent Hub 의 /images/...
   | { type: 'agent.image'; sessionId: string; url: string; name: string; caption?: string }
-  | { type: 'permission.request'; sessionId: string; requestId: string; tool: string; detail: string; auto?: boolean } // auto = 권한 묻지 않기로 바로 허용할 것(화면에 카드 없이)
+  | { type: 'permission.request'; sessionId: string; requestId: string; tool: string; detail: string; auto?: boolean; toolName?: string; command?: string } // toolName·command: 데이터만 판정용(Bash 명령, WebFetch 주소) // auto = 권한 묻지 않기로 바로 허용할 것(화면에 카드 없이)
   | { type: 'permission.resolved'; sessionId: string; requestId: string; allow: boolean; by: string }
   | { type: 'turn.done'; sessionId: string; durationMs: number; costUsd: number | null; isError: boolean }
   | { type: 'notice'; agent?: AgentKind; message: string }
@@ -139,7 +140,7 @@ export type ClientCommand =
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
   // 에이전트 설정 바꾸기: null = 없앰(기본), 없음 = 그대로. 메인 CLI 를 새 설정으로 다시 띄우고 지금까지의 대화를 다음 지시에 붙인다
-  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null; autoApprove?: boolean; permMode?: PermMode | null }
+  | { type: 'session.configure'; sessionId: string; agent?: AgentKind; model?: string | null; preset?: string | null; workPreset?: string | null; autoApprove?: boolean; permMode?: PermMode | null; permAllow?: string[] }
   // 공용 PC 화면에 진짜 터미널 창을 띄운다 — PC 앞(local)에서만 허용
   | { type: 'terminal.open'; agent: AgentKind; sessionId?: string; workdir?: string; profile?: boolean }; // profile: Agent Hub 전용 프로필로 로그인
 
@@ -294,7 +295,8 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       }
       if (typeof c.autoApprove === 'boolean') out.autoApprove = c.autoApprove;
       if (c.permMode === null || c.permMode === '') out.permMode = null;
-      else if (c.permMode === 'ask' || c.permMode === 'readonly') out.permMode = c.permMode;
+      else if (c.permMode === 'ask' || c.permMode === 'readonly' || c.permMode === 'data') out.permMode = c.permMode;
+      if (Array.isArray(c.permAllow)) out.permAllow = c.permAllow.map((x) => String(x ?? '').trim()).filter((x) => /^https?:\/\/\S+$/i.test(x)).slice(0, 20).map((x) => x.slice(0, 200));
       return out;
     }
     case 'session.fork': {

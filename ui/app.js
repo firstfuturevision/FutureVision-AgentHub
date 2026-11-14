@@ -1873,7 +1873,7 @@ function onEvent(ev) {
       Object.assign(s.info, ev.session);
       skillsCache.delete(s.info.id);
       const who = ev.session.preset ? ev.session.preset.name : '기본';
-      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : '', ev.session.permMode === 'readonly' ? '읽기만' : ev.session.permMode === 'ask' ? '늘 묻기' : ev.session.autoApprove ? '권한 묻지 않음' : ''].filter(Boolean).join(' · ');
+      const what = [who, NAMES[ev.session.agent], ev.session.model ? modelName(ev.session.agent, ev.session.model) : '', ev.session.workPreset ? `프리셋 ${ev.session.workPreset.name}` : '', ev.session.permMode === 'readonly' ? '읽기만' : ev.session.permMode === 'data' ? '데이터만' : ev.session.permMode === 'ask' ? '늘 묻기' : ev.session.autoApprove ? '권한 묻지 않음' : ''].filter(Boolean).join(' · ');
       s.items.push({ k: 'line meta', t: `설정 바꿈: ${what}. 다음 지시에 앞 대화를 붙여 이어갑니다` });
       break;
     }
@@ -2453,7 +2453,7 @@ function renderPanel() {
   } else {
     role.append(el('div', 'p-item-title', `기본 · ${NAMES[s.info.agent]}${s.info.model ? ` · ${modelName(s.info.agent, s.info.model)}` : ''}`), el('div', 'p-text', '계정 설정 그대로'));
   }
-  if (s.info.permMode) role.append(el('div', 'p-meta', s.info.permMode === 'readonly' ? '읽기만 · 파일·명령 등 바꾸는 도구는 거절(모든 작업 설정보다 우선)' : '늘 묻기 · 도구마다 허용을 물음(모든 작업 설정보다 우선)'));
+  if (s.info.permMode) role.append(el('div', 'p-meta', s.info.permMode === 'readonly' ? '읽기만 · 파일·명령 등 바꾸는 도구는 거절(모든 작업 설정보다 우선)' : s.info.permMode === 'data' ? `데이터만 · 파일 수정 금지, 읽기 명령과 허락한 주소 호출만(모든 작업 설정보다 우선)${s.info.permAllow?.length ? ` · ${s.info.permAllow.join(', ')}` : ' · 허락 주소 없음'}` : '늘 묻기 · 도구마다 허용을 물음(모든 작업 설정보다 우선)'));
   else if (s.info.autoApprove || permState?.autoApproveAll) role.append(el('div', 'p-warn', `권한 묻지 않음${s.info.autoApprove ? '' : '(모든 작업)'} · 도구를 허용 없이 바로 실행`));
   if (s.info.role !== 'worker') {
     const acts = el('div', 'p-acts');
@@ -2539,7 +2539,7 @@ let confEdit = null; // 바꾸기 창이 열린 세션 id
 let confDraft = null; // 고르는 중인 값 — 다른 이벤트로 패널을 다시 그려도 지킨다
 function configForm(s) {
   const f = el('div', 'p-conf');
-  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '', auto: s.info.permMode ?? (s.info.autoApprove ? '1' : '') });
+  const d = confDraft?.id === s.info.id ? confDraft : (confDraft = { id: s.info.id, wp: s.info.workPreset?.id ?? '', ag: s.info.preset?.id ?? '', ai: s.info.agent, m: s.info.model ?? '', auto: s.info.permMode ?? (s.info.autoApprove ? '1' : ''), allow: (s.info.permAllow ?? []).join('\n') });
   const field = (label, sel) => {
     const l = el('label', 'p-conf-row');
     l.append(el('span', 'p-meta', label), sel);
@@ -2558,8 +2558,16 @@ function configForm(s) {
   const mSel = field('모델', el('select'));
   const auSel = field('권한', el('select'));
   // 기본·묻지 않기는 "권한 묻지 않기(모든 작업)"를 따른다. 늘 묻기·읽기만은 그보다 앞선다(바깥 글을 받는 작업용)
-  auSel.append(new Option(permState?.autoApproveAll ? '기본 (모든 작업 설정: 묻지 않음)' : '묻기', ''), new Option('묻지 않기', '1'), new Option('늘 묻기 (모든 작업 설정보다 우선)', 'ask'), new Option('읽기만 (바꾸는 도구는 거절)', 'readonly'));
+  auSel.append(new Option(permState?.autoApproveAll ? '기본 (모든 작업 설정: 묻지 않음)' : '묻기', ''), new Option('묻지 않기', '1'), new Option('늘 묻기 (모든 작업 설정보다 우선)', 'ask'), new Option('읽기만 (바꾸는 도구는 거절)', 'readonly'), new Option('데이터만 (파일 수정 금지, 허락한 주소 호출만)', 'data'));
   auSel.value = d.auto;
+  // 데이터만: 요청을 보내도 되는 주소(한 줄에 하나, 앞부분이 같으면 허용)
+  const allowBox = field('허락 주소', el('textarea', 'about-input'));
+  allowBox.rows = 2;
+  allowBox.placeholder = 'http://127.0.0.1:8000/api/';
+  allowBox.value = d.allow ?? '';
+  allowBox.oninput = () => { d.allow = allowBox.value; };
+  const allowRow = allowBox.parentElement;
+  allowRow.hidden = d.auto !== 'data';
   const aiRow = aiSel.parentElement;
   // 에이전트를 고르면 AI 는 그 에이전트 것. 모델은 고른 에이전트·AI 기준으로 다시 채운다
   const sync = (keepModel) => {
@@ -2575,7 +2583,7 @@ function configForm(s) {
   };
   sync(d.m);
   agSel.onchange = () => { sync(); if (d.auto === '' || d.auto === '1') { d.auto = presets.find((x) => x.id === agSel.value)?.autoApprove ? '1' : ''; auSel.value = d.auto; } };
-  auSel.onchange = () => { d.auto = auSel.value; };
+  auSel.onchange = () => { d.auto = auSel.value; allowRow.hidden = d.auto !== 'data'; };
   aiSel.onchange = () => sync('');
   wpSel.onchange = mSel.onchange = () => Object.assign(d, { wp: wpSel.value, m: mSel.value });
   const busy = s.info.status === 'working' || s.info.status === 'starting';
@@ -2593,7 +2601,8 @@ function configForm(s) {
       ...(agSel.value ? {} : { agent: aiSel.value }),
       model: mSel.value || null,
       autoApprove: auSel.value === '1',
-      permMode: auSel.value === 'ask' || auSel.value === 'readonly' ? auSel.value : null,
+      permMode: auSel.value === 'ask' || auSel.value === 'readonly' || auSel.value === 'data' ? auSel.value : null,
+      ...(auSel.value === 'data' ? { permAllow: (d.allow ?? '').split(/\s+/).filter(Boolean) } : {}),
     });
     confEdit = null;
     confDraft = null;
