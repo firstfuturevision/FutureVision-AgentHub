@@ -88,6 +88,8 @@ export type HostEvent =
   | { type: 'permission.resolved'; sessionId: string; requestId: string; allow: boolean; by: string }
   | { type: 'turn.done'; sessionId: string; durationMs: number; costUsd: number | null; isError: boolean }
   | { type: 'notice'; agent?: AgentKind; message: string }
+  | { type: 'agent.limits'; sessionId: string; info: unknown } // CLI 가 알려 준 사용 한도(rate_limit_event) — 기록하지 않고 연결별로 모은다
+  | { type: 'limits.changed' } // 연결별 한도가 바뀜 — 설정 → 연동이 다시 읽는다
   | { type: 'memory.changed' } // 설정 → 기억이 바뀜 — 설정 화면이 다시 읽는다
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다

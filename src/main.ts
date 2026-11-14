@@ -25,6 +25,7 @@ import { Peers } from './peers.ts';
 import { MemoryStore } from './memory.ts';
 import { IntakeStore } from './intake.ts';
 import { CliUpdater } from './cliupdate.ts';
+import { LimitStore } from './limits.ts';
 import { ScreenControl } from './screen.ts';
 import { ClaudeCli } from './models.ts';
 import { startLocalServer } from './transports/local.ts';
@@ -150,6 +151,10 @@ sessions.memory = memory;
 memory.onChange = () => sessions.publishMemory();
 // 입력 세션: 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다(모델은 설정 → 기억 → 입력 세션)
 sessions.intake = new IntakeStore(join(cfg.dataDir, 'intake.json'));
+// 연결별 사용 한도(설정 → 연동): 작업이 받는 rate_limit_event 를 로그인별로 모은다
+sessions.limits = new LimitStore(join(cfg.dataDir, 'limits.json'));
+let limitsTimer: NodeJS.Timeout | null = null;
+sessions.limits.onChange = () => { if (!limitsTimer) limitsTimer = setTimeout(() => { limitsTimer = null; sessions.publishLimits(); }, 3000); };
 // 연결된 PC 끼리 공통 지침·회사 기억 맞추기(10분마다 비교, 다르면 입력 세션이 합친다)
 setInterval(() => void sessions.reconcileMemory().catch(() => {}), 10 * 60_000).unref();
 peers.start();

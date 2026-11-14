@@ -792,8 +792,9 @@ const getJson = async (url, fallback) => {
 };
 // 작업 정보의 "권한 묻지 않음" 표시용 — 설정을 열지 않아도 처음에 읽어 둔다
 getJson('/permissions', permState).then((x) => { permState = x ?? permState; renderPanel(); });
+let limitState = {}; // 연결별 사용 한도 { 'claude:default': { windows, at, turns, costUsd } }
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState, claudeCli] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState), getJson('/claude-cli', null)]);
+  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState, claudeCli, limitState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState), getJson('/claude-cli', null), getJson('/limits', limitState)]);
   useClaudeModels(claudeCli);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
@@ -1207,6 +1208,45 @@ async function startGithubLogin() {
   if (g.pending) window.open(g.pending.url, '_blank', 'noopener');
   pollAuth();
 }
+// 연결별 사용 한도: Claude 는 응답마다 오는 한도(5시간·주간 창) — 로그인별로, "지금 확인"은 아주 작은 요청 하나. API 키는 Agent Hub 가 오늘 쓴 금액
+const WINDOW_NAMES = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간(Opus)', seven_day_sonnet: '주간(Sonnet)' };
+function limitText(e) {
+  if (!e?.windows || !Object.keys(e.windows).length) return null;
+  const when = (t) => new Date(t * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return Object.entries(e.windows).map(([k, w]) => `${WINDOW_NAMES[k] ?? k} ${w.utilization === null ? '?' : `${Math.round(w.utilization * 100)}%`}${w.status && w.status !== 'allowed' ? `(${w.status === 'rejected' ? '막힘' : w.status})` : ''}${w.resetsAt ? ` · ${when(w.resetsAt)} 다시 참` : ''}`).join('  ·  ');
+}
+function limitLines(a, st) {
+  const box = el('div', 'auth-limits');
+  const ago = (iso) => (iso ? `${new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준` : '');
+  if (a !== 'claude') {
+    const e = limitState[`${a}:${st.mode === 'apikey' ? 'apikey' : 'default'}`];
+    box.append(el('div', 'auth-note', `사용 한도: 확인 불가(${NAMES[a]} 는 알려 주지 않음)${e?.turns ? ` · Agent Hub 에서 ${e.turns}차례` : ''}`));
+    return box;
+  }
+  const rows = st.mode === 'apikey' ? [['API 키', 'apikey']] : [['기본 로그인', 'default'], ['에이전트 로그인', 'agent']];
+  for (const [label, acc] of rows) {
+    const e = limitState[`claude:${acc}`];
+    const line = el('div', 'limit-line');
+    const txt = acc === 'apikey'
+      ? `${label} · 한도 창 없음(쓴 만큼 요금)${e?.costDay === new Date().toISOString().slice(0, 10) ? ` · 오늘 Agent Hub 에서 $${e.costUsd}` : ''}${e?.turns ? ` · ${e.turns}차례` : ''}`
+      : `${label} · ${limitText(e) ?? '아직 모름'}${e?.at ? ` (${ago(e.at)})` : ''}`;
+    line.append(el('span', 'auth-note', txt));
+    if (acc !== 'apikey') {
+      const b = el('button', 'p-mini', '지금 확인');
+      b.type = 'button';
+      b.title = '그 로그인으로 아주 작은 요청(Haiku, 한 단어)을 보내 한도를 받아 와요';
+      b.onclick = async () => {
+        b.disabled = true;
+        b.textContent = '확인 중';
+        const r = await fetch('/limits', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: acc }) });
+        if (r.ok) { limitState = await r.json(); renderAuth(); } else { flash(`${label}: ${await r.text()}`, true); b.disabled = false; b.textContent = '지금 확인'; }
+      };
+      line.append(b);
+    }
+    box.append(line);
+  }
+  return box;
+}
 function renderAuthRow(row, a, st, pending) {
   row.querySelector('.auth-body')?.remove();
   row.querySelectorAll('.seg button').forEach((b, i) => b.classList.toggle('on', (i === 0) === (st.mode === 'login')));
@@ -1253,6 +1293,7 @@ function renderAuthRow(row, a, st, pending) {
     body.append(line);
   }
   body.append(el('div', 'hint-inline auth-help', AUTH_HELP[a]));
+  body.append(limitLines(a, st));
   row.append(body);
 }
 
@@ -1828,6 +1869,7 @@ function onEvent(ev) {
     return;
   }
   if (ev.type === 'memory.changed') { if (!$('settings').hidden) void loadMemory(); return; }
+  if (ev.type === 'limits.changed') { if (!$('settings').hidden) void getJson('/limits', limitState).then((l) => { limitState = l; renderAuth(); }); return; }
   if (ev.type === 'schedules.changed') { scheduleCache.clear(); void loadAllSchedules(); return renderPanel(); } // 예약이 바뀌거나 실행됨
   if (ev.type === 'agent.health') { health[ev.agent] = { state: ev.state, message: ev.message }; return renderAlerts(); } // AI 연결 상태
 

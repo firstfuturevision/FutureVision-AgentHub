@@ -19,6 +19,7 @@ import type { Peers, PeerSummary } from './peers.ts';
 import type { MemoryStore } from './memory.ts';
 import { forwardedText, intakePrompt, type IntakeStore } from './intake.ts';
 import { dataAllows } from './permits.ts';
+import type { LimitStore, Account } from './limits.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -167,6 +168,7 @@ export class SessionManager {
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
   private aboutLine = false;
+  limits?: LimitStore; // 연결별 사용 한도(설정 → 연동)
   intake?: IntakeStore;
   private makingIntake = false; // 입력 세션(이 PC 에 하나) — 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다
   memory?: MemoryStore; // 설정 → 기억(취향·고쳐 준 것, 공통 지침) — 모든 메인 작업이 받는다
@@ -894,6 +896,8 @@ export class SessionManager {
 
   /** 모든 화면에 짧은 알림(작업과 상관없는 것) */
   notice(message: string) { this.publish({ type: 'notice', message }); }
+
+  publishLimits() { this.publish({ type: 'limits.changed' }); }
 
   /** 기억이 바뀌었음을 화면에 알린다(설정 → 기억이 다시 읽음) */
   publishMemory() { this.publish({ type: 'memory.changed' }); }
@@ -1811,8 +1815,24 @@ export class SessionManager {
     await this.launch(live);
   }
 
+  /** 이 작업이 쓰는 로그인: API 키 / 에이전트 로그인(전용 프로필) / 기본 로그인 */
+  accountOf(live: Live): Account {
+    if (this.auth?.public()[live.info.agent]?.mode === 'apikey') return 'apikey';
+    return live.info.preset && this.profileDir ? 'agent' : 'default';
+  }
+
+  /** 그 로그인으로 CLI 를 띄울 때의 환경(한도 "지금 확인"용) */
+  claudeEnvFor(account: Account): Record<string, string> {
+    const env: Record<string, string> = { ...(this.auth?.launch('claude').env ?? {}) };
+    if (account === 'agent' && this.profileDir) env.CLAUDE_CONFIG_DIR = this.profileDir('claude');
+    return env;
+  }
+
   private fromAdapter(live: Live, ev: AdapterEvent) {
     if (live.dormant) return;
+    // 사용 한도는 기록하지 않고 연결별로 모은다
+    if (ev.type === 'agent.limits') { this.limits?.record(live.info.agent, this.accountOf(live), ev.info); return; }
+    if (ev.type === 'turn.done') this.limits?.turn(live.info.agent, this.accountOf(live), ev.costUsd);
     if (ev.type === 'session.cli') {
       // 대화 id 는 바뀔 때만 기록(다시 켠 뒤 --resume 에 쓴다)
       if (live.info.cliSessionId === ev.cliSessionId) return;

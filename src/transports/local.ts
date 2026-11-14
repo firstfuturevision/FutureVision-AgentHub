@@ -20,6 +20,7 @@ import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { Peers } from '../peers.ts';
 import type { MemoryStore } from '../memory.ts';
 import type { CliUpdater } from '../cliupdate.ts';
+import { probeClaudeLimits } from '../limits.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import type { ScreenControl } from '../screen.ts';
 import type { ClaudeCli } from '../models.ts';
@@ -414,6 +415,16 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           if (!st.checking && (!st.checkedAt || Date.now() - Date.parse(st.checkedAt) > 10 * 60 * 1000)) void claudeCli.refresh();
         }
         return json(res, 200, claudeCli.public());
+      }
+      // 연결별 사용 한도(설정 → 연동): 모아 둔 것, "지금 확인"은 그 로그인으로 아주 작은 요청을 보내 받는다
+      if (url.pathname === '/limits' && sessions.limits) {
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          const account = body?.account === 'agent' ? 'agent' : body?.account === 'apikey' ? 'apikey' : 'default';
+          try { sessions.limits.record('claude', account, await probeClaudeLimits(String(info.claudeCommand ?? 'claude'), sessions.claudeEnvFor(account))); } catch (err) { return send(res, 502, (err as Error).message); }
+        }
+        return json(res, 200, sessions.limits.public());
       }
       // 작업자 프로그램 자동 업데이트(왼쪽 "예약" 맨 위): 켜기·끄기·시각, 지금 확인
       if (url.pathname === '/cli-update' && cliUpdater) {

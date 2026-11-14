@@ -191,6 +191,7 @@ async function handle(text) {
     });
     text = `${text} → bash ${answer.behavior === 'allow' ? '허용' : '거절'}`;
   }
+  if (text === 'limits?') out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: 1794880800, rateLimitType: 'seven_day', unifiedWindows: { seven_day: { utilization: 0.09, resetsAt: 1794880800, status: 'allowed' }, five_hour: { utilization: 0.4, resetsAt: 1794700000, status: 'allowed' } } }, session_id: sid });
   if (/^빠진 도구\?/.test(text)) text = `${text} ${argv.includes('--disallowedTools') ? argv[argv.indexOf('--disallowedTools') + 1] : '없음'}`;
 
   if (text.includes('tool')) {

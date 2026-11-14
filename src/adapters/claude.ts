@@ -170,6 +170,11 @@ export class ClaudeAdapter implements AgentAdapter {
         return;
       }
 
+      // 사용 한도(5시간·주간 창의 사용률·다시 차는 때) — 연동 화면에 연결별로
+      case 'rate_limit_event':
+        if (ev.rate_limit_info) this.emit({ type: 'agent.limits', info: ev.rate_limit_info });
+        return;
+
       case 'system':
         if (ev.subtype === 'init' && typeof ev.session_id === 'string' && ev.session_id !== this.claudeSessionId) {
           this.claudeSessionId = ev.session_id;
