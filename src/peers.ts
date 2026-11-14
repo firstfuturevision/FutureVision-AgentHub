@@ -16,7 +16,7 @@ const ANNOUNCE_MS = 30_000;
 const FORGET_MS = 120_000; // 이만큼 안 들리면 찾은 목록에서 뺀다(손으로 더한 것은 남음)
 const TIMEOUT_MS = 3000;
 
-export interface PeerTask { name: string; id: string; status: string; rank?: number; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
+export interface PeerTask { name: string; id: string; status: string; rank?: number; remoteParent?: { url: string; id: string; pc: string }; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
 export interface PeerSummary { name: string; url?: string; version?: string; tasks: PeerTask[] }
 export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary; intake?: { model: string } | null; memory?: { items: number; guide: boolean } | null }
 
@@ -132,7 +132,7 @@ export class Peers {
       const s = (await r.json()) as PeerSummary;
       const tasks = (Array.isArray(s.tasks) ? s.tasks : []).slice(0, 300).map((t) => ({
         name: String(t.name ?? '').slice(0, 120), id: String(t.id ?? '').slice(0, 40), status: String(t.status ?? '').slice(0, 20),
-        ...(Number.isFinite(Number(t.rank)) ? { rank: Number(t.rank) } : {}), ...(t.about ? { about: String(t.about).slice(0, 500) } : {}), ...(t.recent ? { recent: String(t.recent).slice(0, 120) } : {}),
+        ...(Number.isFinite(Number(t.rank)) ? { rank: Number(t.rank) } : {}), ...(t.remoteParent && peerUrl(t.remoteParent.url) ? { remoteParent: { url: peerUrl(t.remoteParent.url)!, id: String(t.remoteParent.id).slice(0, 60), pc: String(t.remoteParent.pc ?? '').slice(0, 60) } } : {}), ...(t.about ? { about: String(t.about).slice(0, 500) } : {}), ...(t.recent ? { recent: String(t.recent).slice(0, 120) } : {}),
         ...(t.splitFrom ? { splitFrom: String(t.splitFrom).slice(0, 120) } : {}), ...(t.forkedFrom ? { forkedFrom: String(t.forkedFrom).slice(0, 120) } : {}),
         schedules: Number(t.schedules) || 0,
       }));
@@ -164,7 +164,7 @@ export class Peers {
   }
 
   /** 그 PC 의 /intake·/memory 로 보내기(설정 맞추기) */
-  async post(url: string, path: '/intake' | '/memory', body: unknown): Promise<unknown> {
+  async post(url: string, path: '/intake' | '/memory' | '/peer/parent' | '/peer/share', body: unknown): Promise<unknown> {
     const u = peerUrl(url);
     if (!u) throw new Error('주소가 맞지 않음');
     const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS * 2) });
@@ -172,6 +172,21 @@ export class Peers {
     if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
     this.cache.delete(u);
     return r.json();
+  }
+
+  /** 이 PC 의 원격 접속 주소(다른 PC 가 이 PC 로 공유를 보낼 곳). 원격 접속이 꺼져 있으면 없음 */
+  myUrl(): string | undefined { return this.remote?.enabled ? this.remote.urls()[0] : undefined; }
+
+  /** 다른 PC 의 위 작업으로 하위 작업 공유 보내기 */
+  async shareUp(rp: { url: string; id: string }, body: { fromPc: string; fromId: string; title: string; text: string }) {
+    await this.post(rp.url, '/peer/share', { to: rp.id, ...body });
+  }
+
+  /** 그 PC 의 작업을 이 PC 작업 아래로(parentId 없으면 풀기) */
+  async setParent(url: string, taskId: string, parentId: string | null, myName: string) {
+    const me = this.myUrl();
+    if (parentId && !me) throw new Error('이 PC 의 원격 접속이 꺼져 있어 그 PC 가 공유를 보낼 곳이 없음(설정 → 연동 → 원격 접속을 켠다)');
+    await this.post(url, '/peer/parent', { taskId, parent: parentId ? { url: me, id: parentId, pc: myName } : null });
   }
 
   /** 그 PC 의 공통 지침·회사 기억(맞추기 비교용) */

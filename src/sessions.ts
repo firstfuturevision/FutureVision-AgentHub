@@ -290,6 +290,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.remoteParent') { if (e.parent) info.remoteParent = e.parent; else delete info.remoteParent; }
         if (e.type === 'session.reparented') { delete info.forkedFrom; if (e.parentId) info.splitFrom = e.parentId; else delete info.splitFrom; }
         if (e.type === 'session.intakeSet') { if (e.on) info.viaIntake = true; else delete info.viaIntake; }
         if (e.type === 'session.archived') { if (e.archived) info.archived = true; else delete info.archived; }
@@ -685,6 +686,7 @@ export class SessionManager {
 
   /** 부모 바꾸기(기록에 남겨 다시 켜도 그대로) */
   private reparent(live: Live, parentId: string | null) {
+    if (parentId && live.info.remoteParent) { delete live.info.remoteParent; this.publish({ type: 'session.remoteParent', sessionId: live.info.id, parent: null }); }
     const now = live.info.splitFrom ?? live.info.forkedFrom ?? null;
     if (now === parentId && !live.info.forkedFrom) return;
     delete live.info.forkedFrom;
@@ -788,7 +790,8 @@ export class SessionManager {
       return {
         name: this.nameOf(l),
         id: l.info.id,
-        rank: l.info.rank ?? (l.info.splitFrom || l.info.forkedFrom ? 1 : -1) * Date.parse(l.info.createdAt), // 화면 목록과 같은 순서(끌어 옮긴 자리, 없으면 맨 위는 최근 것부터)
+        rank: l.info.rank ?? (l.info.splitFrom || l.info.forkedFrom ? 1 : -1) * Date.parse(l.info.createdAt),
+        ...(l.info.remoteParent ? { remoteParent: l.info.remoteParent } : {}), // 화면 목록과 같은 순서(끌어 옮긴 자리, 없으면 맨 위는 최근 것부터)
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
@@ -1839,6 +1842,44 @@ export class SessionManager {
       from = to;
       what = 'relay';
     }
+    // 맨 위가 다른 PC 작업 아래에 있으면 그 PC 로 이어서 위로
+    if (from.info.remoteParent) void this.remoteShareTo(from, from.info.remoteParent, what).catch((err) => this.publish({ type: 'notice', sessionId: from.info.id, message: `다른 PC 로 공유 못 함: ${(err as Error).message}` }));
+  }
+
+  /** 다른 PC 의 위 작업에 지난번 뒤로 한 일을 보낸다(같은 PC 의 공유와 같은 요약) */
+  private async remoteShareTo(from: Live, rp: { url: string; id: string; pc: string }, what: 'own' | 'relay') {
+    const prev = [...from.history].reverse().find((e) => e.type === 'session.remoteShared' && Boolean(e.relay) === (what === 'relay')) as { until: number } | undefined;
+    const moved = [...from.history].reverse().find((e) => e.type === 'session.remoteParent' && e.parent);
+    const since = prev?.until ?? (moved ? this.order.get(moved) ?? 0 : 0);
+    const events = from.history.filter((e) => (this.order.get(e) ?? 0) > since && (what === 'own' ? e.type !== 'session.merged' : e.type === 'session.merged'));
+    const fresh = digest(events);
+    if (!fresh.length || !this.peers) return;
+    const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
+    await this.peers.shareUp(rp, { fromPc: this.peers.summary().name, fromId: from.info.id, title: this.nameOf(from), text: tail(fresh.join('\n')) });
+    this.publish({ type: 'session.remoteShared', sessionId: from.info.id, until, ...(what === 'relay' ? { relay: true } : {}) });
+  }
+
+  /** 다른 PC 에서 온 하위 작업 공유를 받는다 */
+  receiveRemoteShare(targetId: string, fromPc: string, fromId: string, title: string, text: string) {
+    const target = this.sessions.get(targetId);
+    if (!target || target.info.role !== 'main') throw new Error('없는 작업');
+    const t = `${fromPc.slice(0, 60)}/${title.slice(0, 80)}`;
+    const body = text.slice(0, 20000);
+    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: `peer:${fromPc.slice(0, 60)}:${fromId.slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
+    (target.merges ??= []).push({ label: `하위 작업 공유 · ${t}`, text: `[하위 작업 공유: ${t} — 다른 PC 의 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]\n${body}` });
+    this.publishContext(target);
+  }
+
+  /** 다른 PC 작업 아래로 두기(그 PC 가 POST /peer/parent 로) */
+  setRemoteParent(taskId: string, parent: { url: string; id: string; pc: string } | null) {
+    const live = this.sessions.get(taskId);
+    if (!live || live.info.role !== 'main') throw new Error('없는 작업');
+    if (parent) {
+      live.info.remoteParent = parent;
+      // 이 PC 안의 부모에서는 떼어 낸다(맨 위로) — 위는 하나만
+      if (live.info.splitFrom || live.info.forkedFrom) this.reparent(live, null);
+    } else delete live.info.remoteParent;
+    this.publish({ type: 'session.remoteParent', sessionId: live.info.id, parent });
   }
 
   /** 분담해 온 원본(없으면 undefined) */

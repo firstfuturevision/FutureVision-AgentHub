@@ -329,6 +329,7 @@ async function loadPeers(fresh) {
   const r = await getJson(`/peers${fresh ? '?fresh=1' : ''}`, null);
   if (r) peerState = r;
   renderTaskLinks(true);
+  renderList(); // 왼쪽 목록의 다른 PC 작업
 }
 setInterval(() => { if (!$('links-view').hidden && !document.hidden) void loadPeers(); }, 15000);
 function renderPeers(box) {
@@ -1720,7 +1721,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
-  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); void loadIntake(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
+  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); void loadIntake(); void loadPeers(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -2904,14 +2905,18 @@ function renderList() {
   const parentOf = parentOfTask;
   const kidsOf = (s) => all.filter((k) => parentOf(k) === s.info.id).sort(byRank);
   const holds = (s, id) => kidsOf(s).some((k) => k.info.id === id || holds(k, id));
+  // 다른 PC 작업: 이 PC 작업 아래에 둔 것은 그 아래에, 나머지는 맨 아래 PC 묶음에
+  const remote = remoteTasks();
   const group = (s, depth) => {
     const g = el('div', 'task-group');
     const kids = kidsOf(s);
+    const rkids = remote.under.get(s.info.id) ?? [];
     const open = !folded.has(s.info.id) || holds(s, viewId); // 보고 있는 포크가 안에 있으면 펼친다
-    g.append(taskRow(s, depth, kids.length ? open : null));
-    if (kids.length && open) {
+    g.append(taskRow(s, depth, kids.length || rkids.length ? open : null));
+    if ((kids.length || rkids.length) && open) {
       const box = el('div', 'task-kids');
       for (const k of kids) box.append(group(k, depth + 1));
+      for (const r of rkids) box.append(remoteGroup(r, depth + 1, true));
       g.append(box);
     }
     return g;
@@ -2933,7 +2938,74 @@ function renderList() {
   }
   for (const s of all.filter(isTopTask).sort(byRank)) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
+  for (const [pc, tops] of remote.byPc) {
+    const head = el('div', 'side-pc', pc.name);
+    head.title = `${pc.name} 의 Agent Hub 작업 — 누르면 그 PC 화면이 열려요. 이 PC 작업 위로 끌어 놓으면 그 아래 하위 작업이 돼요`;
+    remoteDropTop(head, pc);
+    list.append(head);
+    for (const r of tops) list.append(remoteGroup(r, 0, false));
+  }
   syncTitle();
+}
+
+// ── 다른 PC 작업을 왼쪽 목록에: 연결된 PC 의 작업(이름·상태)과 계층. 누르면 그 PC 화면, 이 PC 작업 위로 끌어 놓으면 그 아래로 ──
+setInterval(() => { if (!document.hidden) void loadPeers(); }, 30000);
+let draggingRemote = null; // { pc, t }
+function remoteTasks() {
+  const under = new Map(); // 이 PC 작업 id → [{ pc, t, kids }]
+  const byPc = new Map(); // pc → [맨 위 {pc,t,kids}]
+  const mine = new Set(peerState?.myUrls ?? []);
+  for (const pc of (peerState?.peers ?? []).filter((p) => p.ok)) {
+    const tasks = pc.summary.tasks;
+    const byName = new Map(tasks.map((t) => [t.name, t]));
+    const node = new Map(tasks.map((t) => [t.id, { pc, t, kids: [] }]));
+    const tops = [];
+    for (const t of [...tasks].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))) {
+      const n = node.get(t.id);
+      const rp = t.remoteParent;
+      if (rp && mine.has(rp.url) && sessions.get(rp.id)) { (under.get(rp.id) ?? under.set(rp.id, []).get(rp.id)).push(n); continue; }
+      const parent = byName.get(t.splitFrom ?? t.forkedFrom ?? '');
+      if (parent && parent !== t) node.get(parent.id).kids.push(n);
+      else tops.push(n);
+    }
+    if (tops.length) byPc.set(pc, tops);
+  }
+  return { under, byPc };
+}
+function remoteGroup(n, depth, tagged) {
+  const g = el('div', 'task-group');
+  const b = el('button', depth ? 'task kid remote' : 'task remote');
+  b.type = 'button';
+  const head = el('span', 'task-head');
+  if (tagged) head.append(el('span', 'task-tag', n.pc.name));
+  head.append(el('span', 'task-title', n.t.name));
+  b.append(head);
+  if (!depth) b.append(el('span', `task-sub${n.t.status === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${n.t.status === '작업 중' ? '작업 중' : '대기'}`));
+  b.title = [n.t.about, `${n.pc.name} 의 작업 — 누르면 그 PC 화면이 열려요`].filter(Boolean).join('\n');
+  b.onclick = () => window.open(`${n.pc.url}/`, '_blank', 'noopener');
+  b.draggable = true;
+  b.ondragstart = (e) => { draggingRemote = { pc: n.pc, t: n.t }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', n.t.id); b.classList.add('dragging'); };
+  b.ondragend = () => { draggingRemote = null; b.classList.remove('dragging'); for (const x of document.querySelectorAll('.drop-inside, .drop-top')) x.classList.remove('drop-inside', 'drop-top'); };
+  g.append(b);
+  if (n.kids.length) {
+    const box = el('div', 'task-kids');
+    for (const k of n.kids) box.append(remoteGroup(k, depth + 1, false));
+    g.append(box);
+  }
+  return g;
+}
+async function setRemoteParent(r, parentId) {
+  const res = await fetch('/peers/parent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: r.pc.url, taskId: r.t.id, parentId }) });
+  if (!res.ok) return flash(await res.text(), true);
+  peerState = await res.json();
+  flash(parentId ? `${r.t.name} 를 ${titleOf(sessions.get(parentId))} 아래로 옮겼어요 · 그 작업이 한 일이 위로 공유돼요` : `${r.t.name} 를 ${r.pc.name} 묶음으로 되돌렸어요`);
+  renderList();
+}
+/** PC 묶음 머리줄에 놓으면 이 PC 작업 아래에서 빼서 그 PC 로 되돌린다 */
+function remoteDropTop(head, pc) {
+  head.ondragover = (e) => { if (draggingRemote?.pc.url === pc.url && draggingRemote.t.remoteParent) { e.preventDefault(); head.classList.add('drop-top'); } };
+  head.ondragleave = () => head.classList.remove('drop-top');
+  head.ondrop = (e) => { head.classList.remove('drop-top'); if (draggingRemote?.pc.url === pc.url) { e.preventDefault(); void setRemoteParent(draggingRemote, null); } };
 }
 
 // 끌어 놓기: 같은 단계의 작업 위에서만 놓을 수 있고, 줄의 위쪽 절반이면 그 앞, 아래쪽이면 그 뒤로
@@ -3000,6 +3072,20 @@ function dragTask(b, s) {
     return y < 0.28 ? 'before' : y > 0.72 ? 'after' : 'inside';
   };
   const ok = () => draggingTask && draggingTask !== s && !descendsFrom(s, draggingTask);
+  b.addEventListener('dragover', (e) => {
+    if (!draggingRemote) return;
+    e.preventDefault();
+    b.classList.add('drop-inside');
+  });
+  b.addEventListener('dragleave', () => { if (draggingRemote) b.classList.remove('drop-inside'); });
+  b.addEventListener('drop', (e) => {
+    if (!draggingRemote) return;
+    e.preventDefault();
+    b.classList.remove('drop-inside');
+    folded.delete(s.info.id);
+    saveFolded();
+    void setRemoteParent(draggingRemote, s.info.id);
+  });
   b.ondragover = (e) => {
     if (!ok()) return;
     e.preventDefault();

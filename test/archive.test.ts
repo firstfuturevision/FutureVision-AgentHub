@@ -112,3 +112,40 @@ test('계층 옮기기·합치기: 끌어 놓은 부모로 옮기고(새 부모�
     sessions.stopAll();
   }
 });
+
+test('다른 PC 작업 아래로: 한 일이 그 PC 의 위 작업으로 공유되고, 받는 쪽은 하위 작업 공유로 받는다', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub remote tree '));
+  const ws = join(base, 'ws');
+  mkdirSync(ws);
+  const events: HostEvent[] = [];
+  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+  const sent: any[] = [];
+  sessions.peers = { summary: () => ({ name: 'pc2', tasks: [] }), shareUp: async (rp: any, body: any) => { sent.push({ rp, body }); } } as any;
+  sessions.subscribe((e) => events.push(e));
+  try {
+    await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title: '해양VR' }, local);
+    const id = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+    await sessions.handle({ type: 'session.rename', sessionId: id, title: '해양VR' }, local);
+    await sessions.handle({ type: 'user.message', sessionId: id, text: '옮기기 전 OLD' }, local);
+    await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === id);
+    sessions.setRemoteParent(id, { url: 'http://192.168.0.5:4319', id: 'top-id', pc: 'pc1' });
+    assert.equal(sessions.info(id)?.remoteParent?.id, 'top-id');
+    await sessions.handle({ type: 'user.message', sessionId: id, text: '옮긴 뒤 NEW' }, local);
+    await waitFor(events, () => sent.length > 0);
+    assert.equal(sent[0].rp.id, 'top-id');
+    assert.equal(sent[0].body.fromPc, 'pc2');
+    assert.match(sent[0].body.text, /옮긴 뒤 NEW/);
+    assert.doesNotMatch(sent[0].body.text, /옮기기 전 OLD/);
+    await waitFor(events, (e) => e.type === 'session.remoteShared');
+
+    // 받는 쪽
+    sessions.receiveRemoteShare(id, 'pc9', 'x1', '조사', '사람(local): 조사함');
+    const m = events.filter((e) => e.type === 'session.merged' && e.sessionId === id).at(-1) as any;
+    assert.equal(m.title, 'pc9/조사');
+    assert.throws(() => sessions.receiveRemoteShare('없음', 'pc9', 'x', 't', 'x'), /없는 작업/);
+    sessions.setRemoteParent(id, null);
+    assert.equal(sessions.info(id)?.remoteParent, undefined);
+  } finally {
+    sessions.stopAll();
+  }
+});

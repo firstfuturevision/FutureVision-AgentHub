@@ -48,9 +48,30 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
       if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, info);
       // 다른 PC 의 Agent Hub(왼쪽 "연결"): 이 PC 요약은 다른 PC 가 원격 접속으로 가져간다
+      // 다른 PC 작업을 이 PC 작업 아래에: 그 PC 가 하위 작업 공유를 보낸다 / 이 PC 작업을 다른 PC 작업 아래로 둔다
+      if (req.method === 'POST' && url.pathname === '/peer/share') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? '')); } catch (err) { return send(res, 400, (err as Error).message); }
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/peer/parent') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        const p = body?.parent;
+        const parent = p && typeof p.url === 'string' && typeof p.id === 'string' ? { url: p.url.slice(0, 80), id: p.id.slice(0, 60), pc: String(p.pc ?? '').slice(0, 60) } : null;
+        try { sessions.setRemoteParent(String(body?.taskId ?? ''), parent); } catch (err) { return send(res, 400, (err as Error).message); }
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/peers/parent' && peers) {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try { await peers.setParent(String(body?.url ?? ''), String(body?.taskId ?? ''), body?.parentId ? String(body.parentId) : null, peers.summary().name); } catch (err) { return send(res, 400, (err as Error).message); }
+        return json(res, 200, { me: peers.summary().name, peers: await peers.all(true) });
+      }
       if (req.method === 'GET' && url.pathname === '/peer/summary') return json(res, 200, peers ? peers.summary() : { name: '', tasks: [] });
       if (url.pathname === '/peers' && peers) {
-        if (req.method === 'GET') return json(res, 200, { me: peers.summary().name, peers: await peers.all(url.searchParams.has('fresh')) });
+        if (req.method === 'GET') return json(res, 200, { me: peers.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers.all(url.searchParams.has('fresh')) });
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
