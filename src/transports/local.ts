@@ -58,6 +58,16 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? '')); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, { ok: true });
       }
+      // 다른 PC 가 이 PC 를 연결 목록에 더하거나 뺐다고 알려 옴 → 이 PC 목록에도(양방향). 원격 접속으로만 들어온다
+      if (req.method === 'POST' && (url.pathname === '/peer/hello' || url.pathname === '/peer/bye') && peers) {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        const bye = url.pathname === '/peer/bye';
+        const u = peers.greeted(req.socket.remoteAddress ?? '', body?.port, bye);
+        const who = String(body?.name ?? '').slice(0, 60) || u;
+        if (u) sessions.notice(bye ? `${who} PC 가 연결을 뺐어요 — 이 PC 연결 목록에서도 뺐어요` : `${who} PC 가 연결했어요 — 이 PC 연결 목록에도 더했어요(왼쪽 위 연결)`);
+        return json(res, 200, { ok: true });
+      }
       if (req.method === 'POST' && url.pathname === '/peer/parent') {
         const body = (await readJson(req, res)) as any;
         if (body === undefined) return;
@@ -78,10 +88,12 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
-          try { peers.add(body?.url); } catch (err) { return send(res, 400, (err as Error).message); }
+          let added: string;
+          try { added = peers.add(body?.url); } catch (err) { return send(res, 400, (err as Error).message); }
+          void peers.hello(added); // 상대 목록에도 이 PC 를
           return json(res, 200, await peerState());
         }
-        if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, await peerState()); }
+        if (req.method === 'DELETE') { const u = url.searchParams.get('url'); peers.remove(u); if (u) void peers.hello(u, true); return json(res, 200, await peerState()); }
       }
       // 다른 PC 의 입력 세션 모델·기억 맞추기(그 PC 의 원격 접속으로)
       if (url.pathname === '/peers/settings' && peers && req.method === 'POST') {

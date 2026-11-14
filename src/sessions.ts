@@ -856,6 +856,9 @@ export class SessionManager {
     return `적용: ${done.join(', ')}${failed.length ? ` · 못 함: ${failed.join(', ')}` : ''} · 공통 지침 ${String(guide ?? '').trim() ? '있음' : '없음'}, 회사 기억 ${list.length}개`;
   }
 
+  /** 모든 화면에 짧은 알림(작업과 상관없는 것) */
+  notice(message: string) { this.publish({ type: 'notice', message }); }
+
   /** 기억이 바뀌었음을 화면에 알린다(설정 → 기억이 다시 읽음) */
   publishMemory() { this.publish({ type: 'memory.changed' }); }
 

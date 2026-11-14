@@ -108,3 +108,14 @@ test('Peers: 그 PC 의 공통 지침·회사 기억 읽기(개인 기억은 빼
     srv.close();
   }
 });
+
+test('양방향 연결: 상대가 알려 오면 요청 IP + 알려 준 원격 포트로 목록에 더하고, 빼면 뺀다(한 번만)', () => {
+  const peers = new Peers(join(mkdtempSync(join(tmpdir(), 'peers-')), 'peers.json'));
+  assert.equal(peers.greeted('::ffff:192.168.0.9', 4319), 'http://192.168.0.9:4319');
+  assert.equal(peers.greeted('192.168.0.9', 4319), null); // 이미 있음
+  assert.deepEqual(peers.urls(), ['http://192.168.0.9:4319']);
+  assert.equal(peers.greeted('8.8.8.8', 4319), null); // 공인 주소는 안 받음
+  assert.equal(peers.greeted('127.0.0.1', 4319), null);
+  assert.equal(peers.greeted('192.168.0.9', 4319, true), 'http://192.168.0.9:4319');
+  assert.deepEqual(peers.urls(), []);
+});

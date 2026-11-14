@@ -164,7 +164,7 @@ export class Peers {
   }
 
   /** 그 PC 의 /intake·/memory 로 보내기(설정 맞추기) */
-  async post(url: string, path: '/intake' | '/memory' | '/peer/parent' | '/peer/share', body: unknown): Promise<unknown> {
+  async post(url: string, path: '/intake' | '/memory' | '/peer/parent' | '/peer/share' | '/peer/hello' | '/peer/bye', body: unknown): Promise<unknown> {
     const u = peerUrl(url);
     if (!u) throw new Error('주소가 맞지 않음');
     const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS * 2) });
@@ -172,6 +172,23 @@ export class Peers {
     if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
     this.cache.delete(u);
     return r.json();
+  }
+
+  /** 양방향 연결: 주소를 더하거나 빼면 상대에게도 알린다(상대가 이 PC 를 목록에 더하거나 뺀다). 이 PC 원격 접속이 꺼져 있으면 알리지 않는다 */
+  async hello(url: string, bye = false): Promise<boolean> {
+    if (!this.remote?.enabled) return false;
+    try { await this.post(url, bye ? '/peer/bye' : '/peer/hello', { port: this.remote.port, name: hostname() }); return true; } catch { return false; }
+  }
+
+  /** 상대가 알려 와서 목록에 더하기·빼기(상대 주소는 요청이 온 IP + 알려 준 원격 포트) */
+  greeted(ip: string, port: unknown, bye = false): string | null {
+    const url = peerUrl(`${ip.replace(/^::ffff:/i, '')}:${Number(port)}`);
+    if (!url) return null;
+    if (bye) { if (!this.manual.includes(url)) return null; this.manual = this.manual.filter((u) => u !== url); }
+    else { if (this.manual.includes(url)) return null; this.manual.push(url); }
+    this.cache.delete(url);
+    this.save();
+    return url;
   }
 
   /** 이 PC 의 원격 접속 주소(다른 PC 가 이 PC 로 공유를 보낼 곳). 원격 접속이 꺼져 있으면 없음 */

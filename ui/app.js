@@ -1807,6 +1807,7 @@ function onEvent(ev) {
       break;
     case 'session.renamed': s.info.customTitle = ev.title; if (ev.aliases) s.info.aliases = ev.aliases; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
+    case 'session.remoteParent': if (ev.parent) s.info.remoteParent = ev.parent; else delete s.info.remoteParent; break;
     case 'session.intakeSet': if (ev.on) s.info.viaIntake = true; else delete s.info.viaIntake; break;
     case 'session.intake':
       if (replayed && ev.state !== 'pending') setTimeout(() => void loadIntake(), 300);
@@ -2974,7 +2975,8 @@ function renderList() {
     go.setAttribute('aria-label', go.title);
     go.onclick = () => { viewId = next.info.id; showNav('sessions'); render(); };
   }
-  for (const s of all.filter(isTopTask).sort(byRank)) list.append(group(s, 0));
+  localGroupFn = group;
+  for (const s of all.filter(isTopTask).filter((k) => !remote.hosted.has(k.info.id)).sort(byRank)) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
   for (const [pc, tops] of remote.byPc) {
     const head = el('div', 'side-pc', pc.name);
@@ -2992,6 +2994,7 @@ let draggingRemote = null; // { pc, t }
 function remoteTasks() {
   const under = new Map(); // 이 PC 작업 id → [{ pc, t, kids }]
   const byPc = new Map(); // pc → [맨 위 {pc,t,kids}]
+  const hosted = new Set(); // 다른 PC 작업 아래에 그리는 이 PC 작업 id
   const mine = new Set(peerState?.myUrls ?? []);
   for (const pc of (peerState?.peers ?? []).filter((p) => p.ok)) {
     const tasks = pc.summary.tasks;
@@ -3006,9 +3009,14 @@ function remoteTasks() {
       if (parent && parent !== t) node.get(parent.id).kids.push(n);
       else tops.push(n);
     }
+    // 이 PC 작업 가운데 이 PC 를 다른 PC 작업 아래에 둔 것: 그 PC 묶음의 그 작업 아래에 그린다(두 PC 가 같은 모양)
+    for (const s of mains()) {
+      const rp = s.info.remoteParent;
+      if (rp && rp.url === pc.url && node.get(rp.id)) { node.get(rp.id).kids.push({ local: s }); hosted.add(s.info.id); }
+    }
     if (tops.length) byPc.set(pc, tops);
   }
-  return { under, byPc };
+  return { under, byPc, hosted };
 }
 function remoteGroup(n, depth, tagged) {
   const g = el('div', 'task-group');
@@ -3027,10 +3035,30 @@ function remoteGroup(n, depth, tagged) {
   g.append(b);
   if (n.kids.length) {
     const box = el('div', 'task-kids');
-    for (const k of n.kids) box.append(remoteGroup(k, depth + 1, false));
+    for (const k of n.kids) box.append(k.local ? localGroupFn(k.local, depth + 1) : remoteGroup(k, depth + 1, false));
     g.append(box);
   }
+  // 이 PC 작업을 이 다른 PC 작업 아래로: 가운데에 놓으면(이 PC 작업의 기록에 남긴다 — 그 PC 화면도 같은 모양)
+  b.addEventListener('dragover', (e) => { if (draggingTask && !draggingRemote) { e.preventDefault(); b.classList.add('drop-inside'); } });
+  b.addEventListener('dragleave', () => b.classList.remove('drop-inside'));
+  b.addEventListener('drop', (e) => {
+    if (!draggingTask || draggingRemote) return;
+    e.preventDefault();
+    b.classList.remove('drop-inside');
+    void setMyRemoteParent(draggingTask, { url: n.pc.url, id: n.t.id, pc: n.pc.name });
+  });
   return g;
+}
+let localGroupFn = null; // renderList 의 이 PC 작업 그리기(다른 PC 작업 아래에 둔 것을 그릴 때)
+/** 이 PC 작업을 다른 PC 작업 아래로(parent) 또는 풀기(null). 화면에 먼저, 실패하면 되돌림 */
+async function setMyRemoteParent(s, parent) {
+  const before = s.info.remoteParent;
+  if (parent) s.info.remoteParent = parent; else delete s.info.remoteParent;
+  if (parent) { delete s.info.splitFrom; delete s.info.forkedFrom; }
+  renderList();
+  const r = await fetch('/peer/parent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId: s.info.id, parent }) });
+  if (!r.ok) { if (before) s.info.remoteParent = before; else delete s.info.remoteParent; renderList(); return flash(await r.text(), true); }
+  flash(parent ? `${titleOf(s)} 를 ${parent.pc} 의 작업 아래로 옮겼어요 · 한 일이 그쪽으로 공유돼요` : `${titleOf(s)} 를 이 PC 맨 위로 옮겼어요`);
 }
 async function setRemoteParent(r, parentId) {
   // 놓는 즉시 화면에 먼저(같은 PC 작업처럼), 그 PC 에 알리는 것은 뒤에. 실패하면 되돌리고 알린다
@@ -3099,6 +3127,7 @@ function pickTask(title, list) {
 // 목록의 빈 곳에 놓으면 맨 위 작업으로. 자기 자신·자기 아래 작업 밑으로는 못 간다
 let draggingTask = null;
 function setParentLocal(k, parentId) {
+  if (parentId) delete k.info.remoteParent; // 이 PC 안의 부모로 옮기면 다른 PC 부모는 풀린다(서버도 같게)
   delete k.info.forkedFrom;
   if (parentId) k.info.splitFrom = parentId; else delete k.info.splitFrom;
   delete k.info.rank;
@@ -3169,15 +3198,16 @@ function dragTask(b, s) {
 {
   const list = $('task-list');
   list.addEventListener('dragover', (e) => {
-    if (!draggingTask || isTopTask(draggingTask) || e.target !== list) return list.classList.remove('drop-top');
+    if (!draggingTask || (isTopTask(draggingTask) && !draggingTask.info.remoteParent) || e.target !== list) return list.classList.remove('drop-top');
     e.preventDefault();
     list.classList.add('drop-top');
   });
   list.addEventListener('dragleave', () => list.classList.remove('drop-top'));
   list.addEventListener('drop', (e) => {
     list.classList.remove('drop-top');
-    if (!draggingTask || isTopTask(draggingTask) || e.target !== list) return;
+    if (!draggingTask || (isTopTask(draggingTask) && !draggingTask.info.remoteParent) || e.target !== list) return;
     e.preventDefault();
+    if (draggingTask.info.remoteParent) return void setMyRemoteParent(draggingTask, null);
     setParentLocal(draggingTask, null);
     renderList();
   });
