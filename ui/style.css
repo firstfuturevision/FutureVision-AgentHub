@@ -576,3 +576,5 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .pick-list { display: flex; flex-direction: column; max-height: 50vh; overflow-y: auto; margin: 8px 0; }
 .pick-item { text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; }
 .pick-item:hover { background: var(--hover); }
+.peer-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.peer-model { font: 13px var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 4px 6px; }

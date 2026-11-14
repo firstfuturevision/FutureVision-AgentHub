@@ -59,6 +59,16 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         }
         if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, { me: peers.summary().name, peers: await peers.all() }); }
       }
+      // 다른 PC 의 입력 세션 모델·기억 맞추기(그 PC 의 원격 접속으로)
+      if (url.pathname === '/peers/settings' && peers && req.method === 'POST') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try {
+          if (body?.action === 'intake') return json(res, 200, await peers.post(String(body.url ?? ''), '/intake', { model: body.model }));
+          if (body?.action === 'sync' && memory) return json(res, 200, await peers.syncMemory(String(body.url ?? ''), memory.public()));
+          return send(res, 400, '모르는 요청');
+        } catch (err) { return send(res, 400, (err as Error).message); }
+      }
       if (url.pathname === '/peers/send' && peers && req.method === 'POST') {
         const body = (await readJson(req, res)) as any;
         if (body === undefined) return;

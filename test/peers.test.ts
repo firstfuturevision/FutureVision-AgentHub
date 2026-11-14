@@ -70,3 +70,42 @@ test('역할 한 줄: 비었으면 "비어 있음", 있으면 줄바꿈 없이 �
   assert.equal(aboutNote(), '[이 작업 역할: 비어 있음]');
   assert.equal(aboutNote('영업 담당.\n크몽 문의'), '[이 작업 역할: 영업 담당. 크몽 문의]');
 });
+
+test('Peers: 그 PC 기억·공통 지침 맞추기(없는 것만 더함)와 입력 세션 모델', { skip: !lanIp && '사설 주소 없음' }, async () => {
+  const mem = { guide: '', items: [{ id: 'x', text: '그 PC 것' }] as { id: string; text: string }[] };
+  let model = 'opus';
+  const srv = createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/peer/summary') return res.end(JSON.stringify({ name: 'pc3', tasks: [] }));
+      if (req.url === '/intake') { if (req.method === 'POST') model = JSON.parse(b).model; return res.end(JSON.stringify({ model })); }
+      if (req.url === '/memory') {
+        if (req.method === 'POST') {
+          const x = JSON.parse(b);
+          if (x.action === 'guide') mem.guide = x.text;
+          if (x.action === 'add') mem.items.push({ id: String(mem.items.length), text: x.text });
+        }
+        return res.end(JSON.stringify(mem));
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+  });
+  await new Promise<void>((ok) => srv.listen(0, '0.0.0.0', ok));
+  try {
+    const peers = new Peers(join(mkdtempSync(join(tmpdir(), 'peers-')), 'peers.json'));
+    const url = peers.add(`${lanIp}:${(srv.address() as any).port}`);
+    const [v] = await peers.all(true);
+    assert.deepEqual(v.intake, { model: 'opus' });
+    assert.deepEqual(v.memory, { items: 1, guide: false });
+    assert.deepEqual(await peers.syncMemory(url, { guide: '먼저 확인', items: [{ text: '그 PC 것' }, { text: '이모지 쓰지 않기' }] }), { added: 1 });
+    assert.equal(mem.guide, '먼저 확인');
+    assert.deepEqual(mem.items.map((x) => x.text), ['그 PC 것', '이모지 쓰지 않기']);
+    await peers.post(url, '/intake', { model: 'sonnet' });
+    assert.equal(model, 'sonnet');
+  } finally {
+    srv.close();
+  }
+});

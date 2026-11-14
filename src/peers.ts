@@ -18,7 +18,7 @@ const TIMEOUT_MS = 3000;
 
 export interface PeerTask { name: string; id: string; status: string; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
 export interface PeerSummary { name: string; url?: string; version?: string; tasks: PeerTask[] }
-export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary }
+export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary; intake?: { model: string } | null; memory?: { items: number; guide: boolean } | null }
 
 /** "http://192.168.0.5:4319" 꼴만(사설 IPv4 + 포트). 아니면 null */
 export function peerUrl(v: unknown): string | null {
@@ -136,7 +136,12 @@ export class Peers {
         ...(t.splitFrom ? { splitFrom: String(t.splitFrom).slice(0, 120) } : {}), ...(t.forkedFrom ? { forkedFrom: String(t.forkedFrom).slice(0, 120) } : {}),
         schedules: Number(t.schedules) || 0,
       }));
-      view = { ...base, name: String(s.name ?? base.name ?? '').slice(0, 60), ok: true, summary: { name: String(s.name ?? '').slice(0, 60), version: s.version ? String(s.version).slice(0, 40) : undefined, url, tasks } };
+      // 그 PC 의 입력 세션·기억(옛 버전이면 없음)
+      const extra = async (path: string) => { try { const x = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(TIMEOUT_MS) }); return x.ok ? await x.json() : null; } catch { return null; } };
+      const [ik, mem] = await Promise.all([extra('/intake'), extra('/memory')]);
+      view = { ...base, name: String(s.name ?? base.name ?? '').slice(0, 60), ok: true, summary: { name: String(s.name ?? '').slice(0, 60), version: s.version ? String(s.version).slice(0, 40) : undefined, url, tasks },
+        intake: ik && typeof ik.model === 'string' ? { model: ik.model.slice(0, 80) } : null,
+        memory: mem && Array.isArray(mem.items) ? { items: mem.items.length, guide: Boolean(mem.guide) } : null };
     } catch (err) {
       const e = err as Error;
       view = { ...base, ok: false, error: e.name === 'TimeoutError' ? '응답 없음(꺼졌거나 원격 접속이 꺼짐)' : e.message.includes('fetch failed') ? '연결 안 됨(꺼졌거나 원격 접속이 꺼짐)' : e.message };
@@ -156,6 +161,27 @@ export class Peers {
     const v = views.find((x) => x.ok && (x.name?.toLowerCase() === k || x.url.toLowerCase().endsWith(`//${k}`)));
     if (!v) throw new Error(`연결된 PC 가 아님: ${pc} (있는 PC: ${views.filter((x) => x.ok).map((x) => x.name).join(', ') || '없음'})`);
     return v;
+  }
+
+  /** 그 PC 의 /intake·/memory 로 보내기(설정 맞추기) */
+  async post(url: string, path: '/intake' | '/memory', body: unknown): Promise<unknown> {
+    const u = peerUrl(url);
+    if (!u) throw new Error('주소가 맞지 않음');
+    const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS * 2) });
+    if (r.status === 404) throw new Error('그 PC 의 Agent Hub 가 옛 버전(업데이트 필요)');
+    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+    this.cache.delete(u);
+    return r.json();
+  }
+
+  /** 기억·공통 지침 맞추기: 이 PC 의 공통 지침으로 바꾸고, 그 PC 에 없는 기억을 더한다(그 PC 에만 있는 기억은 지우지 않는다) */
+  async syncMemory(url: string, mine: { guide: string; items: { text: string }[] }): Promise<{ added: number }> {
+    await this.post(url, '/memory', { action: 'guide', text: mine.guide });
+    let theirs = (await (await fetch(`${peerUrl(url)}/memory`, { signal: AbortSignal.timeout(TIMEOUT_MS) })).json()) as { items: { text: string }[] };
+    const have = new Set(theirs.items.map((x) => x.text));
+    let added = 0;
+    for (const m of mine.items) if (!have.has(m.text)) { theirs = (await this.post(url, '/memory', { action: 'add', text: m.text })) as typeof theirs; added++; }
+    return { added };
   }
 
   /** 사람이 화면에서 다른 PC 작업들에 보내기(id 로). 보낸 곳은 "Agent Hub <이 PC> · 사람" */

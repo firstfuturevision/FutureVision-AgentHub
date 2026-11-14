@@ -365,7 +365,36 @@ function renderPeers(box) {
     if (!p.ok) row.append(el('div', 'sched-meta fail', p.error ?? '연결 안 됨'));
     else {
       const tasks = p.summary.tasks;
-      row.append(el('div', 'sched-meta', `작업 ${tasks.length}개 · 작업 중 ${tasks.filter((x) => x.status === '작업 중').length}개`));
+      row.append(el('div', 'sched-meta', `작업 ${tasks.length}개 · 작업 중 ${tasks.filter((x) => x.status === '작업 중').length}개${p.memory ? ` · 기억 ${p.memory.items}개${p.memory.guide ? ' · 공통 지침 있음' : ' · 공통 지침 없음'}` : ''}`));
+      if (p.intake || p.memory) {
+        // 그 PC 의 입력 세션은 그 PC 가 돌린다 — 여기서는 모델과 기준(기억·공통 지침)만 맞춘다
+        const ctl = el('div', 'peer-ctl');
+        if (p.intake) {
+          const sel = el('select', 'peer-model');
+          sel.setAttribute('aria-label', `${p.name} 입력 세션 모델`);
+          sel.append(...models.claude.map((m) => new Option(m.name, m.id)));
+          if (![...sel.options].some((o) => o.value === p.intake.model)) sel.append(new Option(p.intake.model, p.intake.model));
+          sel.value = p.intake.model;
+          sel.onchange = async () => {
+            const r = await fetch('/peers/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'intake', url: p.url, model: sel.value }) });
+            flash(r.ok ? `${p.name} 입력 세션 모델을 바꿨어요` : await r.text(), !r.ok);
+          };
+          ctl.append(el('span', 'link-kind', '입력 세션 모델'), sel);
+        }
+        if (p.memory) {
+          const sync = el('button', 'line-btn', '기억·공통 지침 맞추기');
+          sync.type = 'button';
+          sync.onclick = async () => {
+            if (!(await askDialog({ title: `${p.name} 에 기억·공통 지침 맞추기`, text: '이 PC 의 공통 지침으로 바꾸고, 그 PC 에 없는 기억을 더합니다. 그 PC 에만 있는 기억은 지우지 않아요. 그 PC 작업들은 다음 지시부터 받습니다.', ok: '맞추기' }))) return;
+            const r = await fetch('/peers/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'sync', url: p.url }) });
+            if (!r.ok) return flash(await r.text(), true);
+            flash(`${p.name} 에 맞췄어요 · 기억 ${(await r.json()).added}개 더함`);
+            void loadPeers(true);
+          };
+          ctl.append(sync);
+        }
+        row.append(ctl);
+      }
     }
     list.append(row);
   }
