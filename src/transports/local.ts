@@ -59,6 +59,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         }
         if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, { me: peers.summary().name, peers: await peers.all() }); }
       }
+      if (url.pathname === '/peers/send' && peers && req.method === 'POST') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        const text = String(body?.text ?? '').trim().slice(0, 20000);
+        if (!text || !Array.isArray(body?.ids)) return send(res, 400, '보낼 글과 작업이 필요함');
+        try { return json(res, 200, { sent: await peers.sendIds(String(body.url ?? ''), body.ids.map(String).slice(0, 300), text) }); } catch (err) { return send(res, 400, (err as Error).message); }
+      }
       // 설정 → 기억: 취향·고쳐 준 것(모든 작업이 받는다), 공통 지침
       if (url.pathname === '/memory' && memory) {
         if (req.method === 'GET') return json(res, 200, memory.public());

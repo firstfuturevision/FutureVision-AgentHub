@@ -158,6 +158,25 @@ export class Peers {
     return v;
   }
 
+  /** 사람이 화면에서 다른 PC 작업들에 보내기(id 로). 보낸 곳은 "Agent Hub <이 PC> · 사람" */
+  async sendIds(url: string, ids: string[], text: string): Promise<number> {
+    const v = await this.view(peerUrl(url) ?? '', true);
+    if (!v.ok) throw new Error(`${v.name || url}: ${v.error}`);
+    const known = new Set(v.summary!.tasks.map((t) => t.id));
+    let n = 0;
+    for (const id of ids.filter((x) => known.has(x))) {
+      const r = await fetch(`${v.url}/cmd`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'user.message', sessionId: id, text, via: { app: `Agent Hub ${hostname()}`.slice(0, 40), label: '사람' } }),
+        signal: AbortSignal.timeout(TIMEOUT_MS * 3),
+      });
+      if (r.ok) n++;
+    }
+    this.cache.delete(v.url);
+    return n;
+  }
+
   /** 다른 PC 의 작업에 보내기: 그 PC 의 원격 접속으로 user.message, 보낸 곳(via)은 "Agent Hub <이 PC> · 작업 <이름>" */
   async send(pc: string, task: string, text: string, fromTask: string): Promise<string> {
     const v = await this.find(pc);

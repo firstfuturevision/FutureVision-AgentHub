@@ -425,7 +425,28 @@ function renderTaskLinks(force) {
   const mine = mains();
   const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: s.info.splitFrom ? '분담' : '포크', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
   const grouped = new Set(groups.flat().map((s) => s.info.id));
-  pcGroups(box, peerState?.me ?? '이 PC', groups.map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).map(node), true);
+  const sendLocal = async (ids, text) => { for (const id of ids) await send({ type: 'user.message', sessionId: id, text }); return ids.length; };
+  const sendPeer = (p) => async (ids, text) => {
+    const r = await fetch('/peers/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: p.url, ids, text }) });
+    if (!r.ok) { flash(await r.text(), true); return 0; }
+    return (await r.json()).sent;
+  };
+  // 모든 PC 의 모든 작업에 한 번에
+  const okPeers = (peerState?.peers ?? []).filter((p) => p.ok);
+  const total = mine.length + okPeers.reduce((n, p) => n + p.summary.tasks.length, 0);
+  const everyone = el('button', 'line-btn', `모든 작업에 보내기 (${okPeers.length + 1}대 · ${total}개)`);
+  everyone.type = 'button';
+  everyone.onclick = async () => {
+    const text = await askDialog({ title: `모든 작업에 보내기 · PC ${okPeers.length + 1}대 · 작업 ${total}개`, text: '받은 작업이 모두 일을 시작해서 사용량이 그만큼 듭니다. 다른 PC 작업에는 "Agent Hub ' + (peerState?.me ?? '') + ' · 사람"이 보낸 글로 들어갑니다.', input: '', placeholder: '모든 작업에 보낼 글', ok: '보내기' });
+    if (!text) return;
+    let n = await sendLocal(mine.map((s) => s.info.id), text);
+    for (const p of okPeers) n += await sendPeer(p)(p.summary.tasks.map((t) => t.id), text);
+    flash(`작업 ${n}개에 보냈어요`);
+  };
+  const top = el('div', 'link-foot');
+  top.append(everyone);
+  box.append(top);
+  pcGroups(box, peerState?.me ?? '이 PC', groups.map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).map(node), sendLocal);
   // 다른 PC: 그 PC 가 알려 준 작업 목록의 분담·포크(원본 이름)로
   for (const p of peerState?.peers ?? []) {
     if (!p.ok) continue;
@@ -438,12 +459,26 @@ function renderTaskLinks(force) {
     const gs = new Map();
     for (const n of nodes) { const g = find(n.id); (gs.get(g) ?? gs.set(g, []).get(g)).push(n); }
     const all = [...gs.values()];
-    pcGroups(box, p.name || p.url, all.filter((g) => g.length > 1), all.filter((g) => g.length === 1).flat(), false);
+    pcGroups(box, p.name || p.url, all.filter((g) => g.length > 1), all.filter((g) => g.length === 1).flat(), sendPeer(p));
   }
 }
 
+/** 묶음(또는 따로 있는 작업) 전체에 보내기 단추: 사람이 보낸 글로 그 작업들에 들어간다 */
+function sendFoot(pc, nodes, sendTo, label = '묶음 전체에 보내기') {
+  const b = el('button', 'line-btn', label);
+  b.type = 'button';
+  b.onclick = async () => {
+    const text = await askDialog({ title: `${label} · ${pc} · 작업 ${nodes.length}개`, text: nodes.map((n) => n.name).join(', '), input: '', placeholder: '보낼 글', ok: '보내기' });
+    if (!text) return;
+    flash(`작업 ${await sendTo(nodes.map((n) => n.id), text)}개에 보냈어요`);
+  };
+  const foot = el('div', 'link-foot');
+  foot.append(b);
+  return foot;
+}
+
 /** PC 하나의 작업 묶음: 묶음마다 분담·포크 나무, 그리고 따로 있는 작업 */
-function pcGroups(box, pc, groups, singles, local) {
+function pcGroups(box, pc, groups, singles, sendTo) {
   box.append(el('div', 'link-pc', pc));
   const list = el('div', 'sched-list');
   const tree = (g) => {
@@ -469,25 +504,13 @@ function pcGroups(box, pc, groups, singles, local) {
   for (const g of groups) {
     const card = el('div', 'sched-row link-group');
     card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree(g));
-    if (local) {
-      // 묶음 전체에 알리기: 사람이 보낸 글로 묶음의 모든 작업에 들어간다
-      const all = el('button', 'line-btn', '묶음 전체에 보내기');
-      all.type = 'button';
-      all.onclick = async () => {
-        const text = await askDialog({ title: `묶음 전체에 보내기 · 작업 ${g.length}개`, text: g.map((n) => n.name).join(', '), input: '', placeholder: '모든 작업에 보낼 글', ok: '보내기' });
-        if (!text) return;
-        for (const n of g) await send({ type: 'user.message', sessionId: n.id, text });
-        flash(`작업 ${g.length}개에 보냈어요`);
-      };
-      const foot = el('div', 'link-foot');
-      foot.append(all);
-      card.append(foot);
-    }
+    card.append(sendFoot(pc, g, sendTo));
     list.append(card);
   }
   if (singles.length) {
     const card = el('div', 'sched-row link-group');
     card.append(el('div', 'link-sub', `따로 있는 작업 ${singles.length}개`), tree(singles.map((n) => ({ ...n, parent: undefined }))));
+    card.append(sendFoot(pc, singles, sendTo, '모두에게 보내기'));
     list.append(card);
   }
   if (!groups.length && !singles.length) list.append(el('p', 'hint', '작업이 없어요.'));

@@ -54,6 +54,10 @@ test('Peers: 손으로 더한 PC 의 요약을 읽고 "PC/작업"으로 보낸�
     assert.equal(got[0].via.label, '작업 Future Vision');
     await assert.rejects(peers.send('pc2', '없는작업', 'x', 'a'), /없는 작업/);
     await assert.rejects(peers.send('pc9', '영업', 'x', 'a'), /연결된 PC 가 아님/);
+    // 사람이 화면에서: 그 PC 에 있는 작업에만, 보낸 곳은 "사람"
+    assert.equal(await peers.sendIds(url, ['abcdef12-0000-0000-0000-000000000000', '없는-id'], '모두 확인'), 1);
+    assert.equal(got.at(-1).text, '모두 확인');
+    assert.equal(got.at(-1).via.label, '사람');
     peers.remove(url);
     assert.deepEqual(peers.urls(), []);
   } finally {
