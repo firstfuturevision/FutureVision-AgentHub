@@ -410,14 +410,14 @@ function taskLinks() {
   for (const e of sends.values()) if (e.from) join(e.from.info.id, e.to.info.id);
   const groups = new Map();
   for (const s of tasks) { const g = find(s.info.id); (groups.get(g) ?? groups.set(g, []).get(g)).push(s); }
-  return { groups: [...groups.values()].filter((g) => g.length > 1), sends: [...sends.values()], remote: tasks.filter((s) => s.remotes?.length) };
+  return { groups: [...groups.values()].filter((g) => g.length > 1) };
 }
 let linksAt = 0;
 function renderTaskLinks(force) {
   // 탭이 열려 있을 때만. 답이 조각조각 올 때 모든 기록을 매번 훑지 않게(누르려던 단추가 그사이 바뀌지 않게도) 2초에 한 번
   if ($('links-view').hidden || (!force && Date.now() - linksAt < 2000)) return;
   linksAt = Date.now();
-  const { groups, remote } = taskLinks();
+  const { groups } = taskLinks();
   const box = $('links-all');
   box.replaceChildren();
   renderPeers(box);
@@ -467,19 +467,6 @@ function renderTaskLinks(force) {
   }
   if (!groups.length) list.append(el('p', 'hint', '아직 서로 이어진 작업이 없어요. 작업을 분담하거나 작업끼리 글을 보내면 여기에 묶여 보입니다.'));
   box.append(list);
-  if (remote.length) {
-    box.append(el('h3', 'link-h', '대시보드 등 바깥에서 붙은 작업'));
-    box.append(el('p', 'hint', '사내 대시보드 같은 바깥 시스템이 글을 보내는 이 PC 작업입니다(예: 대시보드 프로젝트에서 작업 PC 로 이 PC 를 고르면 생기는 "프로젝트 · 이름" 작업). 아래 줄이 보내는 곳이고, 그 작업의 작업 정보 → 연결된 원격 접속에서 막을 수 있어요.'));
-    const rl = el('div', 'sched-list');
-    for (const s of remote) {
-      const row = el('div', 'sched-row');
-      const top = el('div', 'sched-top');
-      top.append(taskBtn(s));
-      row.append(top, el('div', 'sched-meta', s.remotes.map((r) => `${r.app} · ${r.label}`).join(', ')));
-      rl.append(row);
-    }
-    box.append(rl);
-  }
 }
 
 // ── 모든 예약(왼쪽 "예약" 탭): 시각순, 마지막 결과, 켜고 끄기·지우기, 같은 시각에 몰리면 알림 ──
