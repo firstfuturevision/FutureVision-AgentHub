@@ -3050,7 +3050,6 @@ function taskRow(s, depth, open) {
   const ask = !wait && askIn(s); // 답했는데 사람에게 물은 것 · 할 일이 남음
   const time = new Date(s.info.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
-  if (depth) head.append(el('span', 'task-tag', '하위')); // 한 일이 위로 공유되는 하위 작업
   head.append(el('span', `task-title${fresh ? ' fresh' : ''}`, titleOf(s)));
   if (ask) {
     const dot = el('span', 'task-ask');
