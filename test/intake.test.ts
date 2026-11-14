@@ -32,6 +32,7 @@ test('입력 거치기: 사람 지시는 입력 세션이 먼저 받고, 정리�
     const intakeId = sessions.intake.sessionId!;
     assert.ok(intakeId && intakeId !== task);
     assert.equal(sessions.info(intakeId)?.customTitle, '입력');
+    assert.deepEqual(sessions.taskList().map((t) => t.name), ['영업']); // 입력 세션은 목록·보내기 대상에 안 보인다
     const req = (await waitFor(events, (e) => e.type === 'session.intake' && e.state === 'pending')) as any;
     assert.equal(req.sessionId, task);
     const toIntake = (await waitFor(events, (e) => e.type === 'user.message' && e.sessionId === intakeId)) as any;
@@ -57,6 +58,12 @@ test('입력 거치기: 사람 지시는 입력 세션이 먼저 받고, 정리�
     assert.match(fwd.text, /\[사람 원문\]\n견적 사이트 공고 지원해 줘/);
     await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === task); // 이번엔 작업 AI 가 받아 일함
     await assert.rejects(sessions.intakeForwardByMain(intakeId, req2.request, 'x'), /없는 요청/); // 한 번만
+    // 설정 → 입력의 최근 정리: 물음과 넘김이 원문·정리본·작업과 함께 남는다(최근 것 먼저)
+    const recent = sessions.intake.public().recent;
+    assert.deepEqual(recent.map((x) => x.state), ['forwarded', 'asked']);
+    assert.equal(recent[0].target, '영업');
+    assert.match(recent[0].text, /농업 체험/);
+    assert.match(recent[1].original, /견적 사이트/);
     // 바깥 시스템(대시보드 커뮤니케이션 @에이전트)·다른 PC 작업이 보낸 글은 입력 세션을 거치지 않고 바로, 다른 PC 에서 사람이 보낸 글은 거친다
     const n0 = events.filter((e) => e.type === 'session.intake').length;
     await sessions.handle({ type: 'user.message', sessionId: task, text: '[대시보드 커뮤니케이션 · #테스트 · 보낸 사람: 관리자(admin) · 대표] 태스크 추가해 줘', via: { app: '대시보드', label: '커뮤니케이션 #테스트' } }, local);

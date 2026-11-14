@@ -582,3 +582,7 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .side-pc { font-size: 12px; font-weight: 600; color: var(--ink-faint); padding: 14px 12px 4px; }
 .side-pc.drop-top { color: var(--accent); }
 .task.remote .task-title { color: var(--ink-soft); }
+.intake-state { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 4px; }
+.intake-log { border-top: 1px solid var(--rule); padding: 8px 0; }
+.intake-log summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.intake-log .p-text { margin-bottom: 6px; }

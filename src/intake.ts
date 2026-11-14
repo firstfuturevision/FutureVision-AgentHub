@@ -6,7 +6,8 @@ import { dirname } from 'node:path';
  * 입력 세션은 지시를 정리해(역할에 맞나·앞 지시·기억·사내 문서와 어긋나나·범위와 끝나는 조건) intake_forward 로 작업에 넘기거나,
  * 확인이 필요하면 intake_ask 로 그 작업 화면에 묻는다. 작업은 정리본과 사람 원문을 함께 받는다(잘못 정리해도 원문이 남게).
  */
-interface Saved { model: string; sessionId?: string }
+export interface IntakeLog { at: string; state: 'forwarded' | 'asked' | 'routed'; request: string; taskId: string; task: string; target?: string; original: string; text: string }
+interface Saved { model: string; sessionId?: string; recent?: IntakeLog[] }
 export interface IntakeRequest { id: string; taskId: string; original: string; attachments?: { path: string; name: string; mime: string; size: number }[]; at: number; question?: string }
 
 export const DEFAULT_INTAKE_MODEL = 'opus';
@@ -23,14 +24,20 @@ export class IntakeStore {
     try {
       if (existsSync(file)) {
         const raw = JSON.parse(readFileSync(file, 'utf8'));
-        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}) };
+        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}), recent: Array.isArray(raw.recent) ? raw.recent.slice(-50) : [] };
       }
     } catch {}
   }
 
   get model() { return this.s.model; }
   get sessionId() { return this.s.sessionId; }
-  public() { return { model: this.s.model, sessionId: this.s.sessionId ?? null, pending: this.pending.size }; }
+  public() { return { model: this.s.model, sessionId: this.s.sessionId ?? null, pending: this.pending.size, recent: [...(this.s.recent ?? [])].reverse() }; }
+
+  /** 설정 → 입력에 보이는 최근 기록(넘김·물음, 50개까지) */
+  log(x: Omit<IntakeLog, 'at'>) {
+    this.s.recent = [...(this.s.recent ?? []), { ...x, at: new Date().toISOString(), original: x.original.slice(0, 2000), text: x.text.slice(0, 4000) }].slice(-50);
+    this.save();
+  }
 
   setModel(model: unknown) {
     const m = String(model ?? '').trim().slice(0, 80);

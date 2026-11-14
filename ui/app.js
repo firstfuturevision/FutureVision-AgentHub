@@ -418,7 +418,7 @@ function renderPeers(box) {
 }
 
 function taskLinks() {
-  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived);
+  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived && s.info.id !== intakeState?.sessionId);
   const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
   for (const s of tasks) {
     for (const it of s.items) {
@@ -1379,13 +1379,50 @@ const tform = $('tool-form');
 // ── 입력 세션: 이 PC 에 하나(id·모델) ──
 let intakeState = null;
 async function loadIntake() {
+  const had = intakeState?.sessionId;
   intakeState = await getJson('/intake', intakeState);
+  if (intakeState?.sessionId !== had) renderList(); // 입력 세션은 목록에서 뺀다
+  renderIntake();
   const sel = $('intake-model');
   if (sel && intakeState) {
     sel.replaceChildren(...models.claude.map((m) => new Option(m.name, m.id)));
     if (![...sel.options].some((o) => o.value === intakeState.model)) sel.append(new Option(intakeState.model, intakeState.model));
     sel.value = intakeState.model;
   }
+}
+/** 설정 → 입력: 상태 · 켠 작업 · 최근 정리(원문·정리본·넘긴 작업·시각) · 대화 보기 */
+function renderIntake() {
+  if (!intakeState || $('settings').hidden) return;
+  const live = intakeState.sessionId && sessions.get(intakeState.sessionId);
+  $('intake-status').textContent = live ? `입력 세션 있음 · ${isBusy(live) ? '정리하는 중' : '대기'}${intakeState.pending ? ` · 넘기기 전 ${intakeState.pending}개` : ''}` : '입력 세션 없음(켠 작업에 처음 지시가 오면 생김)';
+  $('intake-open').hidden = !live;
+  $('intake-open').onclick = () => { viewId = intakeState.sessionId; showNav('sessions'); render(); };
+  const on = $('intake-tasks');
+  on.replaceChildren();
+  const list = mains().filter((k) => k.info.viaIntake);
+  for (const k of list) {
+    const row = el('div', 'mem-row');
+    const name = el('button', 'sched-task mem-text', titleOf(k));
+    name.type = 'button';
+    name.onclick = () => { viewId = k.info.id; showNav('sessions'); render(); };
+    const off = el('button', 'p-mini', '끄기');
+    off.type = 'button';
+    off.onclick = () => { delete k.info.viaIntake; void send({ type: 'session.setIntake', sessionId: k.info.id, on: false }); renderIntake(); };
+    row.append(name, off);
+    on.append(row);
+  }
+  if (!list.length) on.append(el('p', 'hint', '켠 작업이 없어요.'));
+  const rec = $('intake-recent');
+  rec.replaceChildren();
+  const STATE = { forwarded: '넘김', routed: '다른 작업으로', asked: '물음' };
+  for (const x of intakeState.recent ?? []) {
+    const d = el('details', 'intake-log');
+    const sum = el('summary', '');
+    sum.append(el('span', 'mem-by', new Date(x.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })), el('span', 'link-kind', STATE[x.state] ?? x.state), el('span', 'mem-text', `${x.task}${x.target && x.target !== x.task ? ` → ${x.target}` : ''} · ${x.original.replace(/\s+/g, ' ').slice(0, 60)}`));
+    d.append(sum, el('div', 'intake-label', '사람 원문'), el('div', 'p-text', x.original), el('div', 'intake-label', x.state === 'asked' ? '물어본 것' : '정리한 지시'), el('div', 'p-text', x.text));
+    rec.append(d);
+  }
+  if (!(intakeState.recent ?? []).length) rec.append(el('p', 'hint', '아직 정리한 지시가 없어요.'));
 }
 $('intake-model').onchange = async () => {
   const r = await fetch('/intake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: $('intake-model').value }) });
@@ -1772,6 +1809,7 @@ function onEvent(ev) {
     case 'session.reordered': s.info.rank = ev.rank; break;
     case 'session.intakeSet': if (ev.on) s.info.viaIntake = true; else delete s.info.viaIntake; break;
     case 'session.intake':
+      if (replayed && ev.state !== 'pending') setTimeout(() => void loadIntake(), 300);
       // 입력 세션: 정리 중 · 물음(확인 필요로 보임) · 다른 작업으로 보냄. 넘긴 지시는 "입력"이 보낸 글로 따로 들어온다
       if (ev.state === 'pending') s.items.push({ k: 'note', t: '입력 세션이 지시를 정리하는 중' });
       else if (ev.state === 'asked') { s.items.push({ k: 'intake-ask', t: ev.text }); s.doneAt = at; if (replayed) notify(s, `입력 세션 물음 · ${ev.text.split('\n')[0]}`); }
@@ -1863,7 +1901,7 @@ function onEvent(ev) {
 }
 
 // ── 그리기 ──────────────────────────────────
-const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.archived).sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
+const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.archived && s.info.id !== intakeState?.sessionId).sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
 const workersOf = (s) => s.items.filter((it) => it.k === 'worker').map((it) => sessions.get(it.id)).filter(Boolean);
 // 승인을 기다리는 건 일하는 중일 때뿐이다(묻는 CLI 는 차례 안에서 묻는다). 쉬는 작업에 남은 답 없는 요청은 기다리는 게 아니다
 const pendingPerm = (s) => (s.info.status === 'working' || s.info.status === 'starting') && s.items.some((it) => it.k === 'perm' && !it.resolved);
@@ -2330,7 +2368,7 @@ function renderAbout(s) {
     sw.onclick = () => { s.info.viaIntake = !s.info.viaIntake; void send({ type: 'session.setIntake', sessionId: s.info.id, on: Boolean(s.info.viaIntake) }); renderPanel(); };
     row.append(el('span', 'intake-name', '입력 거치기'), sw);
     box.append(row, el('div', 'p-meta', '켜면 여기 쓴 지시를 입력 세션이 먼저 정리해(역할·앞 지시·사내 문서 확인) 넘기거나 물어요. / 명령은 그대로'));
-  } else if (intakeState && s.info.id === intakeState.sessionId) box.append(el('div', 'p-meta', '이 작업이 입력 세션이에요. 모델은 설정 → 기억에서 바꿔요'));
+  }
   box.append(s.info.about ? el('div', 'p-text', s.info.about) : el('div', 'p-empty', '무엇을 맡는 작업인지 적어 두면, 다른 작업이 일을 보낼 곳을 고를 때 씁니다. 작업에서 "이 작업 역할 정리해 줘"라고 해도 됩니다'));
   const acts = el('div', 'p-acts');
   const edit = el('button', 'p-mini', s.info.about ? '바꾸기' : '쓰기');
@@ -2824,7 +2862,7 @@ const folded = new Set((() => { try { return JSON.parse(localStorage.getItem('hu
 function saveFolded() { try { localStorage.setItem('hub.folded', JSON.stringify([...folded])); } catch {} }
 
 // 보관: 목록에서 숨긴 작업(지우기 전 단계). 왼쪽 "보관"에서 보고 꺼내거나 지운다
-const mainsAll = () => [...sessions.values()].filter((s) => s.info.role === 'main');
+const mainsAll = () => [...sessions.values()].filter((s) => s.info.role === 'main' && s.info.id !== intakeState?.sessionId); // 입력 세션은 목록에 안 보이는 단계
 function descendsFrom(k, root) {
   for (let p = parentOfTask(k), n = 0; p && n < 50; p = sessions.get(p) && parentOfTask(sessions.get(p)), n++) if (p === root.info.id) return true;
   return false;

@@ -624,7 +624,7 @@ export class SessionManager {
     const made = [...this.sessions.values()].find((l) => !before.has(l.info.id) && l.info.role === 'main');
     if (!made) return undefined;
     this.rename(made, '입력');
-    this.setAbout(made, '입력 세션: "입력 거치기"를 켠 작업에 사람이 쓴 지시를 먼저 받아, 역할에 맞는지·앞 지시와 어긋나는지·사내 문서를 보고 정리해 그 작업(또는 맞는 작업)에 넘기거나 사람에게 묻는다. 직접 일은 하지 않는다. 다른 작업은 이 작업에 일을 보내지 않는다.');
+    this.setAbout(made, '입력 세션(목록에 안 보임): "입력 거치기"를 켠 작업에 사람이 쓴 지시를 먼저 받아, 역할에 맞는지·앞 지시와 어긋나는지·사내 문서를 보고 정리해 그 작업(또는 맞는 작업)에 넘기거나 그 작업 화면에 묻는다. 직접 일은 하지 않는다.');
     this.intake.setSession(made.info.id);
     return made;
   }
@@ -662,6 +662,7 @@ export class SessionManager {
     this.intake!.pending.delete(req.id);
     if (origin && origin !== target) this.publish({ type: 'session.intake', sessionId: origin.info.id, state: 'routed', text: `${this.nameOf(target)} 작업이 더 맞아 그쪽으로 보냄`, request: req.id });
     this.publish({ type: 'session.intake', sessionId: target.info.id, state: 'forwarded', text: body, request: req.id });
+    this.intake!.log({ state: origin && origin !== target ? 'routed' : 'forwarded', request: req.id, taskId: req.taskId, task: origin ? this.nameOf(origin) : '(지워진 작업)', target: this.nameOf(target), original: req.original, text: body });
     await this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}) }, { via: 'local', user: '입력' });
     return `${this.nameOf(target)} 에 넘김`;
   }
@@ -673,6 +674,8 @@ export class SessionManager {
     if (!q) throw new Error('물을 것이 비어 있음');
     req.question = q;
     this.publish({ type: 'session.intake', sessionId: req.taskId, state: 'asked', text: q, request: req.id });
+    const t = this.sessions.get(req.taskId);
+    this.intake!.log({ state: 'asked', request: req.id, taskId: req.taskId, task: t ? this.nameOf(t) : '(지워진 작업)', original: req.original, text: q });
     return '물음을 그 작업 화면에 띄움. 사람이 답하면 새 입력 요청으로 온다';
   }
 
@@ -741,7 +744,7 @@ export class SessionManager {
   findTask(key: string): Live {
     const k = String(key ?? '').trim().toLowerCase();
     if (!k) throw new Error('작업 이름을 주세요(session_list 의 name)');
-    const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived);
+    const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived && l.info.id !== this.intake?.sessionId);
     const byId = mains.filter((l) => l.info.id.toLowerCase().startsWith(k));
     if (byId.length === 1 && k.length >= 4) return byId[0];
     // 지금 이름이 먼저, 없으면 예전 이름(별칭)으로
@@ -765,7 +768,7 @@ export class SessionManager {
 
   /** 메인 작업 목록: 이름, id, 상태, 분담 원본, 예약 수, 권한 */
   taskList() {
-    return [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived).map((l) => {
+    return [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived && l.info.id !== this.intake?.sessionId).map((l) => {
       const from = l.info.splitFrom ?? l.info.forkedFrom;
       const src = from ? this.sessions.get(from) : undefined;
       return {
@@ -784,7 +787,7 @@ export class SessionManager {
 
   /** 다른 PC 가 GET /peer/summary 로 가져가는 이 PC 요약: 메인 작업(전체 id) */
   peerSummary(name: string, version?: string): PeerSummary {
-    const tasks = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived).map((l) => {
+    const tasks = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived && l.info.id !== this.intake?.sessionId).map((l) => {
       const from = l.info.splitFrom ?? l.info.forkedFrom;
       const src = from ? this.sessions.get(from) : undefined;
       return {
