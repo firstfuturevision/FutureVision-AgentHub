@@ -76,6 +76,27 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         try { sessions.setRemoteParent(String(body?.taskId ?? ''), parent); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, { ok: true });
       }
+      // 다른 PC 작업을 이 화면에서: 그 PC 의 소식을 그 작업(과 그 작업이 맡긴 작업자) 것만 골라 이어 준다 / 명령을 그 PC 로
+      if (req.method === 'GET' && url.pathname === '/peers/events' && peers) {
+        const target = peers.urls().find((u) => u === url.searchParams.get('url'));
+        const id = url.searchParams.get('id') ?? '';
+        if (!target || !id) return send(res, 400, '연결된 PC 와 작업을 주세요');
+        return remoteEvents(req, res, target, id);
+      }
+      if (req.method === 'POST' && url.pathname === '/peers/cmd' && peers) {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        const target = peers.urls().find((u) => u === body?.url);
+        const cmd = parseCommand(body?.cmd);
+        if (!target || !cmd) return send(res, 400, '연결된 PC 와 명령을 주세요');
+        // 사람이 이 화면에서 보낸 지시는 그 PC 기록에 "Agent Hub <이 PC> · 사람"으로
+        const out = cmd.type === 'user.message' ? { ...cmd, via: { app: `Agent Hub ${peers.summary().name}`.slice(0, 40), label: '사람' } } : cmd;
+        try {
+          const r = await fetch(`${target}/cmd`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(out), signal: AbortSignal.timeout(10000) });
+          if (!r.ok) return send(res, 502, `${r.status} ${(await r.text()).slice(0, 200)}`);
+        } catch (err) { return send(res, 502, `그 PC 에 못 보냄: ${(err as Error).message}`); }
+        return send(res, 202, 'ok');
+      }
       if (req.method === 'POST' && url.pathname === '/peers/parent' && peers) {
         const body = (await readJson(req, res)) as any;
         if (body === undefined) return;
@@ -575,6 +596,41 @@ async function screenRoute(req: IncomingMessage, res: ServerResponse, url: URL, 
     try { return json(res, 200, { sent: await screen.input(body?.m, body?.events) }); } catch (err) { return send(res, 400, (err as Error).message); }
   }
   send(res, 404, '없음');
+}
+
+/** 다른 PC 의 /events 를 받아 그 작업(id)과 그 작업이 맡긴 작업자 소식만 넘긴다 */
+async function remoteEvents(req: IncomingMessage, res: ServerResponse, url: string, id: string) {
+  const ac = new AbortController();
+  req.on('close', () => ac.abort());
+  let up: Response;
+  try { up = await fetch(`${url}/events`, { signal: ac.signal }); } catch (err) { return send(res, 502, `그 PC 에 연결 못 함: ${(err as Error).message}`); }
+  if (!up.ok || !up.body) return send(res, 502, `그 PC 응답: ${up.status}`);
+  res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
+  res.write(': connected\n\n');
+  const ids = new Set([id]); // 그 작업 + 그 작업이 맡긴 작업자
+  const dec = new TextDecoder();
+  let buf = '';
+  const ping = setInterval(() => res.write(': ping\n\n'), 15000);
+  try {
+    for await (const chunk of up.body as any) {
+      buf += dec.decode(chunk, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const line = block.split('\n').find((l) => l.startsWith('data: '));
+        if (!line) continue;
+        let ev: any;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        if (ev.type === 'session.created' && ev.session?.parentId && ids.has(ev.session.parentId)) ids.add(ev.session.id);
+        const sid = ev.type === 'session.created' ? ev.session?.id : ev.sessionId;
+        if (ev.type === 'replay.done' || (sid && ids.has(sid))) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+      }
+    }
+  } catch {} finally {
+    clearInterval(ping);
+    res.end();
+  }
 }
 
 function events(req: IncomingMessage, res: ServerResponse, sessions: SessionManager) {

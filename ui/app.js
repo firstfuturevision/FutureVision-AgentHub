@@ -23,6 +23,13 @@ const store = {
 async function send(cmd) {
   // 처음 일을 맡길 때 알림 허락을 묻는다(브라우저는 사람이 누를 때만 물을 수 있다)
   if (cmd.type === 'user.message' && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+  // 다른 PC 작업(이 화면에서 연 것): 그 PC 로 보낸다
+  const rem = typeof cmd.sessionId === 'string' && remoteOf(cmd.sessionId);
+  if (rem) {
+    const r = await fetch('/peers/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: rem.url, cmd: { ...cmd, sessionId: rem.id } }) });
+    if (!r.ok) flash(`${rem.pc} 에 못 보냄: ${await r.text()}`, true);
+    return;
+  }
   const res = await fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd) });
   if (!res.ok) {
     const t = await res.text();
@@ -269,6 +276,7 @@ async function upload(sessionId, f) {
   return att;
 }
 async function sendWithFiles(sessionId, text, files) {
+  if (remoteOf(sessionId) && files.length) { flash('다른 PC 작업에는 아직 첨부를 보낼 수 없어요(글만 보냄). 첨부는 그 PC 화면에서', true); files = []; }
   const attachments = [];
   for (const f of files) {
     try { attachments.push(await upload(sessionId, f)); } catch (err) { flash(`첨부 실패: ${err.message}`, true); }
@@ -418,7 +426,7 @@ function renderPeers(box) {
 }
 
 function taskLinks() {
-  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived && s.info.id !== intakeState?.sessionId);
+  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived && !s.info.remotePc && s.info.id !== intakeState?.sessionId);
   const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
   for (const s of tasks) {
     for (const it of s.items) {
@@ -1741,7 +1749,7 @@ es.onopen = () => {
   // 처음 접속이 아니면(폰에서 앱으로 돌아옴·잠깐 끊김) 다 받을 때까지 보던 화면을 그대로 두고 한 번에 바꾼다 — 빈 화면이 번쩍이며 다시 불러오는 것처럼 보이지 않게
   holding = sessions.size > 0;
   if (holding) setTimeout(() => { if (holding) { holding = false; render(); } }, 5000); // 기록이 안 끝나도 5초 뒤엔 그린다
-  sessions.clear();
+  for (const k of [...sessions.keys()]) if (!k.startsWith(REMOTE)) sessions.delete(k); // 다른 PC 작업(이 화면에서 연 것)은 그 PC 연결이 따로 채운다
   replayed = false;
   void loadAlerts();
   void loadAllSchedules();
@@ -1902,7 +1910,7 @@ function onEvent(ev) {
 }
 
 // ── 그리기 ──────────────────────────────────
-const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.archived && s.info.id !== intakeState?.sessionId).sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
+const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.archived && !s.info.remotePc && s.info.id !== intakeState?.sessionId).sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
 const workersOf = (s) => s.items.filter((it) => it.k === 'worker').map((it) => sessions.get(it.id)).filter(Boolean);
 // 승인을 기다리는 건 일하는 중일 때뿐이다(묻는 CLI 는 차례 안에서 묻는다). 쉬는 작업에 남은 답 없는 요청은 기다리는 게 아니다
 const pendingPerm = (s) => (s.info.status === 'working' || s.info.status === 'starting') && s.items.some((it) => it.k === 'perm' && !it.resolved);
@@ -2381,8 +2389,8 @@ function renderAbout(s) {
 
 function renderPanel() {
   const s = viewId && sessions.get(viewId);
-  const show = Boolean(s) && !$('chat').hidden;
-  $('panel-btn').hidden = !s;
+  const show = Boolean(s) && !$('chat').hidden && !s.info.remotePc; // 다른 PC 작업의 작업 정보는 그 PC 화면에서
+  $('panel-btn').hidden = !s || Boolean(s.info.remotePc);
   $('panel').hidden = !(show && panelOpen);
   document.querySelector('.app').classList.toggle('with-panel', show && panelOpen);
   if (!show || !panelOpen) return;
@@ -2863,7 +2871,7 @@ const folded = new Set((() => { try { return JSON.parse(localStorage.getItem('hu
 function saveFolded() { try { localStorage.setItem('hub.folded', JSON.stringify([...folded])); } catch {} }
 
 // 보관: 목록에서 숨긴 작업(지우기 전 단계). 왼쪽 "보관"에서 보고 꺼내거나 지운다
-const mainsAll = () => [...sessions.values()].filter((s) => s.info.role === 'main' && s.info.id !== intakeState?.sessionId); // 입력 세션은 목록에 안 보이는 단계
+const mainsAll = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.remotePc && s.info.id !== intakeState?.sessionId); // 입력 세션은 목록에 안 보이는 단계
 function descendsFrom(k, root) {
   for (let p = parentOfTask(k), n = 0; p && n < 50; p = sessions.get(p) && parentOfTask(sessions.get(p)), n++) if (p === root.info.id) return true;
   return false;
@@ -2991,6 +2999,41 @@ function renderList() {
 // ── 다른 PC 작업을 왼쪽 목록에: 연결된 PC 의 작업(이름·상태)과 계층. 누르면 그 PC 화면, 이 PC 작업 위로 끌어 놓으면 그 아래로 ──
 setInterval(() => { if (!document.hidden) void loadPeers(); }, 30000);
 let draggingRemote = null; // { pc, t }
+// 다른 PC 작업을 이 화면에서 열기: 이 PC 서버가 그 PC 소식을 그 작업 것만 골라 이어 주고(/peers/events), 보내는 명령은 그 PC 로(/peers/cmd).
+// 화면 안에서는 "peer:<주소>|<id>" 로 이 PC 작업과 구분한다(목록·연결·보관 등에는 안 섞임)
+const REMOTE = 'peer:';
+const remoteKey = (url, id) => `${REMOTE}${url}|${id}`;
+function remoteOf(key) {
+  if (!key.startsWith(REMOTE)) return null;
+  const [url, id] = key.slice(REMOTE.length).split('|');
+  const pc = (peerState?.peers ?? []).find((p) => p.url === url);
+  return { url, id, pc: pc?.name ?? url };
+}
+let remoteEs = null;
+function openRemote(pc, t) {
+  const key = remoteKey(pc.url, t.id);
+  if (!sessions.has(key)) sessions.set(key, { info: { id: key, role: 'main', agent: 'claude', status: 'idle', title: t.name, customTitle: t.name, createdAt: new Date().toISOString(), workdir: '', remotePc: pc.name, remoteUrl: pc.url }, items: [], draft: null });
+  remoteEs?.close();
+  const es = new EventSource(`/peers/events?url=${encodeURIComponent(pc.url)}&id=${encodeURIComponent(t.id)}`);
+  remoteEs = es;
+  const prefix = (id) => (id && !id.startsWith(REMOTE) ? remoteKey(pc.url, id) : id);
+  es.onopen = () => { const s = sessions.get(key); if (s) { s.items = []; s.draft = null; } renderSoon(); };
+  es.onerror = () => { if (remoteEs === es && es.readyState === EventSource.CLOSED) flash(`${pc.name} 연결이 끊겼어요`, true); };
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'replay.done') return renderSoon();
+    if (ev.type === 'session.created') {
+      if (ev.session.id === t.id) { const s = sessions.get(key); if (s) Object.assign(s.info, ev.session, { id: key, remotePc: pc.name, remoteUrl: pc.url, splitFrom: undefined, forkedFrom: undefined, copiedFrom: undefined, remoteParent: undefined }); return renderSoon(); }
+      ev.session = { ...ev.session, id: prefix(ev.session.id), parentId: prefix(ev.session.parentId), remotePc: pc.name, remoteUrl: pc.url };
+      if (sessions.has(ev.session.id)) return;
+    }
+    if (ev.sessionId) ev.sessionId = prefix(ev.sessionId);
+    onEvent(ev);
+  };
+  viewId = key;
+  showNav('sessions');
+  render();
+}
 function remoteTasks() {
   const under = new Map(); // 이 PC 작업 id → [{ pc, t, kids }]
   const byPc = new Map(); // pc → [맨 위 {pc,t,kids}]
@@ -3027,8 +3070,9 @@ function remoteGroup(n, depth, tagged) {
   head.append(el('span', 'task-title', n.t.name));
   b.append(head);
   if (!depth) b.append(el('span', `task-sub${n.t.status === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${n.t.status === '작업 중' ? '작업 중' : '대기'}`));
-  b.title = [n.t.about, `${n.pc.name} 의 작업 — 누르면 그 PC 화면이 열려요`].filter(Boolean).join('\n');
-  b.onclick = () => window.open(`${n.pc.url}/`, '_blank', 'noopener');
+  b.title = [n.t.about, `${n.pc.name} 의 작업 — 누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)`].filter(Boolean).join('\n');
+  b.onclick = () => openRemote(n.pc, n.t); // 이 화면 가운데에서 그 작업 대화
+  b.oncontextmenu = (e) => { e.preventDefault(); window.open(`${n.pc.url}/`, '_blank', 'noopener'); }; // 우클릭: 그 PC 화면 새 탭
   b.draggable = true;
   b.ondragstart = (e) => { draggingRemote = { pc: n.pc, t: n.t }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', n.t.id); b.classList.add('dragging'); };
   b.ondragend = () => { draggingRemote = null; b.classList.remove('dragging'); for (const x of document.querySelectorAll('.drop-inside, .drop-top')) x.classList.remove('drop-inside', 'drop-top'); };
@@ -3280,7 +3324,7 @@ function renderChat() {
     if (seenAsk(s)) renderList(); // 열었으니 확인 점을 끈다
   }
   $('welcome').hidden = Boolean(s);
-  $('chat-title').textContent = s ? titleOf(s) : '새 작업';
+  $('chat-title').textContent = s ? `${s.info.remotePc ? `${s.info.remotePc} · ` : ''}${titleOf(s)}` : '새 작업';
   const wait = s && waitingIn(s);
   $('chat-status').textContent = s ? (wait ? '승인 대기' : STATUS[s.info.status]) : '';
   $('chat-status').classList.toggle('wait', Boolean(wait));
@@ -3299,7 +3343,16 @@ function renderChat() {
   const log = $('log');
   log.replaceChildren();
   if (s) {
-    if (parentOfTask(s)) {
+    if (s.info.remotePc) {
+      const n = el('div', 'note remote-note');
+      n.append(`${s.info.remotePc} PC 의 작업 — 여기서 보내는 지시·멈춤·승인은 그 PC 에서 실행돼요. `);
+      const a = el('a', '', '그 PC 화면 열기');
+      a.href = `${s.info.remoteUrl}/`;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      n.append(a);
+      log.append(n);
+    } else if (parentOfTask(s)) {
       const from = sessions.get(parentOfTask(s));
       log.append(el('div', 'note', from ? `${titleOf(from)} 의 하위 작업. 여기서 한 일은 위 작업에 공유돼요` : '지워진 작업의 하위 작업'));
     } else if (s.info.copiedFrom) {
