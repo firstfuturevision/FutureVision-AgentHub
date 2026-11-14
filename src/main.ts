@@ -1,6 +1,6 @@
-import { mkdirSync, openSync } from 'node:fs';
+import { mkdirSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.ts';
@@ -141,7 +141,7 @@ claudeCli.onModels = (m) => { cfg.models.claude = m; };
 // 스스로 다시 켤 때는 앞의 Agent Hub 가 화면 포트를 놓을 때까지 기다린다(최대 30초)
 const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiDir: join(root, 'ui'), sessions, info: {
     elevated,
-    bootId: randomUUID(), // 화면이 "다시 켜졌다"를 알아채고 새로 고치는 데 쓴다
+    bootId: uiVersion(join(root, 'ui')), // 화면 파일이 바뀐 채로 다시 켜졌을 때만 화면이 새로 고친다(그냥 다시 켜진 것이면 이어서 쓴다)
     homepage: cfg.homepage, // 왼쪽 위 Agent Hub 를 누르면 여는 곳
     claudeCommand: cfg.claude.command,
     platform: process.platform,
@@ -215,3 +215,10 @@ function shutdown(code = 0) {
 }
 process.on('SIGINT', () => shutdown());
 process.on('SIGTERM', () => shutdown());
+
+/** 화면 파일(ui/) 내용의 지문 — 같으면 다시 켜져도 열린 화면을 새로 고칠 필요가 없다 */
+function uiVersion(dir: string): string {
+  const h = createHash('sha256');
+  for (const f of readdirSync(dir).sort()) h.update(f).update(readFileSync(join(dir, f)));
+  return h.digest('hex').slice(0, 16);
+}

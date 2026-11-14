@@ -1392,12 +1392,15 @@ es.onopen = () => {
     // 왼쪽 위 Agent Hub: 홈페이지 링크(포크는 config.json 의 homepage, 비우면 링크 없음)
     if (typeof i.homepage === 'string') { if (i.homepage) $('brand').href = i.homepage; else $('brand').removeAttribute('href'); }
   }).catch(() => {});
-  // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 그린다.
+  // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 받는다.
+  // 처음 접속이 아니면(폰에서 앱으로 돌아옴·잠깐 끊김) 다 받을 때까지 보던 화면을 그대로 두고 한 번에 바꾼다 — 빈 화면이 번쩍이며 다시 불러오는 것처럼 보이지 않게
+  holding = sessions.size > 0;
+  if (holding) setTimeout(() => { if (holding) { holding = false; render(); } }, 5000); // 기록이 안 끝나도 5초 뒤엔 그린다
   sessions.clear();
   replayed = false;
   void loadAlerts();
   void loadAllSchedules();
-  render();
+  if (!holding) render();
   link.textContent = '';
   link.title = '이 PC 의 Agent Hub 에 연결됨';
   link.classList.remove('off');
@@ -1410,7 +1413,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
-  if (ev.type === 'replay.done') { replayed = true; return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
+  if (ev.type === 'replay.done') { replayed = true; if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -1550,6 +1553,7 @@ const waitingIn = (s) => pendingPerm(s) || workersOf(s).some(pendingPerm);
 
 // ── 지금 하는 일·안 읽은 답·알림 ──
 let replayed = false; // 접속 직후 다시 받는 기록이 끝났나(그 뒤 것만 알린다)
+let holding = false; // 다시 접속해 기록을 받는 중 — 그동안은 보던 화면을 그대로 둔다
 /** 마지막으로 본 시각(작업별, 서버 시각). 이 브라우저에만 기억. 처음 연 브라우저는 그 전 것을 다 읽은 것으로 친다 */
 const seen = (() => { try { return JSON.parse(localStorage.getItem('hub.seen') || '{}'); } catch { return {}; } })();
 const seenBase = Number(localStorage.getItem('hub.seenBase')) || (() => { const t = Date.now(); try { localStorage.setItem('hub.seenBase', String(t)); } catch {} return t; })();
@@ -1799,6 +1803,7 @@ function renderSoon() {
 
 function render() {
   renderTimer = 0;
+  if (holding) return;
   renderList();
   renderChat();
   renderPanel();
