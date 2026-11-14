@@ -282,6 +282,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.about') { if (e.about) info.about = e.about; else delete info.about; }
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
@@ -599,6 +600,26 @@ export class SessionManager {
     return live.info.customTitle ?? (first && first.type === 'user.message' ? first.text.replace(/\s+/g, ' ').slice(0, 40) : '새 작업');
   }
 
+  /** 역할 설명 바꾸기(빈 글 = 지움) */
+  private setAbout(live: Live, about: string) {
+    const v = about.trim().slice(0, 500);
+    if ((live.info.about ?? '') === v) return;
+    if (v) live.info.about = v;
+    else delete live.info.about;
+    this.publish({ type: 'session.about', sessionId: live.info.id, about: v });
+  }
+
+  /** 최근에 하는 일: 마지막 사람·예약·다른 작업 지시의 첫 줄(공유·첨부 머리말은 건너뜀) — AI 를 부르지 않고 기록에서 바로 */
+  private recentOf(live: Live): string | undefined {
+    for (let i = live.history.length - 1; i >= 0; i--) {
+      const e = live.history[i];
+      if (e.type !== 'user.message') continue;
+      const line = e.text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('[분담 공유') && !l.startsWith('[첨부') && !l.startsWith('사람(') && !l.startsWith('에이전트:') && !l.startsWith('- 첨부'));
+      if (line) return line.length > 100 ? `${line.slice(0, 100)}…` : line;
+    }
+    return undefined;
+  }
+
   /** 이름 바꾸기: 예전 이름은 별칭으로 남겨(최근 5개) 이름으로 찾는 곳이 끊기지 않게 한다 */
   private rename(live: Live, title: string) {
     const old = live.info.customTitle;
@@ -644,6 +665,8 @@ export class SessionManager {
       return {
         name: this.nameOf(l),
         id: l.info.id.slice(0, 8),
+        ...(l.info.about ? { about: l.info.about } : {}),
+        ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
@@ -661,6 +684,8 @@ export class SessionManager {
       return {
         name: this.nameOf(l),
         id: l.info.id,
+        ...(l.info.about ? { about: l.info.about } : {}),
+        ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
@@ -678,9 +703,16 @@ export class SessionManager {
     const here = this.taskList();
     if (!this.peers) return here;
     const views = await this.peers.all();
-    const other = views.filter((v) => v.ok).flatMap((v) => v.summary!.tasks.map((t) => ({ name: `${v.name}/${t.name}`, pc: v.name, id: t.id.slice(0, 8), status: t.status, ...(t.splitFrom ? { splitFrom: `${v.name}/${t.splitFrom}` } : {}), schedules: t.schedules })));
+    const other = views.filter((v) => v.ok).flatMap((v) => v.summary!.tasks.map((t) => ({ name: `${v.name}/${t.name}`, pc: v.name, id: t.id.slice(0, 8), status: t.status, ...(t.about ? { about: t.about } : {}), ...(t.recent ? { recent: t.recent } : {}), ...(t.splitFrom ? { splitFrom: `${v.name}/${t.splitFrom}` } : {}), schedules: t.schedules })));
     const down = views.filter((v) => !v.ok).map((v) => `${v.name || v.url}: ${v.error}`);
     return down.length ? [...here, ...other, { note: `연결 안 된 PC — ${down.join('; ')}` }] : [...here, ...other];
+  }
+
+  /** 역할 설명 쓰기(메인 도구): key 가 없으면 이 작업 */
+  taskAboutByMain(mainId: string, about: unknown, key?: unknown): string {
+    const { target } = this.crossTask(mainId, key);
+    this.setAbout(target, String(about ?? ''));
+    return `${this.nameOf(target)} 역할 설명을 ${String(about ?? '').trim() ? '바꿈' : '지움'}`;
   }
 
   /** 다른 작업에 지시를 보낸다(그 작업 대화에 "작업 <보낸 작업 이름>" 이 보낸 것으로 들어간다). 일하는 중이면 다음 차례에 */
@@ -883,6 +915,12 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         this.rename(live, cmd.title);
+        return;
+      }
+      case 'session.setAbout': {
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        this.setAbout(live, cmd.about);
         return;
       }
       case 'session.reorder': {

@@ -362,10 +362,6 @@ function renderPeers(box) {
     else {
       const tasks = p.summary.tasks;
       row.append(el('div', 'sched-meta', `작업 ${tasks.length}개 · 작업 중 ${tasks.filter((x) => x.status === '작업 중').length}개`));
-      const names = el('div', 'peer-tasks');
-      for (const x of tasks.slice(0, 40)) names.append(el('span', `peer-task${x.status === '작업 중' ? ' busy' : ''}`, x.name));
-      if (tasks.length > 40) names.append(el('span', 'link-kind', `외 ${tasks.length - 40}개`));
-      row.append(names);
     }
     list.append(row);
   }
@@ -385,7 +381,7 @@ function renderPeers(box) {
     renderTaskLinks(true);
   };
   box.append(list, add);
-  box.append(el('h3', 'link-h', '이 PC 작업 묶음'));
+  box.append(el('h3', 'link-h', '작업 묶음'));
 }
 
 function taskLinks() {
@@ -417,55 +413,81 @@ function renderTaskLinks(force) {
   // 탭이 열려 있을 때만. 답이 조각조각 올 때 모든 기록을 매번 훑지 않게(누르려던 단추가 그사이 바뀌지 않게도) 2초에 한 번
   if ($('links-view').hidden || (!force && Date.now() - linksAt < 2000)) return;
   linksAt = Date.now();
-  const { groups } = taskLinks();
   const box = $('links-all');
   box.replaceChildren();
   renderPeers(box);
-  box.append(el('p', 'hint', '서로 이어진 작업 묶음입니다. 분담·포크로 갈라졌거나 서로 글을 보낸 작업끼리 묶입니다. 작업끼리는 묶여 있지 않아도 이름만 알면 보낼 수 있어요(작업에서 "○○ 작업에 전해 줘"). 작업 이름을 누르면 그 작업으로 갑니다.'));
-  const when = (t) => (t ? new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
-  const open = (s) => () => { viewId = s.info.id; showNav('sessions'); render(); };
-  const taskBtn = (s, cls = 'sched-task') => {
-    const b = el('button', cls, titleOf(s));
-    b.type = 'button';
-    b.onclick = open(s);
-    return b;
-  };
+  box.append(el('p', 'hint', 'PC 마다 서로 이어진 작업(분담·포크로 갈라졌거나 서로 글을 보낸 작업)을 묶어 보입니다. 이 PC 작업을 누르면 그 작업으로, 다른 PC 작업을 누르면 그 PC 화면이 새 탭으로 열립니다.'));
+  // 이 PC: 기록에서 바로(작업끼리 보낸 글도 묶는다)
+  const { groups } = taskLinks();
+  const mine = [...sessions.values()].filter((s) => s.info.role === 'main');
+  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: s.info.splitFrom ? '분담' : '포크', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
+  const grouped = new Set(groups.flat().map((s) => s.info.id));
+  pcGroups(box, peerState?.me ?? '이 PC', groups.map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).map(node), true);
+  // 다른 PC: 그 PC 가 알려 준 작업 목록의 분담·포크(원본 이름)로
+  for (const p of peerState?.peers ?? []) {
+    if (!p.ok) continue;
+    const tasks = p.summary.tasks;
+    const byName = new Map(tasks.map((t) => [t.name, t.id]));
+    const nodes = tasks.map((t) => ({ id: t.id, name: t.name, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: t.splitFrom ? '분담' : '포크', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
+    const up = new Map(nodes.map((n) => [n.id, n.id]));
+    const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
+    for (const n of nodes) if (n.parent && up.has(n.parent)) up.set(find(n.id), find(n.parent));
+    const gs = new Map();
+    for (const n of nodes) { const g = find(n.id); (gs.get(g) ?? gs.set(g, []).get(g)).push(n); }
+    const all = [...gs.values()];
+    pcGroups(box, p.name || p.url, all.filter((g) => g.length > 1), all.filter((g) => g.length === 1).flat(), false);
+  }
+}
+
+/** PC 하나의 작업 묶음: 묶음마다 분담·포크 나무, 그리고 따로 있는 작업 */
+function pcGroups(box, pc, groups, singles, local) {
+  box.append(el('div', 'link-pc', pc));
   const list = el('div', 'sched-list');
-  for (const g of groups.sort((a, b) => Math.max(...b.map((s) => s.lastAt ?? 0)) - Math.max(...a.map((s) => s.lastAt ?? 0)))) {
-    const card = el('div', 'sched-row link-group');
-    const ids = new Set(g.map((s) => s.info.id));
-    // 분담·포크 나무: 원본이 묶음 밖(또는 없음)인 것부터, 그 아래 갈라진 것
-    const kids = (id) => g.filter((s) => (s.info.splitFrom ?? s.info.forkedFrom) === id);
-    const roots = g.filter((s) => !ids.has(s.info.splitFrom ?? s.info.forkedFrom ?? ''));
-    const tree = el('div', 'link-tree');
-    const add = (s, depth) => {
+  const tree = (g) => {
+    const ids = new Set(g.map((n) => n.id));
+    const t = el('div', 'link-tree');
+    const add = (n, depth) => {
       const row = el('div', 'link-task');
       row.style.paddingLeft = `${depth * 16}px`;
-      row.append(el('span', `link-dot ${isBusy(s) ? 'busy' : ''}`));
-      row.append(taskBtn(s, 'link-name'));
-      const kind = depth ? (s.info.splitFrom ? '분담' : '포크') : '';
-      if (kind) row.append(el('span', 'link-kind', kind));
-      if (isBusy(s)) row.append(el('span', 'link-kind', '작업 중'));
-      tree.append(row);
-      for (const k of kids(s.info.id)) add(k, depth + 1);
+      row.append(el('span', `link-dot ${n.busy ? 'busy' : ''}`));
+      const b = el('button', 'link-name', n.name);
+      b.type = 'button';
+      b.onclick = n.open;
+      row.append(b);
+      if (n.about) row.title = n.about;
+      if (depth) row.append(el('span', 'link-kind', n.kind));
+      if (n.busy) row.append(el('span', 'link-kind', '작업 중'));
+      t.append(row);
+      for (const k of g.filter((x) => x.parent === n.id)) add(k, depth + 1);
     };
-    for (const r of roots) add(r, 0);
-    card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree);
-    // 묶음 전체에 알리기: 사람이 보낸 글로 묶음의 모든 작업에 들어간다
-    const all = el('button', 'line-btn', '묶음 전체에 보내기');
-    all.type = 'button';
-    all.onclick = async () => {
-      const text = await askDialog({ title: `묶음 전체에 보내기 · 작업 ${g.length}개`, text: g.map(titleOf).join(', '), input: '', placeholder: '모든 작업에 보낼 글', ok: '보내기' });
-      if (!text) return;
-      for (const s of g) await send({ type: 'user.message', sessionId: s.info.id, text });
-      flash(`작업 ${g.length}개에 보냈어요`);
-    };
-    const foot = el('div', 'link-foot');
-    foot.append(all);
-    card.append(foot);
+    for (const r of g.filter((n) => !ids.has(n.parent ?? ''))) add(r, 0);
+    return t;
+  };
+  for (const g of groups) {
+    const card = el('div', 'sched-row link-group');
+    card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree(g));
+    if (local) {
+      // 묶음 전체에 알리기: 사람이 보낸 글로 묶음의 모든 작업에 들어간다
+      const all = el('button', 'line-btn', '묶음 전체에 보내기');
+      all.type = 'button';
+      all.onclick = async () => {
+        const text = await askDialog({ title: `묶음 전체에 보내기 · 작업 ${g.length}개`, text: g.map((n) => n.name).join(', '), input: '', placeholder: '모든 작업에 보낼 글', ok: '보내기' });
+        if (!text) return;
+        for (const n of g) await send({ type: 'user.message', sessionId: n.id, text });
+        flash(`작업 ${g.length}개에 보냈어요`);
+      };
+      const foot = el('div', 'link-foot');
+      foot.append(all);
+      card.append(foot);
+    }
     list.append(card);
   }
-  if (!groups.length) list.append(el('p', 'hint', '아직 서로 이어진 작업이 없어요. 작업을 분담하거나 작업끼리 글을 보내면 여기에 묶여 보입니다.'));
+  if (singles.length) {
+    const card = el('div', 'sched-row link-group');
+    card.append(el('div', 'link-sub', `따로 있는 작업 ${singles.length}개`), tree(singles.map((n) => ({ ...n, parent: undefined }))));
+    list.append(card);
+  }
+  if (!groups.length && !singles.length) list.append(el('p', 'hint', '작업이 없어요.'));
   box.append(list);
 }
 
@@ -1619,6 +1641,7 @@ function onEvent(ev) {
       break;
     case 'session.renamed': s.info.customTitle = ev.title; if (ev.aliases) s.info.aliases = ev.aliases; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
+    case 'session.about': if (ev.about) s.info.about = ev.about; else delete s.info.about; break;
     case 'session.rewound': {
       // 되감기: upTo 번째 사람 지시까지만 남기고 그 뒤는 화면에서도 걷는다(기록 파일에는 남음)
       let n = 0;
@@ -2132,6 +2155,38 @@ function pickFolderWeb(start) {
   });
 }
 
+// 역할 설명: 이 작업이 무엇을 맡는지. 다른 작업(다른 PC 포함)이 session_list 로 보고 어디로 보낼지 고른다
+let aboutEdit = null; // 고치는 중인 작업 id
+function renderAbout(s) {
+  const box = $('p-about');
+  if (aboutEdit === s.info.id && box.querySelector('textarea')) return; // 쓰는 중에는 다시 그리지 않는다
+  box.replaceChildren();
+  if (aboutEdit === s.info.id) {
+    const ta = el('textarea', 'about-input');
+    ta.value = s.info.about ?? '';
+    ta.rows = 4;
+    ta.maxLength = 500;
+    ta.placeholder = '예: 영업 담당. 크몽·숨고 문의 응답과 외주 공고·제안서를 맡는다. 개발 일은 받지 않는다.';
+    const acts = el('div', 'p-acts');
+    const save = el('button', 'p-mini', '저장');
+    const cancel = el('button', 'p-mini', '취소');
+    save.type = cancel.type = 'button';
+    save.onclick = () => { void send({ type: 'session.setAbout', sessionId: s.info.id, about: ta.value }); aboutEdit = null; s.info.about = ta.value.trim() || undefined; renderPanel(); };
+    cancel.onclick = () => { aboutEdit = null; renderPanel(); };
+    acts.append(save, cancel);
+    box.append(ta, acts);
+    ta.focus();
+    return;
+  }
+  box.append(s.info.about ? el('div', 'p-text', s.info.about) : el('div', 'p-empty', '무엇을 맡는 작업인지 적어 두면, 다른 작업이 일을 보낼 곳을 고를 때 씁니다. 작업에서 "이 작업 역할 정리해 줘"라고 해도 됩니다'));
+  const acts = el('div', 'p-acts');
+  const edit = el('button', 'p-mini', s.info.about ? '바꾸기' : '쓰기');
+  edit.type = 'button';
+  edit.onclick = () => { aboutEdit = s.info.id; renderPanel(); };
+  acts.append(edit);
+  box.append(acts);
+}
+
 function renderPanel() {
   const s = viewId && sessions.get(viewId);
   const show = Boolean(s) && !$('chat').hidden;
@@ -2141,6 +2196,7 @@ function renderPanel() {
   if (!show || !panelOpen) return;
   const preset = s.info.preset ? presets.find((p) => p.id === s.info.preset.id) : undefined;
 
+  renderAbout(s);
   renderContext(s);
   renderLinks(s);
   renderRemotes(s);
@@ -3016,6 +3072,11 @@ function mergedItem(it) {
     body.append(div);
   }
   box.append(head, body);
+  // 대화는 새 소식마다 다시 그려진다 — 펼친 것·안에서 내린 자리를 항목에 적어 두어 저절로 접히지 않게
+  box.open = Boolean(it.open);
+  box.ontoggle = () => { it.open = box.open; };
+  body.onscroll = () => { it.scroll = body.scrollTop; };
+  if (it.open && it.scroll) requestAnimationFrame(() => { body.scrollTop = it.scroll; });
   return box;
 }
 

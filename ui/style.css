@@ -555,9 +555,9 @@ a.brand[href]:hover { text-decoration: underline; text-underline-offset: 3px; }
 .link-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
 .link-h { font-size: 14px; margin: 20px 0 0; }
 .link-gap { flex: 1; }
-.peer-tasks { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 4px; }
-.peer-task { font-size: 12px; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-soft); }
-.peer-task.busy { border-color: var(--accent); color: var(--accent); }
 .peer-add { display: flex; gap: 8px; margin-top: 10px; max-width: 460px; }
 .peer-add .key-input { flex: 1; }
 a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font-size: 13px; }
+.about-input { width: 100%; box-sizing: border-box; font: 13px/1.5 var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 9px; resize: vertical; }
+.about-input:focus { outline: none; border-color: var(--ink-faint); }
+.link-pc { font-size: 13px; font-weight: 600; color: var(--ink-soft); margin: 14px 0 0; }
