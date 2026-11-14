@@ -174,14 +174,16 @@ export class Peers {
     return r.json();
   }
 
-  /** 기억·공통 지침 맞추기: 이 PC 의 공통 지침으로 바꾸고, 그 PC 에 없는 기억을 더한다(그 PC 에만 있는 기억은 지우지 않는다) */
-  async syncMemory(url: string, mine: { guide: string; items: { text: string }[] }): Promise<{ added: number }> {
-    await this.post(url, '/memory', { action: 'guide', text: mine.guide });
-    let theirs = (await (await fetch(`${peerUrl(url)}/memory`, { signal: AbortSignal.timeout(TIMEOUT_MS) })).json()) as { items: { text: string }[] };
-    const have = new Set(theirs.items.map((x) => x.text));
-    let added = 0;
-    for (const m of mine.items) if (!have.has(m.text)) { theirs = (await this.post(url, '/memory', { action: 'add', text: m.text })) as typeof theirs; added++; }
-    return { added };
+  /** 그 PC 의 공통 지침·회사 기억(맞추기 비교용) */
+  async shared(url: string): Promise<{ guide: string; items: { text: string; at: string }[] } | null> {
+    const u = peerUrl(url);
+    if (!u) return null;
+    try {
+      const r = await fetch(`${u}/memory`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (!r.ok) return null;
+      const m = (await r.json()) as { guide?: string; items?: { text: string; at: string; scope?: string }[] };
+      return { guide: String(m.guide ?? ''), items: (m.items ?? []).filter((x) => x.scope === 'company').map((x) => ({ text: String(x.text), at: String(x.at ?? '') })) };
+    } catch { return null; }
   }
 
   /** 사람이 화면에서 다른 PC 작업들에 보내기(id 로). 보낸 곳은 "Agent Hub <이 PC> · 사람" */

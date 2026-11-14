@@ -71,7 +71,7 @@ test('역할 한 줄: 비었으면 "비어 있음", 있으면 줄바꿈 없이 �
   assert.equal(aboutNote('영업 담당.\n고객 문의'), '[이 작업 역할: 영업 담당. 고객 문의]');
 });
 
-test('Peers: 그 PC 기억·공통 지침 맞추기(없는 것만 더함)와 입력 세션 모델', { skip: !lanIp && '사설 주소 없음' }, async () => {
+test('Peers: 그 PC 의 공통 지침·회사 기억 읽기(개인 기억은 빼고)와 입력 세션 모델', { skip: !lanIp && '사설 주소 없음' }, async () => {
   const mem = { guide: '', items: [{ id: 'x', text: '그 PC 것' }] as { id: string; text: string }[] };
   let model = 'opus';
   const srv = createServer((req, res) => {
@@ -100,9 +100,8 @@ test('Peers: 그 PC 기억·공통 지침 맞추기(없는 것만 더함)와 입
     const [v] = await peers.all(true);
     assert.deepEqual(v.intake, { model: 'opus' });
     assert.deepEqual(v.memory, { items: 1, guide: false });
-    assert.deepEqual(await peers.syncMemory(url, { guide: '먼저 확인', items: [{ text: '그 PC 것' }, { text: '이모지 쓰지 않기' }] }), { added: 1 });
-    assert.equal(mem.guide, '먼저 확인');
-    assert.deepEqual(mem.items.map((x) => x.text), ['그 PC 것', '이모지 쓰지 않기']);
+    mem.items.push({ id: 'c', text: '회사 규칙', scope: 'company' } as any);
+    assert.deepEqual(await peers.shared(url), { guide: '', items: [{ text: '회사 규칙', at: '' }] }); // 개인 기억은 빼고
     await peers.post(url, '/intake', { model: 'sonnet' });
     assert.equal(model, 'sonnet');
   } finally {

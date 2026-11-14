@@ -382,14 +382,13 @@ function renderPeers(box) {
           ctl.append(el('span', 'link-kind', '입력 세션 모델'), sel);
         }
         if (p.memory) {
-          const sync = el('button', 'line-btn', '기억·공통 지침 맞추기');
+          const sync = el('button', 'line-btn', '지금 비교해 맞추기');
           sync.type = 'button';
+          sync.title = '공통 지침과 회사 기억을 연결된 PC 끼리 비교해, 다르면 이 PC 입력 세션이 합쳐 모두에게 적용(개인 기억은 PC 마다 그대로). 평소에는 10분마다 저절로';
           sync.onclick = async () => {
-            if (!(await askDialog({ title: `${p.name} 에 기억·공통 지침 맞추기`, text: '이 PC 의 공통 지침으로 바꾸고, 그 PC 에 없는 기억을 더합니다. 그 PC 에만 있는 기억은 지우지 않아요. 그 PC 작업들은 다음 지시부터 받습니다.', ok: '맞추기' }))) return;
-            const r = await fetch('/peers/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'sync', url: p.url }) });
+            const r = await fetch('/peers/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'reconcile' }) });
             if (!r.ok) return flash(await r.text(), true);
-            flash(`${p.name} 에 맞췄어요 · 기억 ${(await r.json()).added}개 더함`);
-            void loadPeers(true);
+            flash((await r.json()).started ? '다른 점이 있어 입력 세션이 합치는 중이에요' : '모든 PC 가 이미 같아요');
           };
           ctl.append(sync);
         }
@@ -1413,6 +1412,12 @@ function renderMemory() {
   for (const m of [...memState.items].reverse()) {
     const row = el('div', 'mem-row');
     row.append(el('span', 'mem-text', m.text), el('span', 'mem-by', `${m.by} · ${new Date(m.at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}`));
+    // 회사 기억은 연결된 PC 와 맞추고, 개인 기억은 이 PC 를 쓰는 사람 것이라 맞추지 않는다
+    const sc = el('button', `p-mini mem-scope${m.scope === 'company' ? ' on' : ''}`, m.scope === 'company' ? '회사' : '개인');
+    sc.type = 'button';
+    sc.title = m.scope === 'company' ? '회사 기억: 연결된 PC 와 맞춤. 누르면 개인으로' : '개인 기억: 이 PC 를 쓰는 사람의 취향(맞추지 않음). 누르면 회사로';
+    sc.onclick = () => void postMemory({ action: 'scope', id: m.id, scope: m.scope === 'company' ? 'personal' : 'company' });
+    row.append(sc);
     const edit = el('button', 'p-mini', '고치기');
     edit.type = 'button';
     edit.onclick = async () => {

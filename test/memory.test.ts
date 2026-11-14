@@ -33,3 +33,20 @@ test('기억: 처음엔 전부, 그 뒤엔 더하거나 고친 것만, 지우면
   assert.equal(again.public().guide, '먼저 확인한다');
   assert.throws(() => m.add('  ', 'x'), /비어 있음/);
 });
+
+test('회사·개인 기억: 맞추기는 공통 지침과 회사 기억만 바꾸고 개인 기억은 그대로', () => {
+  const m = new MemoryStore(join(mkdtempSync(join(tmpdir(), 'mem-')), 'memory.json'));
+  m.add('보고에 이모지 쓰지 않기', '사람'); // 개인
+  m.add('외부 플랫폼은 화면 제어로', '사람', 'company');
+  m.add('옛 회사 규칙', '사람', 'company');
+  assert.deepEqual(m.shared().items.map((x) => x.text), ['외부 플랫폼은 화면 제어로', '옛 회사 규칙']);
+  const seen = m.noteFor().seen;
+  m.replaceShared('먼저 확인', ['외부 플랫폼은 화면 제어로', '새 회사 규칙', '보고에 이모지 쓰지 않기'], '맞추기 · pc1');
+  const items = m.public().items;
+  assert.deepEqual(items.filter((x) => x.scope === 'company').map((x) => x.text).sort(), ['보고에 이모지 쓰지 않기', '새 회사 규칙', '외부 플랫폼은 화면 제어로'].sort());
+  assert.equal(items.some((x) => x.text === '옛 회사 규칙'), false);
+  assert.equal(m.public().guide, '먼저 확인');
+  const note = m.noteFor(seen).text;
+  assert.match(note, /\[공통 지침/);
+  assert.match(note, /\(회사\) 새 회사 규칙/);
+});

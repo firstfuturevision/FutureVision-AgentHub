@@ -149,6 +149,8 @@ sessions.memory = memory;
 memory.onChange = () => sessions.publishMemory();
 // 입력 세션: 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다(모델은 설정 → 기억 → 입력 세션)
 sessions.intake = new IntakeStore(join(cfg.dataDir, 'intake.json'));
+// 연결된 PC 끼리 공통 지침·회사 기억 맞추기(10분마다 비교, 다르면 입력 세션이 합친다)
+setInterval(() => void sessions.reconcileMemory().catch(() => {}), 10 * 60_000).unref();
 peers.start();
 // Claude 모델 목록·CLI 버전: CLI 에게 물어 채운다(켤 때·6시간마다). 화면의 /info 는 cfg.models 를 그대로 보여 준다
 const claudeCli = new ClaudeCli({ command: cfg.claude.command, file: join(cfg.dataDir, 'claude-models.json') });

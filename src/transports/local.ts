@@ -65,7 +65,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         if (body === undefined) return;
         try {
           if (body?.action === 'intake') return json(res, 200, await peers.post(String(body.url ?? ''), '/intake', { model: body.model }));
-          if (body?.action === 'sync' && memory) return json(res, 200, await peers.syncMemory(String(body.url ?? ''), memory.public()));
+          if (body?.action === 'reconcile') return json(res, 200, { started: await sessions.reconcileMemory(true) });
           return send(res, 400, '모르는 요청');
         } catch (err) { return send(res, 400, (err as Error).message); }
       }
@@ -93,7 +93,9 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
           try {
-            if (body?.action === 'add') memory.add(body.text, '사람');
+            if (body?.action === 'add') memory.add(body.text, '사람', body.scope);
+            else if (body?.action === 'scope') memory.setScope(body.id, body.scope);
+            else if (body?.action === 'replaceShared') memory.replaceShared(body.guide, body.items, String(body.by ?? '맞추기').slice(0, 60));
             else if (body?.action === 'edit') memory.edit(body.id, body.text);
             else if (body?.action === 'remove') memory.remove(body.id);
             else if (body?.action === 'guide') memory.setGuide(body.text);

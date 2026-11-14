@@ -578,3 +578,4 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .pick-item:hover { background: var(--hover); }
 .peer-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .peer-model { font: 13px var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 4px 6px; }
+.mem-scope.on { border-color: var(--accent) !important; color: var(--accent); }

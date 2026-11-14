@@ -469,7 +469,7 @@ test('MCP: initialize 는 지침을, tools/list 는 clink 와 프리셋 도구�
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.match(init.result.instructions, /메인 에이전트/);
   const list = await call('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'session_info', 'schedule_list', 'schedule_save', 'schedule_delete', 'session_list', 'session_send', 'session_about', 'memory_save', 'memory_list', 'memory_delete', 'intake_forward', 'intake_ask', 'session_split', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['clink', 'agent_list', 'agent_save', 'agent_delete', 'preset_list', 'preset_save', 'preset_delete', 'share_push', 'session_info', 'schedule_list', 'schedule_save', 'schedule_delete', 'session_list', 'session_send', 'session_about', 'memory_save', 'memory_list', 'memory_delete', 'memory_reconcile', 'intake_forward', 'intake_ask', 'session_split', 'screen_view', 'screen_click', 'screen_drag', 'screen_scroll', 'screen_type', 'screen_key', 'show_image']);
   assert.deepEqual(list.result.tools[0].inputSchema.properties.preset.enum, ['리뷰어']); // 프리셋이 도구에 실린다
   assert.match(init.result.instructions, /맡길 수 있는 하위 에이전트: 리뷰어/);
   assert.ok(events.length > 0);

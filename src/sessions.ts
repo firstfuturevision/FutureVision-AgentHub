@@ -812,6 +812,43 @@ export class SessionManager {
     return down.length ? [...here, ...other, { note: `연결 안 된 PC — ${down.join('; ')}` }] : [...here, ...other];
   }
 
+  // ── 연결된 PC 끼리 공통 지침·회사 기억 맞추기: 다르면 이름순 맨 앞 PC 의 입력 세션이 비교해 합치고 모두에게 적용(개인 기억은 PC 마다) ──
+  private reconcileAt = 0;
+  /** 10분마다(또는 사람이 "지금"). 맞출 게 있어 입력 세션에 맡겼으면 true */
+  async reconcileMemory(force = false): Promise<boolean> {
+    if (!this.memory || !this.peers || !this.intake) return false;
+    if (!force && Date.now() - this.reconcileAt < 30 * 60_000) return false; // 맡긴 뒤 30분은 기다린다
+    const me = this.peers.summary().name;
+    const views = (await this.peers.all(true)).filter((v) => v.ok && v.memory);
+    if (!views.length) return false;
+    if (!force && views.some((v) => (v.name ?? '') < me)) return false; // 이름순 맨 앞 PC 가 맡는다(여럿이 동시에 맞추지 않게)
+    const sets = [{ pc: me, ...this.memory.shared() }];
+    for (const v of views) { const sh = await this.peers.shared(v.url); if (sh) sets.push({ pc: v.name || v.url, ...sh }); }
+    const key = (x: { guide: string; items: { text: string }[] }) => `${x.guide}\n${x.items.map((i) => i.text).sort().join('\n')}`;
+    if (sets.every((x) => key(x) === key(sets[0]))) return false;
+    const intake = await this.ensureIntake();
+    if (!intake) return false;
+    this.reconcileAt = Date.now();
+    const body = sets.map((x) => `## ${x.pc}\n[공통 지침]\n${x.guide || '(없음)'}\n[회사 기억]\n${x.items.map((i) => `- ${i.text} (${i.at.slice(0, 10)})`).join('\n') || '(없음)'}`).join('\n\n');
+    await this.handle({ type: 'user.message', sessionId: intake.info.id, text: `[기억 맞추기] 연결된 PC 들의 공통 지침과 회사 기억이 서로 다르다. 같은 뜻은 하나로 합치고, 한쪽에만 있는 것은 더하고, 어긋나면 날짜가 최근인 것을 따른다(판단이 어려우면 둘 다 남기고 끝에 짧게 보고). 합친 결과를 memory_reconcile(guide, items) 로 한 번에 모든 PC 에 적용한다. 개인 기억은 PC 마다 쓰는 사람이 달라 여기 없고 건드리지 않는다.\n\n${body}` }, { via: 'local', user: '입력 요청' });
+    return true;
+  }
+
+  /** 입력 세션 도구: 합친 공통 지침·회사 기억을 이 PC 와 연결된 모든 PC 에 적용 */
+  async memoryReconcileByMain(mainId: string, guide: unknown, items: unknown): Promise<string> {
+    if (!this.intake || mainId !== this.intake.sessionId) throw new Error('입력 세션만 쓸 수 있음');
+    if (!this.memory || !this.peers) throw new Error('기억 기능이 없음');
+    const list = Array.isArray(items) ? items.map(String) : [];
+    const me = this.peers.summary().name;
+    this.memory.replaceShared(guide, list, `맞추기 · ${me}`);
+    const done = [me];
+    const failed: string[] = [];
+    for (const v of (await this.peers.all(true)).filter((x) => x.ok && x.memory)) {
+      try { await this.peers.post(v.url, '/memory', { action: 'replaceShared', guide, items: list, by: `맞추기 · ${me}` }); done.push(v.name || v.url); } catch (err) { failed.push(`${v.name || v.url}(${(err as Error).message})`); }
+    }
+    return `적용: ${done.join(', ')}${failed.length ? ` · 못 함: ${failed.join(', ')}` : ''} · 공통 지침 ${String(guide ?? '').trim() ? '있음' : '없음'}, 회사 기억 ${list.length}개`;
+  }
+
   /** 기억이 바뀌었음을 화면에 알린다(설정 → 기억이 다시 읽음) */
   publishMemory() { this.publish({ type: 'memory.changed' }); }
 
@@ -823,9 +860,9 @@ export class SessionManager {
     if (op === 'list') return JSON.stringify(this.memory.public().items.map((x) => ({ id: x.id, text: x.text, by: x.by })), null, 2);
     if (me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 기억을 바꾸지 못함');
     if (op === 'delete') { this.memory.remove(a.id); return '지움'; }
-    const item = this.memory.add(a.text, this.nameOf(me));
+    const item = this.memory.add(a.text, this.nameOf(me), a.scope);
     me.memSeen = this.memory.noteFor(me.memSeen).seen; // 자기가 남긴 것은 다시 받지 않는다
-    return `기억함(${item.id}): ${item.text}`;
+    return `기억함(${item.id}${item.scope === 'company' ? ', 회사' : ', 개인'}): ${item.text}`;
   }
 
   /** 역할 설명 쓰기(메인 도구): key 가 없으면 이 작업 */
