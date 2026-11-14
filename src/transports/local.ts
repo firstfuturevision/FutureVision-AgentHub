@@ -15,6 +15,7 @@ import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
 import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
+import type { Peers } from '../peers.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import type { ScreenControl } from '../screen.ts';
 import type { ClaudeCli } from '../models.ts';
@@ -33,8 +34,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/scre
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -45,6 +46,18 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
       if (req.method === 'GET' && url.pathname === '/info') return json(res, 200, info);
+      // 다른 PC 의 Agent Hub(왼쪽 "연결"): 이 PC 요약은 다른 PC 가 원격 접속으로 가져간다
+      if (req.method === 'GET' && url.pathname === '/peer/summary') return json(res, 200, peers ? peers.summary() : { name: '', tasks: [] });
+      if (url.pathname === '/peers' && peers) {
+        if (req.method === 'GET') return json(res, 200, { me: peers.summary().name, peers: await peers.all(url.searchParams.has('fresh')) });
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try { peers.add(body?.url); } catch (err) { return send(res, 400, (err as Error).message); }
+          return json(res, 200, { me: peers.summary().name, peers: await peers.all() });
+        }
+        if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, { me: peers.summary().name, peers: await peers.all() }); }
+      }
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, sessions.health); // AI 마다 연결 상태
       if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local' });
       // 원격 접속 — 켜기·끄기

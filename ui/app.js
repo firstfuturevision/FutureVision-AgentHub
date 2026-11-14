@@ -299,7 +299,7 @@ function showNav(nav) {
   $('schedules-view').hidden = nav !== 'schedules';
   $('links-view').hidden = nav !== 'links';
   if (nav === 'schedules') void loadAllSchedules();
-  if (nav === 'links') renderTaskLinks(true);
+  if (nav === 'links') { renderTaskLinks(true); void loadPeers(true); }
   if (nav === 'settings') {
     renderSettings();
     loadPresets();
@@ -319,6 +319,75 @@ function taskByName(name) {
   for (const s of sessions.values()) if (s.info.role !== 'worker' && (titleOf(s) === name || (s.info.aliases ?? []).includes(name))) return s;
   return null;
 }
+// 다른 PC 의 Agent Hub: 탭을 열 때와 열려 있는 동안 15초마다 읽는다
+let peerState = null; // { me, peers: [{ url, manual, name, ok, error, summary }] }
+async function loadPeers(fresh) {
+  const r = await getJson(`/peers${fresh ? '?fresh=1' : ''}`, null);
+  if (r) peerState = r;
+  renderTaskLinks(true);
+}
+setInterval(() => { if (!$('links-view').hidden && !document.hidden) void loadPeers(); }, 15000);
+function renderPeers(box) {
+  box.append(el('h3', 'link-h', 'PC'));
+  box.append(el('p', 'hint', '사무실 네트워크의 다른 PC Agent Hub 입니다. 그 PC 에서 설정 → 연동 → 원격 접속을 켜면 저절로 보입니다(안 보이면 그 PC 에 보이는 원격 접속 주소를 아래에 더합니다). 작업에서 "PC이름/작업 에 전해 줘"라고 하면 다른 PC 작업에도 보냅니다.'));
+  const list = el('div', 'sched-list');
+  const mine = [...sessions.values()].filter((s) => s.info.role === 'main');
+  const me = el('div', 'sched-row');
+  const top = el('div', 'sched-top');
+  top.append(el('span', 'sched-when', peerState?.me ?? '이 PC'), el('span', 'link-kind', '이 PC'));
+  me.append(top, el('div', 'sched-meta', `작업 ${mine.length}개 · 작업 중 ${mine.filter(isBusy).length}개`));
+  list.append(me);
+  for (const p of peerState?.peers ?? []) {
+    const row = el('div', `sched-row${p.ok ? '' : ' off'}`);
+    const t = el('div', 'sched-top');
+    t.append(el('span', 'sched-when', p.name || p.url));
+    t.append(el('span', 'link-kind', p.url.replace('http://', '')));
+    const open = el('a', 'line-btn', '열기');
+    open.href = `${p.url}/`;
+    open.target = '_blank';
+    open.rel = 'noopener';
+    t.append(el('span', 'link-gap'), open);
+    if (p.manual) {
+      const del = el('button', 'line-btn', '빼기');
+      del.type = 'button';
+      del.onclick = async () => {
+        if (!(await askDialog({ title: 'PC 빼기', text: `${p.name || p.url} 를 목록에서 뺍니다. 원격 접속이 켜져 있으면 다시 저절로 보일 수 있어요.`, ok: '빼기' }))) return;
+        const r = await fetch(`/peers?url=${encodeURIComponent(p.url)}`, { method: 'DELETE' });
+        if (r.ok) { peerState = await r.json(); renderTaskLinks(true); }
+      };
+      t.append(del);
+    }
+    row.append(t);
+    if (!p.ok) row.append(el('div', 'sched-meta fail', p.error ?? '연결 안 됨'));
+    else {
+      const tasks = p.summary.tasks;
+      row.append(el('div', 'sched-meta', `작업 ${tasks.length}개 · 작업 중 ${tasks.filter((x) => x.status === '작업 중').length}개`));
+      const names = el('div', 'peer-tasks');
+      for (const x of tasks.slice(0, 40)) names.append(el('span', `peer-task${x.status === '작업 중' ? ' busy' : ''}`, x.name));
+      if (tasks.length > 40) names.append(el('span', 'link-kind', `외 ${tasks.length - 40}개`));
+      row.append(names);
+    }
+    list.append(row);
+  }
+  if (peerState && !peerState.peers.length) list.append(el('p', 'hint', '아직 찾은 다른 PC 가 없어요.'));
+  const add = el('form', 'peer-add');
+  const field = el('input', 'key-input');
+  field.placeholder = 'http://192.168.0.12:4319';
+  field.setAttribute('aria-label', '다른 PC Agent Hub 주소');
+  const go = el('button', 'line-btn', '더하기');
+  go.type = 'submit';
+  add.append(field, go);
+  add.onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch('/peers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: field.value }) });
+    if (!r.ok) return flash(await r.text(), true);
+    peerState = await r.json();
+    renderTaskLinks(true);
+  };
+  box.append(list, add);
+  box.append(el('h3', 'link-h', '이 PC 작업 묶음'));
+}
+
 function taskLinks() {
   const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker');
   const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
@@ -351,6 +420,7 @@ function renderTaskLinks(force) {
   const { groups, sends, remote } = taskLinks();
   const box = $('links-all');
   box.replaceChildren();
+  renderPeers(box);
   box.append(el('p', 'hint', '서로 이어진 작업 묶음입니다. 분담·포크로 갈라졌거나 서로 글을 보낸 작업끼리 묶입니다. 작업끼리는 묶여 있지 않아도 이름만 알면 보낼 수 있어요(작업에서 "○○ 작업에 전해 줘"). 작업 이름을 누르면 그 작업으로 갑니다.'));
   const when = (t) => (t ? new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
   const open = (s) => () => { viewId = s.info.id; showNav('sessions'); render(); };

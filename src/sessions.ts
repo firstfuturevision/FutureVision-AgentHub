@@ -15,6 +15,7 @@ import { skillsFor, type SkillInfo } from './skills.ts';
 import type { ScheduleStore } from './schedules.ts';
 import { ClaudeHistory, claudeHome, claudeTranscript } from './external.ts';
 import type { ScreenControl } from './screen.ts';
+import type { Peers, PeerSummary } from './peers.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -161,6 +162,7 @@ export class SessionManager {
   private permFile: string;
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
+  peers?: Peers; // 다른 PC 의 Agent Hub(왼쪽 "연결") — 작업 목록·보내기가 PC 를 넘는다
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
   autoApproveAll = false;
   /** AI 마다 연결 상태: 로그인 만료·크레딧 부족 같은 오류가 나면 error, 그 AI 의 차례가 잘 끝나면 ok. 화면 위쪽 알림과 GET /health */
@@ -651,12 +653,51 @@ export class SessionManager {
     });
   }
 
+  /** 다른 PC 가 GET /peer/summary 로 가져가는 이 PC 요약: 메인 작업(전체 id) */
+  peerSummary(name: string, version?: string): PeerSummary {
+    const tasks = [...this.sessions.values()].filter((l) => l.info.role === 'main').map((l) => {
+      const from = l.info.splitFrom ?? l.info.forkedFrom;
+      const src = from ? this.sessions.get(from) : undefined;
+      return {
+        name: this.nameOf(l),
+        id: l.info.id,
+        status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
+        schedules: this.schedules?.forSession(l.info.id).length ?? 0,
+      };
+    });
+    return { name, version, tasks };
+  }
+
+  private tryFindTask(key: string): Live | null {
+    try { return this.findTask(key); } catch { return null; }
+  }
+
+  /** 이 PC 와 연결된 다른 PC 의 작업 목록(session_list) */
+  async taskListAll() {
+    const here = this.taskList();
+    if (!this.peers) return here;
+    const views = await this.peers.all();
+    const other = views.filter((v) => v.ok).flatMap((v) => v.summary!.tasks.map((t) => ({ name: `${v.name}/${t.name}`, pc: v.name, id: t.id.slice(0, 8), status: t.status, ...(t.splitFrom ? { splitFrom: `${v.name}/${t.splitFrom}` } : {}), schedules: t.schedules })));
+    const down = views.filter((v) => !v.ok).map((v) => `${v.name || v.url}: ${v.error}`);
+    return down.length ? [...here, ...other, { note: `연결 안 된 PC — ${down.join('; ')}` }] : [...here, ...other];
+  }
+
   /** 다른 작업에 지시를 보낸다(그 작업 대화에 "작업 <보낸 작업 이름>" 이 보낸 것으로 들어간다). 일하는 중이면 다음 차례에 */
   async taskSendByMain(mainId: string, key: unknown, text: unknown): Promise<string> {
-    const { me, target } = this.crossTask(mainId, key);
-    if (target === me) throw new Error('자기 작업에는 보낼 수 없음');
     const body = String(text ?? '').trim();
     if (!body) throw new Error('보낼 글이 비어 있음');
+    // "PC이름/작업" — 이 PC 에 그런 이름의 작업이 없고 연결된 PC 이름이면 그 PC 로
+    const k = String(key ?? '');
+    const slash = k.indexOf('/');
+    if (slash > 0 && this.peers && !this.tryFindTask(k)) {
+      const me = this.sessions.get(mainId);
+      if (!me) throw new Error('없는 작업');
+      if (me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 다른 작업을 다루지 못함');
+      return this.peers.send(k.slice(0, slash), k.slice(slash + 1), body.slice(0, 20000), this.nameOf(me));
+    }
+    const { me, target } = this.crossTask(mainId, key);
+    if (target === me) throw new Error('자기 작업에는 보낼 수 없음');
     const busy = target.info.status === 'working' || target.info.status === 'starting';
     await this.handle({ type: 'user.message', sessionId: target.info.id, text: body.slice(0, 20000) }, { via: 'local', user: `작업 ${this.nameOf(me)}` });
     return `${this.nameOf(target)} 에 보냄${busy ? '(일하는 중이라 지금 차례가 끝나면 이어서 받음)' : ''}`;
