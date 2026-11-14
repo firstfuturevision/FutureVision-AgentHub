@@ -788,6 +788,7 @@ export class SessionManager {
       return {
         name: this.nameOf(l),
         id: l.info.id,
+        rank: l.info.rank ?? (l.info.splitFrom || l.info.forkedFrom ? 1 : -1) * Date.parse(l.info.createdAt), // 화면 목록과 같은 순서(끌어 옮긴 자리, 없으면 맨 위는 최근 것부터)
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',

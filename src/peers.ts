@@ -16,7 +16,7 @@ const ANNOUNCE_MS = 30_000;
 const FORGET_MS = 120_000; // 이만큼 안 들리면 찾은 목록에서 뺀다(손으로 더한 것은 남음)
 const TIMEOUT_MS = 3000;
 
-export interface PeerTask { name: string; id: string; status: string; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
+export interface PeerTask { name: string; id: string; status: string; rank?: number; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
 export interface PeerSummary { name: string; url?: string; version?: string; tasks: PeerTask[] }
 export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary; intake?: { model: string } | null; memory?: { items: number; guide: boolean } | null }
 
@@ -132,7 +132,7 @@ export class Peers {
       const s = (await r.json()) as PeerSummary;
       const tasks = (Array.isArray(s.tasks) ? s.tasks : []).slice(0, 300).map((t) => ({
         name: String(t.name ?? '').slice(0, 120), id: String(t.id ?? '').slice(0, 40), status: String(t.status ?? '').slice(0, 20),
-        ...(t.about ? { about: String(t.about).slice(0, 500) } : {}), ...(t.recent ? { recent: String(t.recent).slice(0, 120) } : {}),
+        ...(Number.isFinite(Number(t.rank)) ? { rank: Number(t.rank) } : {}), ...(t.about ? { about: String(t.about).slice(0, 500) } : {}), ...(t.recent ? { recent: String(t.recent).slice(0, 120) } : {}),
         ...(t.splitFrom ? { splitFrom: String(t.splitFrom).slice(0, 120) } : {}), ...(t.forkedFrom ? { forkedFrom: String(t.forkedFrom).slice(0, 120) } : {}),
         schedules: Number(t.schedules) || 0,
       }));

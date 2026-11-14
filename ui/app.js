@@ -475,13 +475,14 @@ function renderTaskLinks(force) {
   const top = el('div', 'link-foot');
   top.append(everyone);
   box.append(top);
-  pcGroups(box, peerState?.me ?? '이 PC', groups.map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).map(node), sendLocal);
+  const rootRank = (g) => Math.min(...g.filter((s) => !g.includes(sessions.get(parentOfTask(s) ?? ''))).map(rankOf));
+  pcGroups(box, peerState?.me ?? '이 PC', groups.sort((a, b) => rootRank(a) - rootRank(b)).map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).sort(byRank).map(node), sendLocal);
   // 다른 PC: 그 PC 가 알려 준 작업 목록의 분담·포크(원본 이름)로
   for (const p of peerState?.peers ?? []) {
     if (!p.ok) continue;
     const tasks = p.summary.tasks;
     const byName = new Map(tasks.map((t) => [t.name, t.id]));
-    const nodes = tasks.map((t) => ({ id: t.id, name: t.name, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
+    const nodes = tasks.map((t, i) => ({ id: t.id, name: t.name, rank: t.rank ?? i, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
     const up = new Map(nodes.map((n) => [n.id, n.id]));
     const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
     for (const n of nodes) if (n.parent && up.has(n.parent)) up.set(find(n.id), find(n.parent));
@@ -506,6 +507,9 @@ function sendFoot(pc, nodes, sendTo, label = '묶음 전체에 보내기') {
   return foot;
 }
 
+/** 연결 탭 나무 순서: 왼쪽 작업 목록과 같게(이 PC 는 끌어 옮긴 자리, 다른 PC 는 그 PC 가 알려 준 자리) */
+const byNode = (a, b) => (a.s && b.s ? byRank(a.s, b.s) : (a.rank ?? 0) - (b.rank ?? 0));
+
 /** PC 하나의 작업 묶음: 묶음마다 분담·포크 나무, 그리고 따로 있는 작업 */
 function pcGroups(box, pc, groups, singles, sendTo) {
   box.append(el('div', 'link-pc', pc));
@@ -522,12 +526,11 @@ function pcGroups(box, pc, groups, singles, sendTo) {
       b.onclick = n.open;
       row.append(b);
       if (n.about) row.title = n.about;
-      if (depth) row.append(el('span', 'link-kind', n.kind));
       if (n.busy) row.append(el('span', 'link-kind', '작업 중'));
       t.append(row);
-      for (const k of g.filter((x) => x.parent === n.id)) add(k, depth + 1);
+      for (const k of g.filter((x) => x.parent === n.id).sort(byNode)) add(k, depth + 1);
     };
-    for (const r of g.filter((n) => !ids.has(n.parent ?? ''))) add(r, 0);
+    for (const r of g.filter((n) => !ids.has(n.parent ?? '')).sort(byNode)) add(r, 0);
     return t;
   };
   for (const g of groups) {
