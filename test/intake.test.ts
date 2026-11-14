@@ -57,6 +57,13 @@ test('입력 거치기: 사람 지시는 입력 세션이 먼저 받고, 정리�
     assert.match(fwd.text, /\[사람 원문\]\n위시켓 공고 지원해 줘/);
     await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === task); // 이번엔 작업 AI 가 받아 일함
     await assert.rejects(sessions.intakeForwardByMain(intakeId, req2.request, 'x'), /없는 요청/); // 한 번만
+    // 바깥 시스템(대시보드 커뮤니케이션 @에이전트)·다른 PC 작업이 보낸 글은 입력 세션을 거치지 않고 바로, 다른 PC 에서 사람이 보낸 글은 거친다
+    const n0 = events.filter((e) => e.type === 'session.intake').length;
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '[대시보드 커뮤니케이션 · #테스트 · 보낸 사람: 김범무(admin) · 대표] 태스크 추가해 줘', via: { app: '대시보드', label: '커뮤니케이션 #테스트' } }, local);
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '다른 PC 작업이 보냄', via: { app: 'Agent Hub shlee', label: '작업 해양VR' } }, local);
+    assert.equal(events.filter((e) => e.type === 'session.intake').length, n0);
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '다른 PC 사람이 보냄', via: { app: 'Agent Hub shlee', label: '사람' } }, local);
+    assert.equal(events.filter((e) => e.type === 'session.intake').length, n0 + 1);
     // / 명령은 그대로 작업으로
     const before = events.filter((e) => e.type === 'session.intake').length;
     await sessions.handle({ type: 'user.message', sessionId: task, text: '/compact' }, local);

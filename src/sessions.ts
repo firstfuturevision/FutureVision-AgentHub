@@ -994,7 +994,7 @@ export class SessionManager {
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
         this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
         // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)
-        if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && !cmd.via?.label.startsWith('작업 ') && !cmd.text.trimStart().startsWith('/')) {
+        if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && viaThroughIntake(cmd.via) && !cmd.text.trimStart().startsWith('/')) {
           if (await this.toIntake(live, cmd.text, atts)) return;
         }
         // 첨부: 모든 파일은 작업 폴더 경로로 알려 주고(에이전트가 열어 봄), 이미지는 이미지째 함께 보낸다
@@ -1949,6 +1949,14 @@ export class SessionManager {
 /** 지시 앞에 붙는 역할 한 줄(화면·기록에는 남지 않는다) */
 export function aboutNote(about?: string): string {
   return `[이 작업 역할: ${about ? about.replace(/\s+/g, ' ') : '비어 있음'}]`;
+}
+
+/**
+ * 원격 접속으로 온 글이 입력 세션을 거치나: 바깥 시스템(대시보드 커뮤니케이션 @에이전트·프로젝트 업무 대화 등)은 자기 머리줄·규칙을 붙여 보내니 바로 간다.
+ * 다른 PC Agent Hub 에서 사람이 보낸 글("Agent Hub <PC> · 사람")만 거친다. via 가 없으면(이 PC 화면) 거친다
+ */
+export function viaThroughIntake(via?: { app: string; label: string }): boolean {
+  return !via || (via.app.startsWith('Agent Hub ') && via.label === '사람');
 }
 
 /** 사람이 쓴 지시인가(다른 작업·예약·입력 세션이 보낸 것은 아님) */
