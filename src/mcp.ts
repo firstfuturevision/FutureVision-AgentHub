@@ -165,6 +165,18 @@ export const TASK_TOOLS = [
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
   },
   {
+    name: 'intake_forward',
+    title: '정리한 지시 넘기기(입력 세션만)',
+    description: '입력 세션 전용: [입력 요청] 을 정리한 지시를 그 작업에 넘긴다. 작업은 정리본과 사람 원문을 함께 받는다. 역할이 더 맞는 다른 작업이 있으면 session 에 그 이름.',
+    inputSchema: { type: 'object', properties: { request: { type: 'string', description: '입력 요청 번호(r…)' }, instruction: { type: 'string', description: '정리한 지시: 목표, 범위, 할 일, 끝나는 조건, 지킬 규칙(짧게)' }, session: { type: 'string', description: '다른 작업으로 보낼 때만: 그 이름(session_list 의 name)' } }, required: ['request', 'instruction'], additionalProperties: false },
+  },
+  {
+    name: 'intake_ask',
+    title: '사람에게 묻기(입력 세션만)',
+    description: '입력 세션 전용: 확인이 필요할 때 그 작업 화면에 묻는다(되돌리기 어려움·돈·바깥 공개·앞 지시와 어긋남·뜻이 둘 이상일 때만). 사람이 그 작업에 답하면 새 입력 요청으로 다시 온다.',
+    inputSchema: { type: 'object', properties: { request: { type: 'string' }, question: { type: 'string', description: '짧은 물음. 고를 것이 있으면 추천과 함께' } }, required: ['request', 'question'], additionalProperties: false },
+  },
+  {
     name: 'session_split',
     title: '분담 만들기',
     description: '작업을 분담해 이름을 붙인 새 작업을 만든다. 분담은 앞 대화를 이어받고, 원본과 서로 한 일(사람 지시와 마지막 보고)을 주고받는다. from 이 없으면 이 작업을 분담한다. 만든 뒤 첫 지시는 session_send 로.',
@@ -298,6 +310,18 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
             return text(sessions.memoryByMain(mainId, msg.params.name === 'memory_save' ? 'save' : msg.params.name === 'memory_list' ? 'list' : 'delete', a));
           } catch (err) {
             return text(`안 됨: ${(err as Error).message}`, true);
+          }
+        case 'intake_forward':
+          try {
+            return text(await sessions.intakeForwardByMain(mainId, a.request, a.instruction, a.session));
+          } catch (err) {
+            return text(`안 넘김: ${(err as Error).message}`, true);
+          }
+        case 'intake_ask':
+          try {
+            return text(sessions.intakeAskByMain(mainId, a.request, a.question));
+          } catch (err) {
+            return text(`안 물음: ${(err as Error).message}`, true);
           }
         case 'session_about':
           try {

@@ -566,3 +566,8 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .mem-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); }
 .mem-text { flex: 1; min-width: 0; font-size: 13.5px; }
 .mem-by { font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+.intake-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.intake-name { font-size: 13px; }
+.intake-ask { border-left: 2px solid var(--accent); padding-left: 10px; }
+.intake-label { font-size: 12px; color: var(--ink-faint); margin-bottom: 4px; }
+.intake-model { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 6px; }

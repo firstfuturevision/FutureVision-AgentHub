@@ -138,7 +138,7 @@ test('parseCommand: 포크 차례·복사', () => {
   assert.deepEqual(parseCommand({ type: 'session.split', sessionId: 'a', upTo: 1 }), { type: 'session.split', sessionId: 'a', upTo: 1 });
 });
 
-test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 되돌려 보내지 않는다', async () => {
+test('분담: 분담이 한 일은 원본에게만 가고, 원본이 한 일은 분담에게 가지 않는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획 세우기');
@@ -154,21 +154,18 @@ test('분담: 원본과 분담이 서로 한 일을 주고받고, 받은 것을 
   assert.equal(toOrig[0].kind, 'split');
   assert.match(toOrig[0].text, /사람\(local\): A 부분/);
 
-  // 원본 → 분담: 원본의 다음 지시에 분담 쪽 진행이 붙고, 원본의 답은 분담으로 간다
+  // 원본의 다음 지시에 분담 쪽 진행이 붙는다. 원본의 일은 분담에게 가지 않는다(아래로는 보내지 않음)
   const r2 = await say(sessions, events, orig.id, 'B 부분');
   assert.match(r2.text, /\[분담 공유: A 부분/);
-  const toPart = events.filter((e) => e.type === 'session.merged' && e.sessionId === part.id) as any[];
-  assert.equal(toPart.length, 1);
-  assert.match(toPart[0].text, /사람\(local\): B 부분/);
-  assert.doesNotMatch(toPart[0].text, /\[분담 공유: A 부분\]/); // 분담에게서 받은 기록은 되돌려 보내지 않는다
-  assert.match(toPart[0].text, /^사람\(local\): B 부분/); // 이미 이어받은 앞 대화는 빼고 그 뒤부터(가짜 AI 는 받은 글을 따라 말하므로 첫 줄로 본다)
+  assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === part.id).length, 0);
 
   const r3 = await say(sessions, events, part.id, 'C 부분');
-  assert.match(r3.text, /\[분담 공유: 계획 세우기/); // 원본이 그사이 한 일이 분담의 다음 지시에 붙었다
+  assert.doesNotMatch(r3.text, /분담 공유/);
+  assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === orig.id).length, 2); // C 부분만 새로
   sessions.stopAll();
 });
 
-test('분담 여럿: 한 분담이 한 일은 메인을 거쳐 바로 다른 분담에게도 가고, 나중에 겹쳐 가지 않는다', async () => {
+test('분담 여럿: 한 분담이 한 일은 원본에게만, 옆 분담에게는 가지 않는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획 세우기');
@@ -180,22 +177,16 @@ test('분담 여럿: 한 분담이 한 일은 메인을 거쳐 바로 다른 분
   await waitFor(events, () => sessions.info(b.id)?.status === 'idle');
 
   await say(sessions, events, a.id, '가 부분');
-  // 메인이 다시 답하지 않아도 b 에게 a 의 진행이 간다(메인을 거쳐)
-  const toB = () => events.filter((e) => e.type === 'session.merged' && e.sessionId === b.id) as any[];
-  assert.equal(toB().length, 1);
-  assert.equal(toB()[0].fromId, orig.id);
-  assert.match(toB()[0].text, /사람\(local\): 가 부분/);
-  // a 에게는 되돌아가지 않는다
-  assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === a.id).length, 0);
-
-  // 메인이 답하면 b 에게는 메인의 새 대화만(가 부분은 다시 안 감)
+  const to = (id: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === id) as any[];
+  assert.equal(to(orig.id).length, 1);
+  assert.equal(to(b.id).length, 0);
   await say(sessions, events, orig.id, '나 부분');
-  assert.equal(toB().length, 2);
-  assert.match(toB()[1].text, /^사람\(local\): 나 부분/); // 가 부분은 이미 갔으니 그 뒤부터(가짜 AI 는 받은 글을 따라 말하므로 첫 줄로 본다)
+  assert.equal(to(a.id).length, 0);
+  assert.equal(to(b.id).length, 0);
   sessions.stopAll();
 });
 
-test('분담의 분담: 분담 2 가 한 일이 분담을 거쳐 바로 원래 작업까지 가고, 원래 작업의 일도 분담 2 까지 간다', async () => {
+test('분담의 분담: 분담 2 가 한 일은 분담을 거쳐 원래 작업까지 위로 가고, 위의 일은 아래로 가지 않는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획 세우기');
@@ -205,7 +196,7 @@ test('분담의 분담: 분담 2 가 한 일이 분담을 거쳐 바로 원래 �
   await sessions.handle({ type: 'session.split', sessionId: mid.id }, local);
   const leaf = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === mid.id)).session;
   await waitFor(events, () => sessions.info(leaf.id)?.status === 'idle');
-  const merged = (to: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === to) as any[];
+  const merged = (id: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === id) as any[];
 
   // 분담 2 → 분담 → 원래 작업: 분담이 다시 답하지 않아도 바로
   await say(sessions, events, leaf.id, '세부 조사');
@@ -213,16 +204,15 @@ test('분담의 분담: 분담 2 가 한 일이 분담을 거쳐 바로 원래 �
   assert.equal(merged(orig.id).length, 1);
   assert.equal(merged(orig.id)[0].fromId, mid.id);
   assert.match(merged(orig.id)[0].text, /사람\(local\): 세부 조사/);
-  assert.equal(merged(leaf.id).length, 0); // 되돌아가지 않는다
+  assert.equal(merged(leaf.id).length, 0);
 
-  // 원래 작업 → 분담 → 분담 2: 원래 작업의 새 대화만, 분담 2 가 보낸 것은 빼고
+  // 원래 작업의 일은 아래로 가지 않는다. 분담이 한 일은 위로만(받은 공유는 다시 안 감)
   await say(sessions, events, orig.id, '방향 바꿈');
-  assert.equal(merged(leaf.id).length, 1);
-  // 원래 작업의 새 대화부터 시작한다(세부 조사는 이미 가 있다). 가짜 AI 는 받은 글을 따라 말하므로 첫 줄로 본다
-  // 분담이 넘겨주는 것이라 원래 작업에서 받은 공유 묶음으로 간다
-  assert.match(merged(leaf.id)[0].text, /^\[분담 공유: 계획 세우기\]\n사람\(local\): 방향 바꿈/);
-  assert.equal(merged(mid.id).length, 2);
-  assert.match(merged(mid.id)[1].text, /^사람\(local\): 방향 바꿈/);
+  assert.equal(merged(mid.id).length, 1);
+  assert.equal(merged(leaf.id).length, 0);
+  await say(sessions, events, mid.id, '중간 정리');
+  assert.equal(merged(orig.id).length, 2);
+  assert.match(merged(orig.id)[1].text, /^사람\(local\): 중간 정리/);
   sessions.stopAll();
 });
 

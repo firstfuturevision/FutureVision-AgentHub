@@ -66,6 +66,16 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         if (!text || !Array.isArray(body?.ids)) return send(res, 400, '보낼 글과 작업이 필요함');
         try { return json(res, 200, { sent: await peers.sendIds(String(body.url ?? ''), body.ids.map(String).slice(0, 300), text) }); } catch (err) { return send(res, 400, (err as Error).message); }
       }
+      // 설정 → 기억 → 입력 세션: 모델
+      if (url.pathname === '/intake' && sessions.intake) {
+        if (req.method === 'GET') return json(res, 200, sessions.intake.public());
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try { await sessions.setIntakeModel(body?.model); } catch (err) { return send(res, 400, (err as Error).message); }
+          return json(res, 200, sessions.intake.public());
+        }
+      }
       // 설정 → 기억: 취향·고쳐 준 것(모든 작업이 받는다), 공통 지침
       if (url.pathname === '/memory' && memory) {
         if (req.method === 'GET') return json(res, 200, memory.public());

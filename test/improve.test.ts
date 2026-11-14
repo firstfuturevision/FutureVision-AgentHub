@@ -154,33 +154,34 @@ test('새 코드 있음: 켠 뒤 src 가 바뀌면 알고, 끝나면 다시 켜�
   assert.equal(restarted, 1);
 });
 
-test('분담 공유: 가운데 작업이 받은 공유를 자기 차례 끝에 다시 넘기지 않는다(같은 내용은 한 번만)', async () => {
+test('분담 공유: 위로만 — 아래 분담의 일은 가운데를 거쳐 맨 위까지 한 번씩, 옆·아래로는 안 감', async () => {
   const { sessions, events, create } = world();
-  const a = await create();
-  await sessions.handle({ type: 'session.rename', sessionId: a, title: '가운데' }, local);
-  await sessions.handle({ type: 'user.message', sessionId: a, text: '시작' }, local);
-  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === a);
-  await sessions.taskSplitByMain(a, '왼쪽');
-  await sessions.taskSplitByMain(a, '오른쪽');
+  const top = await create();
+  await sessions.handle({ type: 'session.rename', sessionId: top, title: '맨 위' }, local);
+  await sessions.handle({ type: 'user.message', sessionId: top, text: '시작' }, local);
+  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === top);
+  await sessions.taskSplitByMain(top, '가운데');
+  await sessions.taskSplitByMain(top, '옆');
   const id = (name: string) => sessions.list().find((s) => s.customTitle === name)!.id;
-  const [b, c] = [id('왼쪽'), id('오른쪽')];
+  const [mid, side] = [id('가운데'), id('옆')];
+  await sessions.taskSplitByMain(mid, '아래');
+  const low = id('아래');
 
-  // 왼쪽이 일하면 가운데(자기 일)와 오른쪽(넘겨받은 공유)이 한 번씩 받는다
-  await sessions.handle({ type: 'user.message', sessionId: b, text: '왼쪽 일 ZZ' }, local);
-  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === b);
-  const got = (to: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === to && e.text.includes('사람(local): 왼쪽 일 ZZ'));
-  assert.equal(got(a).length, 1);
-  assert.equal(got(c).length, 1);
-  assert.equal((got(c)[0] as any).relay, true);
+  // 아래가 일하면 가운데(자기 일)와 맨 위(넘겨받은 공유)가 한 번씩 받고, 옆은 받지 않는다
+  await sessions.handle({ type: 'user.message', sessionId: low, text: '아래 일 ZZ' }, local);
+  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === low);
+  const got = (to: string) => events.filter((e) => e.type === 'session.merged' && e.sessionId === to && e.text.includes('사람(local): 아래 일 ZZ'));
+  assert.equal(got(mid).length, 1);
+  assert.equal(got(top).length, 1);
+  assert.equal((got(top)[0] as any).relay, true);
+  assert.equal(got(side).length, 0);
 
-  // 가운데가 자기 일을 하면 오른쪽은 가운데 일만 받고, 왼쪽이 받은 지시는 다시 받지 않는다(가짜 CLI 는 받은 글을 그대로 되돌려 답하므로 사람 지시 줄로 센다)
-  await sessions.handle({ type: 'user.message', sessionId: a, text: '가운데 일 YY' }, local);
-  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === a && events.some((x) => x.type === 'session.merged' && x.sessionId === c && x.text.includes('가운데 일 YY')));
-  // 가운데 → 오른쪽 공유 가운데 "넘겨받은 공유" 꼴(`[분담 공유: 왼쪽]` 머리)로 왼쪽 일이 다시 간 것은 처음 한 번뿐
-  const relayed = events.filter((e) => e.type === 'session.merged' && e.sessionId === c && e.fromId === a && /^\[분담 공유: 왼쪽\]$/m.test(e.text));
+  // 가운데가 자기 일을 하면 맨 위는 가운데 일만 받는다(아래 일은 이미 갔으니 넘겨받은 공유 꼴로 다시 가지 않음). 아래로는 안 감
+  await sessions.handle({ type: 'user.message', sessionId: mid, text: '가운데 일 YY' }, local);
+  await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === mid && events.some((x) => x.type === 'session.merged' && x.sessionId === top && x.text.includes('가운데 일 YY')));
+  const relayed = events.filter((e) => e.type === 'session.merged' && e.sessionId === top && /^\[분담 공유: 아래\]$/m.test(e.text));
   assert.equal(relayed.length, 1);
-  assert.equal((relayed[0] as any).relay, true);
-  assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === b && /^\[분담 공유: 왼쪽\]$/m.test(e.text)).length, 0); // 보낸 쪽으로 되돌아가지 않음
+  assert.equal(events.filter((e) => e.type === 'session.merged' && (e.sessionId === low || e.sessionId === side)).length, 0);
   sessions.stopAll();
 });
 

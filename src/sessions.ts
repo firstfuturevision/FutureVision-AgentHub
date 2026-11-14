@@ -17,6 +17,7 @@ import { ClaudeHistory, claudeHome, claudeTranscript } from './external.ts';
 import type { ScreenControl } from './screen.ts';
 import type { Peers, PeerSummary } from './peers.ts';
 import type { MemoryStore } from './memory.ts';
+import { forwardedText, intakePrompt, type IntakeStore } from './intake.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -165,6 +166,7 @@ export class SessionManager {
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
   private aboutLine = false;
+  intake?: IntakeStore; // 입력 세션(이 PC 에 하나) — 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다
   memory?: MemoryStore; // 설정 → 기억(취향·고쳐 준 것, 공통 지침) — 모든 메인 작업이 받는다
   peers?: Peers; // 다른 PC 의 Agent Hub(왼쪽 "연결") — 작업 목록·보내기가 PC 를 넘는다
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
@@ -288,6 +290,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.intakeSet') { if (e.on) info.viaIntake = true; else delete info.viaIntake; }
         if (e.type === 'session.archived') { if (e.archived) info.archived = true; else delete info.archived; }
         if (e.type === 'session.about') { if (e.about) info.about = e.about; else delete info.about; }
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
@@ -608,6 +611,77 @@ export class SessionManager {
     return live.info.customTitle ?? (first && first.type === 'user.message' ? first.text.replace(/\s+/g, ' ').slice(0, 40) : '새 작업');
   }
 
+  // ── 입력 세션 ──────────────────────────────
+  /** 입력 세션(없거나 지워졌으면 만든다) */
+  private async ensureIntake(): Promise<Live | undefined> {
+    if (!this.intake) return undefined;
+    const have = this.intake.sessionId ? this.sessions.get(this.intake.sessionId) : undefined;
+    if (have && !have.info.archived) return have;
+    const before = new Set(this.sessions.keys());
+    await this.handle({ type: 'session.create', agent: 'claude', role: 'main', model: this.intake.model, title: '입력' }, { via: 'local', user: 'local' });
+    const made = [...this.sessions.values()].find((l) => !before.has(l.info.id) && l.info.role === 'main');
+    if (!made) return undefined;
+    this.rename(made, '입력');
+    this.setAbout(made, '입력 세션: "입력 거치기"를 켠 작업에 사람이 쓴 지시를 먼저 받아, 역할에 맞는지·앞 지시와 어긋나는지·사내 문서를 보고 정리해 그 작업(또는 맞는 작업)에 넘기거나 사람에게 묻는다. 직접 일은 하지 않는다. 다른 작업은 이 작업에 일을 보내지 않는다.');
+    this.intake.setSession(made.info.id);
+    return made;
+  }
+
+  /** 사람 지시를 입력 세션으로. 입력 세션을 못 쓰면 false(그 작업이 그대로 받는다) */
+  private async toIntake(live: Live, text: string, atts: { path: string; name: string; mime: string; size: number }[]): Promise<boolean> {
+    const intake = await this.ensureIntake();
+    if (!intake || !this.intake) return false;
+    const answerTo = this.intake.askingIn(live.info.id);
+    if (answerTo) this.intake.pending.delete(answerTo.id);
+    const req = this.intake.add({ taskId: live.info.id, original: answerTo ? `${answerTo.original}\n\n(물음 "${answerTo.question}" 에 대한 답) ${text}` : text, ...(atts.length ? { attachments: atts } : {}) });
+    const lastReport = [...live.history].reverse().find((e) => e.type === 'agent.text' && !e.partial) as { text: string } | undefined;
+    const prompt = intakePrompt(req, { name: this.nameOf(live), about: live.info.about, recent: this.recentOf(live), lastReport: lastReport?.text.replace(/\s+/g, ' ').slice(0, 300) }, answerTo);
+    this.publish({ type: 'session.intake', sessionId: live.info.id, state: 'pending', request: req.id });
+    await this.handle({ type: 'user.message', sessionId: intake.info.id, text: prompt }, { via: 'local', user: '입력 요청' });
+    return true;
+  }
+
+  private intakeReq(mainId: string, request: unknown) {
+    if (!this.intake || mainId !== this.intake.sessionId) throw new Error('입력 세션만 쓸 수 있음');
+    const req = this.intake.pending.get(String(request ?? ''));
+    if (!req) throw new Error(`없는 요청: ${request} (이미 넘겼거나 Agent Hub 를 다시 켜서 사라짐)`);
+    return req;
+  }
+
+  /** 입력 세션 도구: 정리한 지시를 작업에 넘긴다(session 을 주면 그 작업으로 — 역할에 더 맞는 작업) */
+  async intakeForwardByMain(mainId: string, request: unknown, instruction: unknown, key?: unknown): Promise<string> {
+    const req = this.intakeReq(mainId, request);
+    const body = String(instruction ?? '').trim();
+    if (!body) throw new Error('정리한 지시가 비어 있음');
+    const origin = this.sessions.get(req.taskId);
+    const target = key ? this.findTask(String(key)) : origin;
+    if (!target) throw new Error('그 작업이 지워짐');
+    if (target.info.id === this.intake!.sessionId) throw new Error('입력 세션에는 넘길 수 없음');
+    this.intake!.pending.delete(req.id);
+    if (origin && origin !== target) this.publish({ type: 'session.intake', sessionId: origin.info.id, state: 'routed', text: `${this.nameOf(target)} 작업이 더 맞아 그쪽으로 보냄`, request: req.id });
+    this.publish({ type: 'session.intake', sessionId: target.info.id, state: 'forwarded', text: body, request: req.id });
+    await this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}) }, { via: 'local', user: '입력' });
+    return `${this.nameOf(target)} 에 넘김`;
+  }
+
+  /** 입력 세션 도구: 그 작업 화면에 사람에게 묻는다. 사람의 답은 다시 입력 세션으로 온다 */
+  intakeAskByMain(mainId: string, request: unknown, question: unknown): string {
+    const req = this.intakeReq(mainId, request);
+    const q = String(question ?? '').trim().slice(0, 2000);
+    if (!q) throw new Error('물을 것이 비어 있음');
+    req.question = q;
+    this.publish({ type: 'session.intake', sessionId: req.taskId, state: 'asked', text: q, request: req.id });
+    return '물음을 그 작업 화면에 띄움. 사람이 답하면 새 입력 요청으로 온다';
+  }
+
+  /** 설정 → 입력 세션 모델 바꾸기(있으면 그 세션도) */
+  async setIntakeModel(model: unknown) {
+    if (!this.intake) return;
+    this.intake.setModel(model);
+    const live = this.intake.sessionId ? this.sessions.get(this.intake.sessionId) : undefined;
+    if (live && live.info.model !== this.intake.model) await this.handle({ type: 'session.configure', sessionId: live.info.id, model: this.intake.model }, { via: 'local', user: 'local' });
+  }
+
   /** 분담·포크로 갈라진 아래 작업 전부 */
   private descendants(live: Live): Live[] {
     const out: Live[] = [];
@@ -907,6 +981,10 @@ export class SessionManager {
         }
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
         this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
+        // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)
+        if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && !cmd.text.trimStart().startsWith('/')) {
+          if (await this.toIntake(live, cmd.text, atts)) return;
+        }
         // 첨부: 모든 파일은 작업 폴더 경로로 알려 주고(에이전트가 열어 봄), 이미지는 이미지째 함께 보낸다
         let text = cmd.text;
         if (atts.length) {
@@ -949,6 +1027,15 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         this.rename(live, cmd.title);
+        return;
+      }
+      case 'session.setIntake': {
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main' || live.info.id === this.intake?.sessionId) return;
+        if (Boolean(live.info.viaIntake) === cmd.on) return;
+        if (cmd.on) live.info.viaIntake = true;
+        else delete live.info.viaIntake;
+        this.publish({ type: 'session.intakeSet', sessionId: live.info.id, on: cmd.on });
         return;
       }
       case 'session.archive': {
@@ -1668,30 +1755,24 @@ export class SessionManager {
     if (live.info.role === 'worker') return;
     const fork = live.info.forkedFrom ? this.sessions.get(live.info.forkedFrom) : undefined;
     if (fork) this.shareTo(live, fork, 'fork', 'all');
-    // 분담은 원본 · 분담 · 분담의 분담이 한 묶음(나무)이다. 끝난 쪽에서 이웃으로 보내고, 받은 쪽이 다시 자기 다른 이웃에게 넘긴다 —
-    // 중간 분담이 다시 답할 때까지 기다리지 않는다(분담 2 가 한 일이 바로 원래 작업까지). 넘길 때마다 보낸 표시가 앞으로 가서 나중에 겹쳐 가지 않는다
+    // 분담 공유는 위로만: 분담이 한 일은 자기 원본에게, 원본도 분담이면 그 원본에게 이어 넘긴다(맨 위 작업이 전체를 본다).
+    // 아래·옆(원본 → 분담, 분담 ↔ 분담)으로는 보내지 않는다 — 받는 작업 지시 앞에 남의 일이 줄줄이 붙지 않게. 아래로 알릴 것은 session_send 로
+    let from = live;
+    let what: 'own' | 'relay' = 'own';
     const seen = new Set([live.info.id]);
-    // 첫 이웃에게는 자기가 한 일만, 그다음부터는 방금 받은 공유만 넘긴다. 받은 공유는 받을 때 이미 묶음 전체로 넘겼으므로
-    // 자기 차례가 끝날 때 다시 넘기지 않는다(같은 내용이 가운데 작업을 거쳐 두 번 가지 않게)
-    const relay = (from: Live, what: 'own' | 'relay') => {
-      for (const to of this.splitNeighbors(from)) {
-        if (seen.has(to.info.id)) continue;
-        seen.add(to.info.id);
-        this.shareTo(from, to, 'split', what);
-        relay(to, 'relay');
-      }
-    };
-    relay(live, 'own');
+    for (let to = this.splitOrigin(from); to && !seen.has(to.info.id); to = this.splitOrigin(from)) {
+      seen.add(to.info.id);
+      this.shareTo(from, to, 'split', what);
+      from = to;
+      what = 'relay';
+    }
   }
 
-  /** 분담으로 바로 이어진 작업들: 분담해 온 원본 + 여기서 분담해 간 것들 */
-  private splitNeighbors(live: Live): Live[] {
-    const out: Live[] = [];
-    const origin = live.info.splitFrom ? this.sessions.get(live.info.splitFrom) : undefined;
-    if (origin) out.push(origin);
-    for (const s of this.sessions.values()) if (s.info.splitFrom === live.info.id) out.push(s);
-    return out;
+  /** 분담해 온 원본(없으면 undefined) */
+  private splitOrigin(live: Live): Live | undefined {
+    return live.info.splitFrom ? this.sessions.get(live.info.splitFrom) : undefined;
   }
+
 
   /**
    * from 이 지난번에 target 에게 보낸 뒤로 한 일을 target 기록에 남기고, 진행 중이면 다음 지시에 붙인다.
@@ -1832,4 +1913,9 @@ export class SessionManager {
 /** 지시 앞에 붙는 역할 한 줄(화면·기록에는 남지 않는다) */
 export function aboutNote(about?: string): string {
   return `[이 작업 역할: ${about ? about.replace(/\s+/g, ' ') : '비어 있음'}]`;
+}
+
+/** 사람이 쓴 지시인가(다른 작업·예약·입력 세션이 보낸 것은 아님) */
+export function isHumanOrigin(user: string): boolean {
+  return !(user.startsWith('작업 ') || user === '예약' || user === '입력' || user === '입력 요청');
 }

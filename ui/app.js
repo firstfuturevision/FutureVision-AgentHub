@@ -310,6 +310,7 @@ function showNav(nav) {
     loadSkills();
     loadWorkPresets();
     loadMemory();
+    loadIntake();
   }
   closeSide();
   renderPanel();
@@ -1343,6 +1344,24 @@ function fillWorkPresetSelect() {
 let toolList = [];
 const tform = $('tool-form');
 
+// ── 입력 세션: 이 PC 에 하나(id·모델) ──
+let intakeState = null;
+async function loadIntake() {
+  intakeState = await getJson('/intake', intakeState);
+  const sel = $('intake-model');
+  if (sel && intakeState) {
+    sel.replaceChildren(...models.claude.map((m) => new Option(m.name, m.id)));
+    if (![...sel.options].some((o) => o.value === intakeState.model)) sel.append(new Option(intakeState.model, intakeState.model));
+    sel.value = intakeState.model;
+  }
+}
+$('intake-model').onchange = async () => {
+  const r = await fetch('/intake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: $('intake-model').value }) });
+  if (!r.ok) return flash(await r.text(), true);
+  intakeState = await r.json();
+  flash('입력 세션 모델을 바꿨어요');
+};
+
 // ── 설정 → 기억: 취향·고쳐 준 것(모든 작업이 받는다), 공통 지침 ──
 let memState = null;
 async function loadMemory() {
@@ -1664,7 +1683,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
-  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
+  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); void loadIntake(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -1713,6 +1732,13 @@ function onEvent(ev) {
       break;
     case 'session.renamed': s.info.customTitle = ev.title; if (ev.aliases) s.info.aliases = ev.aliases; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
+    case 'session.intakeSet': if (ev.on) s.info.viaIntake = true; else delete s.info.viaIntake; break;
+    case 'session.intake':
+      // 입력 세션: 정리 중 · 물음(확인 필요로 보임) · 다른 작업으로 보냄. 넘긴 지시는 "입력"이 보낸 글로 따로 들어온다
+      if (ev.state === 'pending') s.items.push({ k: 'note', t: '입력 세션이 지시를 정리하는 중' });
+      else if (ev.state === 'asked') { s.items.push({ k: 'intake-ask', t: ev.text }); s.doneAt = at; if (replayed) notify(s, `입력 세션 물음 · ${ev.text.split('\n')[0]}`); }
+      else if (ev.state === 'routed') s.items.push({ k: 'note', t: `입력 세션: ${ev.text}` });
+      break;
     case 'session.archived': if (ev.archived) { s.info.archived = true; if (viewId === s.info.id && !$('chat').hidden && replayed) viewId = null; } else delete s.info.archived; renderArchiveCount(); break;
     case 'session.about': if (ev.about) s.info.about = ev.about; else delete s.info.about; break;
     case 'session.rewound': {
@@ -1848,9 +1874,9 @@ const lastAnswer = (s) => {
   for (let i = s.items.length - 1; i >= 0; i--) {
     const k = s.items[i].k;
     if (k === 'user') return null; // 사람이 그 뒤로 답했다
-    if (k === 'agent') { agent = i; break; }
+    if (k === 'agent' || k === 'intake-ask') { agent = i; break; }
   }
-  return agent < 0 ? null : s.items[agent].t;
+  return agent < 0 ? null : s.items[agent].k === 'intake-ask' ? `${s.items[agent].t}\n확인해 주세요?` : s.items[agent].t;
 };
 /** 확인할 것이 남았나. 끝난 답 기준(일하는 중이면 아님) */
 function askIn(s) {
@@ -2256,6 +2282,17 @@ function renderAbout(s) {
     ta.focus();
     return;
   }
+  if (intakeState && s.info.id !== intakeState.sessionId && s.info.role === 'main') {
+    const row = el('div', 'intake-row');
+    const sw = el('button', `switch${s.info.viaIntake ? ' on' : ''}`);
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch');
+    sw.setAttribute('aria-checked', String(Boolean(s.info.viaIntake)));
+    sw.setAttribute('aria-label', '입력 거치기');
+    sw.onclick = () => { s.info.viaIntake = !s.info.viaIntake; void send({ type: 'session.setIntake', sessionId: s.info.id, on: Boolean(s.info.viaIntake) }); renderPanel(); };
+    row.append(el('span', 'intake-name', '입력 거치기'), sw);
+    box.append(row, el('div', 'p-meta', '켜면 여기 쓴 지시를 입력 세션이 먼저 정리해(역할·앞 지시·사내 문서 확인) 넘기거나 물어요. / 명령은 그대로'));
+  } else if (intakeState && s.info.id === intakeState.sessionId) box.append(el('div', 'p-meta', '이 작업이 입력 세션이에요. 모델은 설정 → 기억에서 바꿔요'));
   box.append(s.info.about ? el('div', 'p-text', s.info.about) : el('div', 'p-empty', '무엇을 맡는 작업인지 적어 두면, 다른 작업이 일을 보낼 곳을 고를 때 씁니다. 작업에서 "이 작업 역할 정리해 줘"라고 해도 됩니다'));
   const acts = el('div', 'p-acts');
   const edit = el('button', 'p-mini', s.info.about ? '바꾸기' : '쓰기');
@@ -3063,6 +3100,7 @@ function renderItems(s, live, into, skip, from = 0) {
     else if (it.k === 'line err') into.append(el('div', 'err-line', it.t));
     else if (it.k === 'line halt') into.append(el('div', 'halt-line', it.t));
     else if (it.k === 'note') into.append(el('div', 'note', it.t));
+    else if (it.k === 'intake-ask') { const d = el('div', 'msg agent intake-ask'); d.append(el('div', 'intake-label', '입력 세션 물음 · 여기에 답하면 입력 세션이 받아요'), renderMarkdown(it.t)); into.append(d); }
     else if (it.k === 'image') into.append(imageItem(it));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
