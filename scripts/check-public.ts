@@ -1,5 +1,5 @@
 /**
- * 공개 레포에 올리기 전 검사: 올라갈 파일과 아직 안 올린 커밋 메시지에 키·토큰, 회사·고객 정보가 없는지 본다.
+ * 공개 레포에 올리기 전 검사: 올라갈 파일, 아직 안 올린 커밋이 더한 줄과 커밋 메시지에 키·토큰, 회사·고객 정보가 없는지 본다.
  *  - 키·토큰: 공유 레포 올리기와 같은 검사(findSecret)
  *  - 회사·고객 정보: data/public-deny.txt 에 한 줄에 하나씩 적은 말(대소문자 무시, # 은 주석). data/ 는 레포에 안 올라가므로
  *    회사 이름·고객 이름·사내 주소를 적어 두어도 바깥에 나가지 않는다.
@@ -58,6 +58,20 @@ if (upstream) {
   for (const block of git('log', '--format=%h%x00%B%x01', `${upstream}..HEAD`).split('\x01')) {
     const [hash, body] = block.trim().split('\0');
     if (hash) (body ?? '').split('\n').forEach((line) => check(`커밋 ${hash} 메시지`, line));
+  }
+  // 아직 안 올린 커밋 하나하나가 더한 줄: 마지막 파일만 보면 중간 커밋에 들어갔다가 지운 말이 기록째 올라간다
+  const seen = new Set(hits);
+  for (const hash of git('rev-list', `${upstream}..HEAD`).split('\n').filter(Boolean)) {
+    let file = '';
+    for (const line of git('show', '--format=', '--unified=0', '--no-color', hash).split('\n')) {
+      if (line.startsWith('+++ b/')) { file = line.slice(6); continue; }
+      if (!line.startsWith('+') || line.startsWith('+++') || file === 'LICENSE') continue;
+      const before = hits.length;
+      if (SECRET_FIXTURES.has(file)) { const low = line.toLowerCase(); for (const word of deny) if (low.includes(word)) hits.push(`커밋 ${hash.slice(0, 7)} ${file}: "${word}"`); }
+      else check(`커밋 ${hash.slice(0, 7)} ${file}`, line.slice(1));
+      // 같은 커밋·파일·말은 한 번만
+      for (const h of hits.splice(before)) if (!seen.has(h)) { seen.add(h); hits.push(h); }
+    }
   }
 }
 
