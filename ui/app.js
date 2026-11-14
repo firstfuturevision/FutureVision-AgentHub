@@ -417,7 +417,7 @@ function renderTaskLinks(force) {
   // 탭이 열려 있을 때만. 답이 조각조각 올 때 모든 기록을 매번 훑지 않게(누르려던 단추가 그사이 바뀌지 않게도) 2초에 한 번
   if ($('links-view').hidden || (!force && Date.now() - linksAt < 2000)) return;
   linksAt = Date.now();
-  const { groups, sends, remote } = taskLinks();
+  const { groups, remote } = taskLinks();
   const box = $('links-all');
   box.replaceChildren();
   renderPeers(box);
@@ -450,19 +450,6 @@ function renderTaskLinks(force) {
       for (const k of kids(s.info.id)) add(k, depth + 1);
     };
     for (const r of roots) add(r, 0);
-    // 주고받은 글이 먼저(최근 것부터), 그 아래 작업 나무
-    const mine = sends.filter((e) => ids.has(e.to.info.id)).sort((a, b) => b.at - a.at);
-    if (mine.length) {
-      card.append(el('div', 'link-sub', `주고받은 글 ${mine.reduce((n, e) => n + e.n, 0)}개`));
-      const log = el('div', 'link-sends');
-      for (const e of mine) {
-        const row = el('div', 'link-send');
-        row.append(el('span', 'link-arrow', `${e.from ? titleOf(e.from) : e.fromName} → ${titleOf(e.to)}`));
-        row.append(el('span', 'sched-meta', `${e.n}번${e.at ? ` · 마지막 ${when(e.at)}` : ''}`));
-        log.append(row, el('div', 'sched-prompt', e.t.replace(/\s+/g, ' ').slice(0, 160)));
-      }
-      card.append(log);
-    }
     card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree);
     // 묶음 전체에 알리기: 사람이 보낸 글로 묶음의 모든 작업에 들어간다
     const all = el('button', 'line-btn', '묶음 전체에 보내기');
