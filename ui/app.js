@@ -3011,17 +3011,20 @@ function moveTask(moved, index) {
  * 답이 실시간으로 올 때 목록·대화를 통째로 지우고 다시 만들면, 누르는 사이 요소가 바뀌어 클릭이 안 먹고
  * 마우스 올림·글 고르기가 풀려 깜빡인다. data-key(작업 id 등)가 다르면 다른 것이라 통째로 바꾼다(그 요소에 붙은 끌어 놓기 처리가 섞이지 않게).
  */
-const MORPH_PROPS = ['onclick', 'oncontextmenu', 'ondragstart', 'ondragend', 'ondragover', 'ondragleave', 'ondrop', 'ontoggle', 'onscroll', 'onmousedown', 'onkeydown', 'draggable', 'disabled', 'title'];
 function morph(a, b) {
   if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName || (a.nodeType === 1 && a.dataset.key !== b.dataset.key)) { a.replaceWith(b); return b; }
   if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return a; }
+  if (a.isEqualNode(b)) return a; // 그대로면 손대지 않는다(마우스 올림·누름·글 고르기가 유지된다)
+  // 이벤트 처리는 옮겨 붙이지 않는다 — 처리 안에서 자기 요소를 가리키므로, 바뀐 단추·링크·글 조각은 통째로 새것으로(새 처리가 새 요소를 가리키게)
+  if (LEAF.has(a.nodeName) || !b.firstElementChild) { a.replaceWith(b); return b; }
+  // 묶음(작업 묶음·대화 항목 등)은 속성만 맞추고 안으로 들어가 바뀐 것만
   for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
   for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
-  for (const p of MORPH_PROPS) if (a[p] !== b[p]) a[p] = b[p];
   if (a.nodeName === 'DETAILS' && a.open !== b.open) a.open = b.open;
   morphChildren(a, b);
   return a;
 }
+const LEAF = new Set(['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT', 'SUMMARY']);
 function morphChildren(a, b) {
   const ac = [...a.childNodes];
   const bc = [...b.childNodes];

@@ -140,6 +140,17 @@ async function handle(text) {
   }
 
   // 멈춤 시험: 멈출 때까지 기다렸다가 실제 CLI 처럼 error_during_execution 으로 끝난다
+  // 글을 오래 흘려보내기: "stream N" → 30ms 마다 조각 N개(화면 깜빡임·클릭 시험용)
+  if (/^stream \d+/.test(text)) {
+    const n = Number(text.match(/^stream (\d+)/)[1]);
+    let acc = '';
+    for (let i = 0; i < n; i++) {
+      const piece = `조각 ${i} `;
+      acc += piece;
+      out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }, session_id: sid });
+      await new Promise((ok) => setTimeout(ok, 30));
+    }
+  }
   if (/^slow /.test(text)) {
     await new Promise((done) => { abortTurn = done; });
     abortTurn = null;
