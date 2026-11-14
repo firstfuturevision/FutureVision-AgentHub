@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join, extname } from 'node:path';
 import { parseCommand } from '../protocol.ts';
 import { handleMcp } from '../mcp.ts';
@@ -43,6 +45,9 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   /**
    * 요청 처리 — 이 PC 화면과 원격(같은 사무실 네트워크)이 똑같이 쓴다. 비밀번호도 권한 구분도 없다(사용자 결정 2026-11-12).
    */
+  // 나눠 올리는 중인 큰 파일(id → 자리·크기·받은 만큼). 1시간 넘게 멈춘 것은 버린다(파일은 남음)
+  const uploads = new Map<string, { abs: string; path: string; name: string; mime: string; size: number; got: number; at: number }>();
+  setInterval(() => { for (const [k, u] of uploads) if (Date.now() - u.at > 3600_000) uploads.delete(k); }, 600_000).unref();
   // 연결 상태(화면이 받는 모양 하나로): 이 PC 이름·원격 접속 주소(다른 PC 작업이 이 PC 아래에 있는지 알아보는 데 씀)·다른 PC 들
   const peerState = async (fresh = false) => ({ me: peers!.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers!.all(fresh) });
 
@@ -219,6 +224,42 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         } catch (err) {
           return send(res, 400, (err as Error).message);
         }
+      }
+      // 큰 파일 나눠 올리기(동영상 등, 4GB 까지): start → chunk(순서대로, 16MB 까지) → finish. 조각은 파일에 바로 이어 써서 메모리를 쓰지 않고,
+      // 조각 하나가 작아 바깥 중계(Cloudflare 요청 100MB 제한 등)를 거쳐도 올라간다
+      if (req.method === 'POST' && url.pathname === '/attach/start') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        const size = Number(body?.size);
+        if (!Number.isFinite(size) || size <= 0 || size > 4 * 1024 ** 3) return send(res, 413, '파일 크기는 4GB 까지');
+        try {
+          const a = sessions.newAttachment(String(url.searchParams.get('sessionId') ?? ''), String(body?.name ?? ''), String(body?.mime ?? ''));
+          const id = randomBytes(12).toString('hex');
+          uploads.set(id, { ...a, size, got: 0, at: Date.now() });
+          return json(res, 200, { id });
+        } catch (err) { return send(res, 400, (err as Error).message); }
+      }
+      if (req.method === 'POST' && url.pathname === '/attach/chunk') {
+        const u = uploads.get(url.searchParams.get('id') ?? '');
+        if (!u) return send(res, 404, '없는 올리기(다시 시작하세요)');
+        if (Number(url.searchParams.get('offset')) !== u.got) return send(res, 409, `이어 쓸 자리가 맞지 않음(${u.got})`);
+        let n = 0;
+        for await (const c of req) {
+          n += c.length;
+          if (n > 16 * 1024 * 1024 || u.got + n > u.size) return send(res, 413, '조각이 너무 큼');
+          appendFileSync(u.abs, c);
+        }
+        u.got += n;
+        u.at = Date.now();
+        return json(res, 200, { got: u.got });
+      }
+      if (req.method === 'POST' && url.pathname === '/attach/finish') {
+        const id = url.searchParams.get('id') ?? '';
+        const u = uploads.get(id);
+        if (!u) return send(res, 404, '없는 올리기');
+        uploads.delete(id);
+        if (u.got !== u.size) return send(res, 400, `덜 올라옴(${u.got}/${u.size})`);
+        return json(res, 200, { path: u.path, name: u.name, mime: u.mime, size: u.size });
       }
       // 이 PC 의 Claude Code 세션 — 가져와 이어 가기(PC 앞에서만: 개인 대화가 들어 있다)
       if (req.method === 'GET' && url.pathname === '/claude-code') return json(res, 200, sessions.claudeCodeSessions());

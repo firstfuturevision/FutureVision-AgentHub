@@ -442,9 +442,16 @@ export class SessionManager {
 
   /** 첨부 저장: 세션 작업 폴더의 첨부/ 에 "날짜시각-이름" 으로. 작업자도 같은 폴더라 그대로 열 수 있다. */
   saveAttachment(sessionId: string, rawName: string, mime: string, data: Buffer): Attachment {
+    if (data.length > MAX_ATTACHMENT) throw new Error(`파일이 너무 큼(최대 ${formatSize(MAX_ATTACHMENT)})`);
+    const a = this.newAttachment(sessionId, rawName, mime);
+    writeFileSync(a.abs, data);
+    return { path: a.path, name: a.name, mime: a.mime, size: data.length };
+  }
+
+  /** 큰 파일 나눠 올리기용: 작업 폴더 첨부/ 에 이름을 정해 빈 파일을 만들고 자리를 돌려준다(조각은 이어 쓴다) */
+  newAttachment(sessionId: string, rawName: string, mime: string): { abs: string; path: string; name: string; mime: string } {
     const live = this.sessions.get(sessionId);
     if (!live) throw new Error('없는 세션');
-    if (data.length > MAX_ATTACHMENT) throw new Error(`파일이 너무 큼(최대 ${formatSize(MAX_ATTACHMENT)})`);
     const safe = (rawName || '파일').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '').slice(-120) || '파일';
     const d = new Date();
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
@@ -452,8 +459,8 @@ export class SessionManager {
     mkdirSync(dir, { recursive: true });
     let name = `${stamp}-${safe}`;
     for (let n = 2; existsSync(join(dir, name)); n++) name = `${stamp}-${n}-${safe}`;
-    writeFileSync(join(dir, name), data);
-    return { path: `첨부/${name}`, name: rawName || safe, mime: /^[\w.+-]+\/[\w.+-]+$/.test(mime) ? mime : 'application/octet-stream', size: data.length };
+    writeFileSync(join(dir, name), '');
+    return { abs: join(dir, name), path: `첨부/${name}`, name: rawName || safe, mime: /^[\w.+-]+\/[\w.+-]+$/.test(mime) ? mime : 'application/octet-stream' };
   }
 
   /**

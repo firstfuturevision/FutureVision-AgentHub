@@ -265,6 +265,7 @@ function renderAttachments() {
 }
 async function upload(sessionId, f) {
   const name = f.name || `붙여넣은-이미지.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`;
+  if (f.size > 40 * 1024 * 1024) return uploadBig(sessionId, f, name);
   const r = await fetch(`/attach?sessionId=${encodeURIComponent(sessionId)}`, {
     method: 'POST',
     headers: { 'content-type': f.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(name) },
@@ -275,6 +276,24 @@ async function upload(sessionId, f) {
   if (f._url) thumbs.set(att.path, f._url);
   return att;
 }
+/** 큰 파일(동영상 등, 4GB 까지): 8MB 씩 나눠 올리고 진행률을 보인다 — 바깥 중계(Cloudflare 등)의 요청 크기 제한에 걸리지 않게 */
+async function uploadBig(sessionId, f, name) {
+  const post = (url, body, type) => fetch(url, { method: 'POST', headers: { 'content-type': type }, body });
+  const st = await post(`/attach/start?sessionId=${encodeURIComponent(sessionId)}`, JSON.stringify({ name, mime: f.type, size: f.size }), 'application/json');
+  if (!st.ok) throw new Error(`${name}: ${await st.text()}`);
+  const { id } = await st.json();
+  const CHUNK = 8 * 1024 * 1024;
+  for (let off = 0; off < f.size; off += CHUNK) {
+    const r = await post(`/attach/chunk?id=${id}&offset=${off}`, f.slice(off, off + CHUNK), 'application/octet-stream');
+    if (!r.ok) throw new Error(`${name}: ${await r.text()}`);
+    flash(`${name} 올리는 중 ${Math.min(100, Math.round(((off + CHUNK) / f.size) * 100))}% (${formatBytes(Math.min(f.size, off + CHUNK))} / ${formatBytes(f.size)})`);
+  }
+  const fin = await post(`/attach/finish?id=${id}`, '', 'text/plain');
+  if (!fin.ok) throw new Error(`${name}: ${await fin.text()}`);
+  flash(`${name} 올림`);
+  return fin.json();
+}
+const formatBytes = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)}GB` : `${Math.round(n / 1024 ** 2)}MB`);
 async function sendWithFiles(sessionId, text, files) {
   if (remoteOf(sessionId) && files.length) { flash('다른 PC 작업에는 아직 첨부를 보낼 수 없어요(글만 보냄). 첨부는 그 PC 화면에서', true); files = []; }
   const attachments = [];
@@ -332,10 +351,10 @@ function taskByName(name) {
   return null;
 }
 // 다른 PC 의 Agent Hub: 탭을 열 때와 열려 있는 동안 15초마다 읽는다
-let peerState = null; // { me, peers: [{ url, manual, name, ok, error, summary }] }
+let peerState = store.get('peerState', null); // { me, peers: [...] } — 마지막 것을 저장해 두어 새로고침 때 다른 PC 줄이 처음부터 자리를 잡게
 async function loadPeers(fresh) {
   const r = await getJson(`/peers${fresh ? '?fresh=1' : ''}`, null);
-  if (r) peerState = { myUrls: peerState?.myUrls, ...r };
+  if (r) { peerState = { myUrls: peerState?.myUrls, ...r }; store.set('peerState', peerState); }
   renderTaskLinks(true);
   renderList(); // 왼쪽 목록의 다른 PC 작업
 }
@@ -1407,10 +1426,11 @@ let toolList = [];
 const tform = $('tool-form');
 
 // ── 입력 세션: 이 PC 에 하나(id·모델) ──
-let intakeState = null;
+let intakeState = store.get('intakeState', null); // 입력 세션 id(목록에서 빼기) — 처음부터
 async function loadIntake() {
   const had = intakeState?.sessionId;
   intakeState = await getJson('/intake', intakeState);
+  if (intakeState) store.set('intakeState', { ...intakeState, recent: [] });
   if (intakeState?.sessionId !== had) renderList(); // 입력 세션은 목록에서 뺀다
   renderIntake();
   const sel = $('intake-model');
@@ -1780,13 +1800,13 @@ es.onopen = () => {
   }).catch(() => {});
   // 다시 붙으면 서버가 기록 전체를 다시 보내 주므로 비우고 새로 받는다.
   // 처음 접속이 아니면(폰에서 앱으로 돌아옴·잠깐 끊김) 다 받을 때까지 보던 화면을 그대로 두고 한 번에 바꾼다 — 빈 화면이 번쩍이며 다시 불러오는 것처럼 보이지 않게
-  holding = sessions.size > 0;
-  if (holding) setTimeout(() => { if (holding) { holding = false; render(); } }, 5000); // 기록이 안 끝나도 5초 뒤엔 그린다
+  // 처음 열 때도 기록을 다 받은 뒤 한 번에 그린다(작업이 하나씩 두다다 채워지며 흔들리지 않게)
+  holding = true;
+  setTimeout(() => { if (holding) { holding = false; render(); } }, 5000); // 기록이 안 끝나도 5초 뒤엔 그린다
   for (const k of [...sessions.keys()]) if (!k.startsWith(REMOTE)) sessions.delete(k); // 다른 PC 작업(이 화면에서 연 것)은 그 PC 연결이 따로 채운다
   replayed = false;
   void loadAlerts();
   void loadAllSchedules();
-  if (!holding) render();
   link.textContent = '';
   link.title = '이 PC 의 Agent Hub 에 연결됨';
   link.classList.remove('off');
@@ -3172,7 +3192,7 @@ function remoteGroup(n, depth, tagged) {
   if (!depth) b.append(el('span', `task-sub${n.t.status === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${n.t.status === '작업 중' ? '작업 중' : '대기'}`));
   b.title = [n.t.about, `${n.pc.name} 의 작업 — 누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)`].filter(Boolean).join('\n');
   b.onclick = () => openRemote(n.pc, n.t); // 이 화면 가운데에서 그 작업 대화
-  b.oncontextmenu = (e) => { e.preventDefault(); window.open(`${n.pc.url}/`, '_blank', 'noopener'); }; // 우클릭: 그 PC 화면 새 탭
+  b.oncontextmenu = (e) => { e.preventDefault(); openRemoteMenu(n, e.clientX, e.clientY); }; // 우클릭: 작업 메뉴(그 PC 에서 실행)
   b.draggable = true;
   b.ondragstart = (e) => { draggingRemote = { pc: n.pc, t: n.t }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', n.t.id); b.classList.add('dragging'); };
   b.ondragend = () => { draggingRemote = null; if (listPending) { listPending = false; setTimeout(renderList, 0); } b.classList.remove('dragging'); for (const x of document.querySelectorAll('.drop-inside, .drop-top')) x.classList.remove('drop-inside', 'drop-top'); };
@@ -3182,34 +3202,78 @@ function remoteGroup(n, depth, tagged) {
     for (const k of n.kids) box.append(k.local ? localGroupFn(k.local, depth + 1) : remoteGroup(k, depth + 1, false));
     g.append(box);
   }
-  // 같은 PC·같은 자리의 다른 PC 작업끼리 순서 바꾸기: 위·아래 가장자리에 놓으면 그 PC 에 순서를 보낸다(그 PC 목록 순서 = 여기 순서)
-  const sameSpot = () => draggingRemote && draggingRemote.pc.url === n.pc.url && draggingRemote.t.id !== n.t.id && remoteSpot(draggingRemote.t) === remoteSpot(n.t);
+  // 끌어 놓기(이 줄 위로): 다른 PC 작업이나 이 PC 작업을 이 줄의 앞·뒤(같은 단계)나 아래(가운데)로
   const zone = (e) => { const r = b.getBoundingClientRect(); return dropZone((e.clientY - r.top) / r.height); };
+  const mine = new Set(peerState?.myUrls ?? []);
+  const hostedUnder = n.t.remoteParent && mine.has(n.t.remoteParent.url) ? n.t.remoteParent.id : null; // 이 줄이 이 PC 작업 아래에 있으면 그 작업
+  const pcParent = () => { const nm = n.t.splitFrom ?? n.t.forkedFrom; return nm ? (peerState?.peers ?? []).find((p) => p.url === n.pc.url)?.summary.tasks.find((t) => t.name === nm) : undefined; };
+  /** 놓을 수 있는 자리(없으면 null) */
+  const allowed = (z) => {
+    if (draggingRemote) {
+      if (draggingRemote.pc.url !== n.pc.url || draggingRemote.t.id === n.t.id) return null; // 다른 PC 끼리는 못 묶는다
+      return z;
+    }
+    if (draggingTask) {
+      if (z === 'inside') return z;
+      return hostedUnder || pcParent() ? z : 'inside'; // 그 PC 맨 위 단계에는 이 PC 작업을 둘 수 없어 가운데로
+    }
+    return null;
+  };
+  const show = (z) => { b.classList.toggle('drop-before', z === 'before'); b.classList.toggle('drop-after', z === 'after'); b.classList.toggle('drop-inside', z === 'inside'); };
   b.addEventListener('dragover', (e) => {
-    if (!sameSpot() || zone(e) === 'inside') return b.classList.remove('drop-before', 'drop-after');
+    const z = allowed(zone(e));
+    if (!z) return show(null);
     e.preventDefault();
     e.stopPropagation();
-    b.classList.toggle('drop-before', zone(e) === 'before');
-    b.classList.toggle('drop-after', zone(e) === 'after');
+    show(z);
   });
-  b.addEventListener('dragleave', () => b.classList.remove('drop-before', 'drop-after'));
+  b.addEventListener('dragleave', () => show(null));
   b.addEventListener('drop', (e) => {
-    if (!sameSpot() || zone(e) === 'inside') return;
+    const z = allowed(zone(e));
+    if (!z) return;
     e.preventDefault();
     e.stopPropagation();
-    b.classList.remove('drop-before', 'drop-after');
-    void moveRemote(draggingRemote, n, zone(e));
-  });
-  // 이 PC 작업을 이 다른 PC 작업 아래로: 가운데에 놓으면(이 PC 작업의 기록에 남긴다 — 그 PC 화면도 같은 모양)
-  b.addEventListener('dragover', (e) => { if (draggingTask && !draggingRemote) { e.preventDefault(); b.classList.add('drop-inside'); } });
-  b.addEventListener('dragleave', () => b.classList.remove('drop-inside'));
-  b.addEventListener('drop', (e) => {
-    if (!draggingTask || draggingRemote) return;
-    e.preventDefault();
-    b.classList.remove('drop-inside');
-    void setMyRemoteParent(draggingTask, { url: n.pc.url, id: n.t.id, pc: n.pc.name });
+    show(null);
+    if (draggingRemote) {
+      const r = draggingRemote;
+      if (z === 'inside') return void send({ type: 'session.reparent', sessionId: remoteKey(n.pc.url, r.t.id), parentId: n.t.id }).then(() => setTimeout(() => loadPeers(true), 400));
+      if (remoteSpot(r.t) === remoteSpot(n.t)) return void moveRemote(r, n, z); // 같은 자리면 순서만
+      if (hostedUnder) return void setRemoteParent(r, hostedUnder);
+      return void send({ type: 'session.reparent', sessionId: remoteKey(n.pc.url, r.t.id), parentId: pcParent()?.id ?? null }).then(() => setTimeout(() => loadPeers(true), 400));
+    }
+    const k = draggingTask;
+    if (z === 'inside') return void setMyRemoteParent(k, { url: n.pc.url, id: n.t.id, pc: n.pc.name });
+    if (hostedUnder) { setParentLocal(k, hostedUnder); return renderList(); }
+    const pp = pcParent();
+    if (pp) void setMyRemoteParent(k, { url: n.pc.url, id: pp.id, pc: n.pc.name });
   });
   return g;
+}
+/** 다른 PC 작업 메뉴: 이 PC 작업 메뉴와 같은 자리에, 그 PC 에서 실행(보내는 명령은 그 PC 로) */
+function openRemoteMenu(n, x, y) {
+  closeMenu();
+  menu.replaceChildren();
+  const key = remoteKey(n.pc.url, n.t.id);
+  const after = () => setTimeout(() => loadPeers(true), 400);
+  const mine = new Set(peerState?.myUrls ?? []);
+  const hosted = n.t.remoteParent && mine.has(n.t.remoteParent.url);
+  const items = [
+    ['여기서 열기', () => openRemote(n.pc, n.t)],
+    [`${n.pc.name} 화면 새 탭으로`, () => window.open(`${n.pc.url}/`, '_blank', 'noopener')],
+    ['이름 바꾸기', async () => { const t = await askDialog({ title: `이름 바꾸기 · ${n.pc.name}`, input: n.t.name, ok: '바꾸기' }); if (t && t.trim()) { await send({ type: 'session.rename', sessionId: key, title: t.trim() }); after(); } }],
+    ['하위 작업 만들기', async () => { await send({ type: 'session.split', sessionId: key }); after(); }],
+    ...(hosted ? [['이 PC 작업 아래에서 빼기', () => setRemoteParent({ pc: n.pc, t: n.t }, null)]] : []),
+    ['보관', async () => { if (await askDialog({ title: `작업 보관 · ${n.pc.name}`, text: `${n.t.name} 와 그 아래 작업을 그 PC 목록에서 숨깁니다(예약도 멈춤). 그 PC 의 보관에서 꺼낼 수 있어요.`, ok: '보관' })) { await send({ type: 'session.archive', sessionId: key, archived: true }); after(); } }],
+    ['삭제', async () => { if (await askDialog({ title: `작업 삭제 · ${n.pc.name}`, text: `${n.t.name}\n그 PC 에서 지웁니다. 기록 파일은 그 PC 에 남습니다.`, ok: '삭제', danger: true })) { await send({ type: 'session.delete', sessionId: key }); after(); } }, 'danger'],
+  ];
+  menu.append(el('div', 'ctx-note', `${n.pc.name} 의 작업 · 그 PC 에서 실행`));
+  for (const [label, fn, cls] of items) {
+    const b = el('button', cls ?? '', label);
+    b.type = 'button';
+    b.onclick = () => { closeMenu(); fn(); };
+    menu.append(b);
+  }
+  placeMenu(x, y);
 }
 /** 다른 PC 작업이 놓인 자리(같은 자리끼리만 순서를 바꾼다): 이 PC 작업 아래면 그 작업, 아니면 그 PC 안의 원본 이름 */
 const remoteSpot = (t) => (t.remoteParent ? `rp:${t.remoteParent.url}|${t.remoteParent.id}` : `pc:${t.splitFrom ?? t.forkedFrom ?? ''}`);
@@ -3332,19 +3396,22 @@ function dragTask(b, s) {
     return dropZone(y);
   };
   const ok = () => draggingTask && draggingTask !== s && !descendsFrom(s, draggingTask);
+  // 다른 PC 작업을 이 PC 작업 위로: 가운데 = 그 아래로, 위·아래 = 그 작업과 같은 단계로(맨 위 단계면 그 PC 묶음으로 되돌림)
+  const showZone = (z) => { b.classList.toggle('drop-before', z === 'before'); b.classList.toggle('drop-after', z === 'after'); b.classList.toggle('drop-inside', z === 'inside'); };
   b.addEventListener('dragover', (e) => {
     if (!draggingRemote) return;
     e.preventDefault();
-    b.classList.add('drop-inside');
+    showZone(where(e));
   });
-  b.addEventListener('dragleave', () => { if (draggingRemote) b.classList.remove('drop-inside'); });
+  b.addEventListener('dragleave', () => { if (draggingRemote) showZone(null); });
   b.addEventListener('drop', (e) => {
     if (!draggingRemote) return;
     e.preventDefault();
-    b.classList.remove('drop-inside');
-    folded.delete(s.info.id);
-    saveFolded();
-    void setRemoteParent(draggingRemote, s.info.id);
+    const z = where(e);
+    showZone(null);
+    if (z === 'inside') { folded.delete(s.info.id); saveFolded(); return void setRemoteParent(draggingRemote, s.info.id); }
+    const parent = isTopTask(s) ? null : parentOfTask(s);
+    void setRemoteParent(draggingRemote, parent);
   });
   b.ondragover = (e) => {
     if (!ok()) return;
