@@ -541,3 +541,4 @@ a.brand[href]:hover { text-decoration: underline; text-underline-offset: 3px; }
 .sched-prompt { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched-meta { font-size: 12px; color: var(--ink-faint); }
 .sched-meta.fail { color: var(--warn); }
+.sched-crowd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

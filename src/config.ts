@@ -17,6 +17,7 @@ export interface Config {
   models: Record<'claude' | 'gemini' | 'codex', { id: string; name: string }[]>;
   dashboard: DashboardOptions;
   updateRepo: string; // 업데이트 레포 기본 주소(연동에서 바꿀 수 있음)
+  autoRestartOnCodeChange: boolean; // 켠 뒤 서버 코드가 바뀌면, 작업이 모두 10분 넘게 쉴 때 저절로 다시 켠다
   homepage: string; // 왼쪽 위 "Agent Hub" 를 누르면 여는 홈페이지. '' 이면 링크 없음
   sharedRepo: string; // 공유 레포를 정하지 않았을 때 받을 공개 모음(조직/이름). '' 이면 없음
 }
@@ -62,6 +63,7 @@ const DEFAULTS: Config = {
   updateRepo: 'https://github.com/firstfuturevision/FutureVision-AgentHub',
   sharedRepo: 'firstfuturevision/agent-hub-shared',
   homepage: 'https://agent-hub.vision-share.com/agent-hub',
+  autoRestartOnCodeChange: true,
 };
 
 /** config.json 이 있으면 기본값 위에 덮는다. 상대 경로는 저장소 뿌리 기준. */

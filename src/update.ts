@@ -28,6 +28,7 @@ export interface UpdatePublic {
   canRestart: boolean;
   waiting: boolean; // 받아 두었고, 진행 중인 작업이 끝나길 기다려 다시 켠다
   codeChanged: boolean; // 켠 뒤로 서버 코드가 바뀜 — 다시 켜야 반영된다
+  autoRestartCode: boolean; // 바뀐 코드면 작업이 모두 10분 쉴 때 저절로 다시 켠다
 }
 
 type Status = { state: UpdateState; message?: string; current?: string; latest?: string; behind?: number };
@@ -51,7 +52,10 @@ export class Updater {
   private stampCache?: { at: number; value: number };
   private onChange?: () => void;
 
-  constructor(opts: { root: string; file: string; defaultRepo: string; gitEnv?: () => Record<string, string>; busy?: () => boolean; restart?: () => void; onChange?: () => void }) {
+  private autoRestartCode: boolean; // 서버 코드가 바뀌었고 모든 작업이 10분 넘게 쉬면 저절로 다시 켠다
+  private idleSince?: number;
+
+  constructor(opts: { root: string; file: string; defaultRepo: string; gitEnv?: () => Record<string, string>; busy?: () => boolean; restart?: () => void; onChange?: () => void; autoRestartCode?: boolean }) {
     this.root = resolve(opts.root);
     this.file = opts.file;
     this.defaultRepo = opts.defaultRepo;
@@ -59,6 +63,7 @@ export class Updater {
     this.busy = opts.busy ?? (() => false);
     this.restart = opts.restart;
     this.bootStamp = codeStamp(opts.root);
+    this.autoRestartCode = opts.autoRestartCode ?? true;
     this.onChange = opts.onChange;
     if (existsSync(this.file)) {
       try {
@@ -89,6 +94,7 @@ export class Updater {
       canRestart: Boolean(this.restart),
       waiting: this.restartPending && Boolean(this.restart),
       codeChanged: this.codeChanged(),
+      autoRestartCode: this.autoRestartCode,
     };
   }
 
@@ -241,9 +247,16 @@ export class Updater {
       if (this.mode === 'auto') await this.apply();
       else await this.check();
     }
+    // 바뀐 서버 코드: 작업이 모두 10분 넘게 쉬면 다시 켠다(이 PC 에서 고치는 동안 옛 서버로 남지 않게)
+    if (this.autoRestartCode && this.restart && this.codeChanged()) {
+      if (this.busy()) this.idleSince = undefined;
+      else if ((this.idleSince ??= now.getTime()) && now.getTime() - this.idleSince >= IDLE_RESTART_MS) this.restartPending = true;
+    }
     this.maybeRestart();
   }
 }
+
+const IDLE_RESTART_MS = 10 * 60_000;
 
 /** 서버 코드의 마지막 수정 시각(ms): src/ 아래 모든 파일과 실행기 */
 export function codeStamp(root: string): number {

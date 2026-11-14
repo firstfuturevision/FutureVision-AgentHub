@@ -137,6 +137,29 @@ export class ScheduleStore {
     this.flush();
   }
 
+  /**
+   * 같은 시각에 몰린 예약을 10분씩 나눈다. 시각마다 처음 것은 그대로 두고, 나머지는 비어 있는 다음 10분 자리로 옮긴다.
+   * 간격 예약과 꺼진 예약은 그대로. 옮긴 예약 목록을 돌려준다
+   */
+  spread(stepMin = 10): Schedule[] {
+    const on = this.items.filter((x) => x.enabled && x.repeat !== 'interval' && x.time);
+    const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const toTime = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const used = new Set(on.map((x) => toMin(x.time!)));
+    const seen = new Set<number>();
+    const moved: Schedule[] = [];
+    for (const x of [...on].sort((a, b) => toMin(a.time!) - toMin(b.time!))) {
+      const m = toMin(x.time!);
+      if (!seen.has(m)) { seen.add(m); continue; }
+      let n = m + stepMin;
+      while (used.has(n % 1440)) n += stepMin;
+      used.add(n % 1440);
+      seen.add(n % 1440);
+      moved.push(this.save({ ...x, time: toTime(n % 1440) }));
+    }
+    return moved;
+  }
+
   /** 실행한 차례가 끝난 뒤 결과만 고친다(다음 실행 시각은 그대로) */
   markResult(id: string, result: string) {
     const s = this.items.find((x) => x.id === id);

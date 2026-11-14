@@ -118,7 +118,8 @@ export function digest(events: HostEvent[]): string[] {
   let last: string | undefined;
   const flush = () => { if (last) out.push(`에이전트: ${clip(last, 4000)}`); last = undefined; };
   for (const e of events) {
-    if (e.type === 'user.message') { flush(); out.push(`${speaker(e)}: ${clip(e.text, 1500)}`); }
+    // 예약 지시는 길고 날마다 같아서 첫 줄(제목)만
+    if (e.type === 'user.message') { flush(); out.push(`${speaker(e)}: ${e.from === '예약' ? clip(e.text.split('\n')[0], 200) : clip(e.text, 1500)}`); }
     else if (e.type === 'agent.text' && !e.partial) last = e.text;
     else if (e.type === 'turn.done') flush();
     else if (e.type === 'session.merged') { flush(); out.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${clip(e.text, 3000)}`); }
@@ -277,7 +278,7 @@ export class SessionManager {
       const info = created.session;
       if (this.sessions.has(info.id)) continue;
       for (const e of events) {
-        if (e.type === 'session.renamed') info.customTitle = e.title;
+        if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
@@ -596,6 +597,17 @@ export class SessionManager {
     return live.info.customTitle ?? (first && first.type === 'user.message' ? first.text.replace(/\s+/g, ' ').slice(0, 40) : '새 작업');
   }
 
+  /** 이름 바꾸기: 예전 이름은 별칭으로 남겨(최근 5개) 이름으로 찾는 곳이 끊기지 않게 한다 */
+  private rename(live: Live, title: string) {
+    const old = live.info.customTitle;
+    if (old === title) return;
+    const aliases = [...(old ? [old] : []), ...(live.info.aliases ?? [])].filter((a, i, all) => a !== title && all.indexOf(a) === i).slice(0, 5);
+    live.info.customTitle = title;
+    if (aliases.length) live.info.aliases = aliases;
+    else delete live.info.aliases;
+    this.publish({ type: 'session.renamed', sessionId: live.info.id, title, ...(aliases.length ? { aliases } : {}) });
+  }
+
   /** 이름(같음 → 시작 → 포함, 대소문자 무시) 또는 id 앞부분으로 메인 작업 하나를 찾는다. 여럿이면 후보를 알려 준다 */
   findTask(key: string): Live {
     const k = String(key ?? '').trim().toLowerCase();
@@ -603,8 +615,10 @@ export class SessionManager {
     const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main');
     const byId = mains.filter((l) => l.info.id.toLowerCase().startsWith(k));
     if (byId.length === 1 && k.length >= 4) return byId[0];
-    for (const test of [(n: string) => n === k, (n: string) => n.startsWith(k), (n: string) => n.includes(k)]) {
-      const hit = mains.filter((l) => test(this.nameOf(l).toLowerCase()));
+    // 지금 이름이 먼저, 없으면 예전 이름(별칭)으로
+    const names = (l: Live, old: boolean) => (old ? (l.info.aliases ?? []) : [this.nameOf(l)]).map((n) => n.toLowerCase());
+    for (const old of [false, true]) for (const test of [(n: string) => n === k, (n: string) => n.startsWith(k), (n: string) => n.includes(k)]) {
+      const hit = mains.filter((l) => names(l, old).some(test));
       if (hit.length === 1) return hit[0];
       if (hit.length > 1) throw new Error(`"${key}" 에 맞는 작업이 여럿: ${hit.map((l) => `${this.nameOf(l)}(${l.info.id.slice(0, 8)})`).join(', ')}. id 앞 8자로 고르세요`);
     }
@@ -655,8 +669,7 @@ export class SessionManager {
     const title = String(name ?? '').trim().slice(0, 80);
     if (!title) throw new Error('분담 이름을 주세요');
     const copy = await this.forkLive(from, { via: 'local', user: `작업 ${this.nameOf(me)}` }, ' (분담)', undefined, 'split');
-    copy.info.customTitle = title;
-    this.publish({ type: 'session.renamed', sessionId: copy.info.id, title });
+    this.rename(copy, title);
     return `${this.nameOf(from)} 에서 분담 "${title}"(${copy.info.id.slice(0, 8)}) 을 만듦. 첫 지시는 session_send 로 보낸다`;
   }
 
@@ -828,8 +841,7 @@ export class SessionManager {
       case 'session.rename': {
         const live = this.get(cmd.sessionId);
         if (!live) return;
-        live.info.customTitle = cmd.title;
-        this.publish({ type: 'session.renamed', sessionId: cmd.sessionId, title: cmd.title });
+        this.rename(live, cmd.title);
         return;
       }
       case 'session.reorder': {
@@ -1512,19 +1524,21 @@ export class SessionManager {
   private share(live: Live) {
     if (live.info.role === 'worker') return;
     const fork = live.info.forkedFrom ? this.sessions.get(live.info.forkedFrom) : undefined;
-    if (fork) this.shareTo(live, fork, 'fork');
+    if (fork) this.shareTo(live, fork, 'fork', 'all');
     // 분담은 원본 · 분담 · 분담의 분담이 한 묶음(나무)이다. 끝난 쪽에서 이웃으로 보내고, 받은 쪽이 다시 자기 다른 이웃에게 넘긴다 —
     // 중간 분담이 다시 답할 때까지 기다리지 않는다(분담 2 가 한 일이 바로 원래 작업까지). 넘길 때마다 보낸 표시가 앞으로 가서 나중에 겹쳐 가지 않는다
     const seen = new Set([live.info.id]);
-    const relay = (from: Live) => {
+    // 첫 이웃에게는 자기가 한 일만, 그다음부터는 방금 받은 공유만 넘긴다. 받은 공유는 받을 때 이미 묶음 전체로 넘겼으므로
+    // 자기 차례가 끝날 때 다시 넘기지 않는다(같은 내용이 가운데 작업을 거쳐 두 번 가지 않게)
+    const relay = (from: Live, what: 'own' | 'relay') => {
       for (const to of this.splitNeighbors(from)) {
         if (seen.has(to.info.id)) continue;
         seen.add(to.info.id);
-        this.shareTo(from, to, 'split');
-        relay(to);
+        this.shareTo(from, to, 'split', what);
+        relay(to, 'relay');
       }
     };
-    relay(live);
+    relay(live, 'own');
   }
 
   /** 분담으로 바로 이어진 작업들: 분담해 온 원본 + 여기서 분담해 간 것들 */
@@ -1541,21 +1555,26 @@ export class SessionManager {
    * 보내는 것은 차례마다 사람 지시와 그 차례의 마지막 보고뿐(중간 진행 말은 빼서 받는 쪽 컨텍스트를 아낀다).
    * target 에게서 받은 공유는 빼고 센다(양쪽 공유가 서로 메아리치지 않게).
    */
-  private shareTo(from: Live, target: Live, kind: 'fork' | 'split') {
-    const prev = target.history.filter((e) => e.type === 'session.merged' && e.fromId === from.info.id).at(-1);
-    // 어디부터: 지난번 보낸 데까지(예전 기록은 그 공유가 일어난 시각), 처음이면 원본 → 분담은 분담한 때부터(그 앞은 이미 이어받음)
+  private shareTo(from: Live, target: Live, kind: 'fork' | 'split', what: 'own' | 'relay' | 'all' = 'all') {
+    // 어디부터: 자기 일과 넘겨받은 공유를 따로 센다. 예전 기록(relay 표시 없음)은 자기 일로 본다
+    const mine = target.history.filter((e) => e.type === 'session.merged' && e.fromId === from.info.id);
+    const prevOwn = mine.filter((e) => !(e.type === 'session.merged' && e.relay)).at(-1);
+    const prevRelay = mine.filter((e) => e.type === 'session.merged' && e.relay).at(-1);
     const created = target.history.find((e) => e.type === 'session.created');
-    const since = prev && prev.type === 'session.merged'
-      ? (prev.until ?? this.order.get(prev) ?? 0)
-      : target.info.splitFrom === from.info.id && created ? (this.order.get(created) ?? 0) : 0;
-    const events = from.history.filter((e) => (this.order.get(e) ?? 0) > since && !(e.type === 'session.merged' && e.fromId === target.info.id));
+    // 처음이면 원본 → 분담은 분담한 때부터(그 앞은 이미 이어받음)
+    const start = target.info.splitFrom === from.info.id && created ? (this.order.get(created) ?? 0) : 0;
+    const cursor = (e: HostEvent | undefined) => (e && e.type === 'session.merged' ? (e.until ?? this.order.get(e) ?? 0) : undefined);
+    const since = what === 'relay' ? (cursor(prevRelay) ?? cursor(prevOwn) ?? start) : (cursor(prevOwn) ?? start);
+    const events = from.history.filter((e) => (this.order.get(e) ?? 0) > since
+      && !(e.type === 'session.merged' && e.fromId === target.info.id)
+      && (what === 'all' || (what === 'relay') === (e.type === 'session.merged')));
     const fresh = digest(events);
     if (!fresh.length) return;
     const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
     const firstUser = from.history.find((e) => e.type === 'user.message');
     const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : kind === 'split' ? '분담' : '포크');
     const text = tail(fresh.join('\n'));
-    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}) });
+    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}), ...(what === 'relay' ? { relay: true } : {}) });
     const head = kind === 'split'
       ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`
       : `[포크 공유: ${title} — 원본에서 갈라져 따로 한 일(사람 지시와 마지막 보고). 결과를 반영한다]`;

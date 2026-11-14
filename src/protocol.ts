@@ -48,6 +48,7 @@ export interface SessionInfo {
   autoApprove?: boolean; // 권한 묻지 않기 — 도구 실행 권한을 사람에게 묻지 않고 허용한다
   // 이 작업만의 권한: ask = 늘 사람에게 묻기, readonly = 묻는 도구는 모두 거절(읽기만). "권한 묻지 않기(모든 작업)"보다 앞선다. 없으면 기본
   permMode?: PermMode;
+  aliases?: string[]; // 예전 이름(최근 5개). 작업 이름으로 찾는 곳(session_send·바깥 시스템)이 이 이름도 알아듣는다
   cliSessionId?: string; // Claude 만: CLI 의 대화 id. 다시 띄울 때 --resume 으로 그 대화에 그대로 이어 간다
   imported?: boolean; // 이 PC 의 Claude Code 세션을 가져와 이어 가는 작업
   title: string;
@@ -85,7 +86,7 @@ export type HostEvent =
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다
   | { type: 'agent.health'; agent: AgentKind; state: 'ok' | 'error'; message: string } // AI 연결 상태(로그인 만료·크레딧 부족 등). GET /health 로도
-  | { type: 'session.renamed'; sessionId: string; title: string }
+  | { type: 'session.renamed'; sessionId: string; title: string; aliases?: string[] } // aliases: 예전 이름들 — 이름으로 찾는 바깥 시스템이 끊기지 않게
   | { type: 'session.reordered'; sessionId: string; rank: number }
   | { type: 'session.rewound'; sessionId: string; upTo: number; by?: string }
   | { type: 'session.deleted'; sessionId: string }
@@ -94,7 +95,7 @@ export type HostEvent =
   | { type: 'session.configured'; sessionId: string; session: SessionInfo }
   // 포크 공유: 포크의 답이 끝날 때마다 새로 생긴 대화를 원본 기록에 남긴다. 원본이 진행 중이면 다음 지시에 붙어 간다.
   // lines = 지금까지 공유한 포크 대화 줄 수(다음엔 그 뒤만). 이름은 기록 파일과 맞추려고 merged 그대로
-  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split'; until?: number } // until: 여기까지 보낸 원본 이벤트의 순서 값 — 다음엔 그 뒤만 // kind 없으면 포크 공유
+  | { type: 'session.merged'; sessionId: string; fromId: string; title: string; text: string; lines: number; kind?: 'split'; until?: number; relay?: boolean } // until: 여기까지 보낸 원본 이벤트의 순서 값 — 다음엔 그 뒤만 // kind 없으면 포크 공유
   // 컨텍스트: 에이전트가 지금 들고 있는 양(used 토큰 / window 컨텍스트 창). 모르면 window 는 null. used 0 은 새로 띄워 아직 없음
   | { type: 'context.usage'; sessionId: string; used: number; window: number | null }
   // 컨텍스트에 호스트가 넣은 것: 앞 대화, 포크·분담 공유. pending 이면 다음 지시에 붙어 간다. 바뀔 때마다 전체 목록

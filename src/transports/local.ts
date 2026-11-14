@@ -138,6 +138,11 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         return json(res, 200, sessions.skillsOf(id));
       }
       // 예약 — 작업마다 정한 시각에 지시를 보낸다
+      if (url.pathname === '/schedules/spread' && schedules && req.method === 'POST') { // 같은 시각에 몰린 예약을 10분씩 나누기
+        const moved = schedules.spread();
+        sessions.schedulesChanged();
+        return json(res, 200, { moved: moved.length });
+      }
       if (url.pathname === '/schedules' && schedules) {
         if (req.method === 'GET') return json(res, 200, url.searchParams.get('all') ? schedules.list() : schedules.forSession(url.searchParams.get('sessionId') ?? '')); // all=1: 왼쪽 예약 탭
         if (req.method === 'POST') {

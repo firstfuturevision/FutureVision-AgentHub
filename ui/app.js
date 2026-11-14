@@ -24,7 +24,12 @@ async function send(cmd) {
   // 처음 일을 맡길 때 알림 허락을 묻는다(브라우저는 사람이 누를 때만 물을 수 있다)
   if (cmd.type === 'user.message' && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
   const res = await fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd) });
-  if (!res.ok) flash(`요청 실패 (${res.status}): ${await res.text()}`, true);
+  if (!res.ok) {
+    const t = await res.text();
+    // 화면은 새 버전인데 서버가 아직 옛 버전이면 새 명령을 모른다
+    if (res.status === 400 && t === '모르는 명령') { flash('이 기능은 Agent Hub 를 다시 켜야 쓸 수 있어요(왼쪽 위 "새 코드 있음")', true); void loadAlerts(); }
+    else flash(`요청 실패 (${res.status}): ${t}`, true);
+  }
 }
 // ── 작업 폴더: 새 작업마다 고른다 ──────────────
 const NEW_FOLDER = '__new__';
@@ -329,7 +334,19 @@ function renderAllSchedules() {
   const slot = {};
   for (const x of on) if (x.repeat !== 'interval' && x.time) (slot[x.time] ??= []).push(x);
   const crowded = Object.entries(slot).filter(([, v]) => v.length >= 3);
-  if (crowded.length) box.append(el('p', 'p-warn', `같은 시각에 몰림: ${crowded.map(([t, v]) => `${t} ${v.length}개`).join(', ')}. 같은 AI 계정을 같이 써서 사용 한도에 걸리기 쉬우니 10분씩 나눠 주세요.`));
+  if (crowded.length) {
+    const warn = el('div', 'p-warn sched-crowd');
+    warn.append(el('span', '', `같은 시각에 몰림: ${crowded.map(([t, v]) => `${t} ${v.length}개`).join(', ')}. 같은 AI 계정을 같이 써서 사용 한도에 걸리기 쉬워요.`));
+    const fix = el('button', 'line-btn', '10분씩 나누기');
+    fix.type = 'button';
+    fix.onclick = async () => {
+      if (!(await askDialog({ title: '예약 시각 나누기', text: '같은 시각에 걸린 예약 가운데 하나는 그대로 두고, 나머지를 비어 있는 다음 10분 자리로 옮깁니다(예: 09:00 → 09:10, 09:20). 간격 예약과 꺼진 예약은 그대로입니다.', ok: '나누기' }))) return;
+      const r = await postJson('/schedules/spread', {});
+      if (r) { flash(`예약 ${r.moved}개를 옮겼어요`); void loadAllSchedules(); }
+    };
+    warn.append(fix);
+    box.append(warn);
+  }
   const key = (x) => (x.repeat === 'interval' ? '00:00' : x.time ?? '99:99');
   const list = el('div', 'sched-list');
   for (const x of [...allSchedules].sort((a, b) => Number(b.enabled) - Number(a.enabled) || key(a).localeCompare(key(b)))) {
@@ -376,7 +393,7 @@ let codeState = null; // /update 의 codeChanged·waiting
 async function loadAlerts() {
   health = await getJson('/health', health);
   const u = await getJson('/update', null);
-  if (u) codeState = { changed: Boolean(u.codeChanged), waiting: Boolean(u.waiting), canRestart: Boolean(u.canRestart) };
+  if (u) codeState = { changed: Boolean(u.codeChanged), waiting: Boolean(u.waiting), canRestart: Boolean(u.canRestart), auto: Boolean(u.autoRestartCode) };
   renderAlerts();
 }
 function renderAlerts() {
@@ -392,7 +409,7 @@ function renderAlerts() {
   }
   if (codeState?.changed && codeState.canRestart) {
     const a = el('div', 'side-alert');
-    a.append(el('span', '', codeState.waiting ? '새 코드 · 작업이 끝나면 다시 켜요' : '새 코드 있음 · 다시 켜야 반영돼요'));
+    a.append(el('span', '', codeState.waiting ? '새 코드 · 작업이 끝나면 다시 켜요' : (codeState.auto ? '새 코드 있음 · 작업이 모두 10분 쉬면 저절로 다시 켜요' : '새 코드 있음 · 다시 켜야 반영돼요')));
     const later = el('button', 'side-alert-btn', '끝나면');
     later.type = 'button';
     later.title = '진행 중인 작업이 모두 끝나면 다시 켭니다';
@@ -1439,7 +1456,7 @@ function onEvent(ev) {
       // 쉬거나 끝나면 답 없이 남은 승인 카드는 닫는다(예전 버전 기록·놓친 소식에도 "승인 대기"로 남지 않게)
       if (ev.status === 'idle' || ev.status === 'ended') for (const it of s.items) if (it.k === 'perm' && !it.resolved) it.resolved = { allow: false, by: '차례 끝남' };
       break;
-    case 'session.renamed': s.info.customTitle = ev.title; break;
+    case 'session.renamed': s.info.customTitle = ev.title; if (ev.aliases) s.info.aliases = ev.aliases; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
     case 'session.rewound': {
       // 되감기: upTo 번째 사람 지시까지만 남기고 그 뒤는 화면에서도 걷는다(기록 파일에는 남음)
@@ -1656,7 +1673,9 @@ function openTaskMenu(s, x, y) {
   menu.replaceChildren();
   const items = [
     ['이름 바꾸기', async () => {
-      const t = await askDialog({ title: '이름 바꾸기', input: titleOf(s), ok: '바꾸기' });
+      // 바깥 시스템(대시보드 등)이 이 작업에 붙어 있으면 알린다 — 이름으로 찾는 곳은 예전 이름도 알아듣게 남겨 둔다
+      const linked = (s.remotes ?? []).map((r) => `${r.app} · ${r.label}`);
+      const t = await askDialog({ title: '이름 바꾸기', text: linked.length ? `원격 접속 ${linked.length}곳이 이 작업에 붙어 있어요(${linked.slice(0, 3).join(', ')}). 바깥 시스템이 작업을 이름으로 찾으면 끊길 수 있어요. 예전 이름도 계속 알아듣도록 남겨 둡니다.` : '', input: titleOf(s), ok: '바꾸기' });
       if (t && t.trim()) send({ type: 'session.rename', sessionId: s.info.id, title: t.trim() });
     }],
     ...(() => {

@@ -90,6 +90,7 @@ const updater = new Updater({
   gitEnv: () => github.sessionEnv(),
   busy: () => sessions.list().some((s) => s.status === 'working' || s.status === 'starting'),
   restart: () => (process.env.AGENT_HUB_LAUNCHER === '1' ? shutdown(75) : selfRestart()),
+  autoRestartCode: cfg.autoRestartOnCodeChange,
 });
 
 /** 실행기 없이 켠 경우의 다시 켜기: 같은 node·같은 인자로 떼어 띄우고(출력은 data/logs/hub.log) 이것은 끈다 */
