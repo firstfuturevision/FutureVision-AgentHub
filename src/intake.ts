@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
  * 확인이 필요하면 intake_ask 로 그 작업 화면에 묻는다. 작업은 정리본과 사람 원문을 함께 받는다(잘못 정리해도 원문이 남게).
  */
 export interface IntakeLog { at: string; state: 'forwarded' | 'asked' | 'routed'; request: string; taskId: string; task: string; target?: string; original: string; text: string }
-interface Saved { model: string; sessionId?: string; recent?: IntakeLog[] }
+interface Saved { model: string; sessionId?: string; recent?: IntakeLog[]; newTasksOn?: boolean }
 export interface IntakeRequest { id: string; taskId: string; original: string; attachments?: { path: string; name: string; mime: string; size: number }[]; at: number; question?: string }
 
 export const DEFAULT_INTAKE_MODEL = 'opus';
@@ -24,14 +24,17 @@ export class IntakeStore {
     try {
       if (existsSync(file)) {
         const raw = JSON.parse(readFileSync(file, 'utf8'));
-        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}), recent: Array.isArray(raw.recent) ? raw.recent.slice(-50) : [] };
+        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}), recent: Array.isArray(raw.recent) ? raw.recent.slice(-50) : [], newTasksOn: raw.newTasksOn === true };
       }
     } catch {}
   }
 
   get model() { return this.s.model; }
+  /** 새 작업을 입력 거치기 켠 채로(처음 설치는 꺼짐 — 지시마다 한 번 더 거쳐 늦고 비용이 들어, 쓰는 사람이 켠다) */
+  get newTasksOn() { return Boolean(this.s.newTasksOn); }
+  setNewTasksOn(on: unknown) { if (typeof on === 'boolean') { this.s.newTasksOn = on; this.save(); } }
   get sessionId() { return this.s.sessionId; }
-  public() { return { model: this.s.model, sessionId: this.s.sessionId ?? null, pending: this.pending.size, recent: [...(this.s.recent ?? [])].reverse() }; }
+  public() { return { model: this.s.model, sessionId: this.s.sessionId ?? null, pending: this.pending.size, newTasksOn: this.newTasksOn, recent: [...(this.s.recent ?? [])].reverse() }; }
 
   /** 설정 → 입력에 보이는 최근 기록(넘김·물음, 50개까지) */
   log(x: Omit<IntakeLog, 'at'>) {
@@ -77,7 +80,7 @@ export class IntakeStore {
 export function intakePrompt(r: IntakeRequest, task: { name: string; about?: string; recent?: string; lastReport?: string }, answerTo?: IntakeRequest): string {
   const lines = [
     `[입력 요청 ${r.id}] 작업 "${task.name}" 에 사람이 쓴 지시다. 바로 일하지 말고 정리해서 넘긴다.`,
-    `작업 역할: ${task.about || '비어 있음'}`,
+    `작업 역할: ${task.about || '비어 있음(새 작업이면 지시만 보고 정리하고, 이미 있는 작업의 역할에 더 맞으면 intake_forward 의 session 에 그 작업 이름을 주어 그쪽으로 보낸다)'}`,
     ...(task.recent ? [`그 작업의 앞 지시: ${task.recent}`] : []),
     ...(task.lastReport ? [`그 작업의 마지막 보고(앞부분): ${task.lastReport}`] : []),
     ...(answerTo ? [`이 글은 앞 요청 ${answerTo.id} 에서 물은 것("${answerTo.question}")에 대한 사람의 답이다. 앞 원문: ${answerTo.original}`] : []),

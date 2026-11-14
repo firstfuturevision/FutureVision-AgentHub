@@ -24,6 +24,7 @@ import { RemoteAccess } from './remote.ts';
 import { Peers } from './peers.ts';
 import { MemoryStore } from './memory.ts';
 import { IntakeStore } from './intake.ts';
+import { CliUpdater } from './cliupdate.ts';
 import { ScreenControl } from './screen.ts';
 import { ClaudeCli } from './models.ts';
 import { startLocalServer } from './transports/local.ts';
@@ -193,6 +194,17 @@ const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiD
   screen,
   claudeCli,
 };
+// 작업자 프로그램(Claude Code·Gemini·Codex) 자동 업데이트: 하루 한 번(기본 05:00 뒤), 작업이 모두 쉴 때. 왼쪽 "예약" 맨 위에서 켜고 끈다
+const cliUpdater = new CliUpdater({
+  file: join(cfg.dataDir, 'cli-update.json'),
+  claudeCommand: cfg.claude.command,
+  refreshModels: async () => { await claudeCli.refresh(); return claudeCli.models; },
+  currentModels: () => claudeCli.models,
+  installed: () => serverOpts.clis!(),
+  busy: () => sessions.list().some((s) => s.status === 'working' || s.status === 'starting'),
+  notify: (m) => sessions.notice(m),
+});
+serverOpts.cliUpdater = cliUpdater;
 const server = await (async () => {
   for (let i = 0; ; i++) {
     try {
@@ -206,7 +218,7 @@ const server = await (async () => {
 // 예약: 20초마다 차례가 된 것을 실행한다
 const scheduleTimer = setInterval(() => void sessions.runSchedules(), 20_000);
 // 업데이트: 1분마다 정한 시각이 지났는지 본다(켜진 뒤 처음은 10초 뒤)
-const updateTimer = setInterval(() => void updater.tick(), 60_000);
+const updateTimer = setInterval(() => { void updater.tick(); void cliUpdater.tick().catch(() => {}); }, 60_000);
 const firstUpdate = setTimeout(() => void updater.tick(), 10_000);
 // Claude 모델 목록·CLI 버전: 켜고 8초 뒤, 그다음 6시간마다
 const firstModels = setTimeout(() => void claudeCli.refresh(), 8_000);

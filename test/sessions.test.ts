@@ -279,10 +279,10 @@ test('지침: 그 CLI 가 읽는 스킬 폴더에서 이름·설명을 읽는다
     writeFileSync(join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} 설명\n---\n`);
   };
   skill(join(home, '.claude', 'skills'), '검증 루프');
-  skill(join(home, '.claude', 'skills', 'synced', 'acct'), '사내 대시보드');
+  skill(join(home, '.claude', 'skills', 'synced', 'acct'), '회사 업무 웹');
   skill(join(work, '.claude', 'skills'), '견적 작성');
   skill(join(home, '.agents', 'skills'), '공용 스킬');
-  assert.deepEqual(skillsFor('claude', work, home).map((s) => `${s.name}/${s.where}`), ['검증 루프/계정', '견적 작성/작업 폴더', '사내 대시보드/계정']);
+  assert.deepEqual(skillsFor('claude', work, home).map((s) => `${s.name}/${s.where}`), ['검증 루프/계정', '견적 작성/작업 폴더', '회사 업무 웹/계정']);
   assert.deepEqual(skillsFor('codex', work, home).map((s) => s.name), ['공용 스킬']);
   assert.deepEqual(skillsFor('gemini', work, home), []);
 });

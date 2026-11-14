@@ -14,7 +14,7 @@ import { waitFor } from './helpers.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const local = { via: 'local' as const, user: 'local' };
 const dash = { via: 'dashboard' as const, user: '김직원' };
-const chan = { app: '대시보드', label: '커뮤니케이션 #테스트', ref: 'https://dashboard.example.com/c/test' };
+const chan = { app: '대시보드', label: '채팅 #일반', ref: 'https://dashboard.example.com/c/test' };
 const other = { app: '알림봇', label: '야간 점검' };
 
 function world() {
@@ -102,7 +102,9 @@ test('원격 접속: 이벤트에 via 가 남고, 연결마다 모이고, 다시
   // 다시 켜면 기록에서 다시 모은다. 새로 붙은 화면도 목록을 받는다
   const b = make();
   assert.equal(b.sessions.restore(), 1);
-  assert.deepEqual(b.sessions.remotesOf(sid), list);
+  // 시각은 기록 파일에 남는 때와 1ms 어긋날 수 있어 초 단위로 견준다
+  const sec = (l: any[]) => l.map((r) => ({ ...r, firstAt: r.firstAt.slice(0, 19), lastAt: r.lastAt.slice(0, 19) }));
+  assert.deepEqual(sec(b.sessions.remotesOf(sid)), sec(list));
   const late: HostEvent[] = [];
   b.sessions.subscribe((e) => late.push(e));
   const got = late.find((e) => e.type === 'session.remotes') as any;
@@ -133,7 +135,7 @@ test('원격 접속 막기: 막힌 연결의 글은 받지 않고, 푸는 것은
   await a.sessions.handle({ type: 'user.message', sessionId: sid, text: '막혀도 보냄', via: { app: chan.app, label: chan.label } }, local);
   const err = await waitFor(a.events, (e) => e.type === 'error' && /막힌 원격 접속/.test(e.message));
   assert.equal(err.sessionId, sid);
-  assert.equal(err.message, '막힌 원격 접속에서 온 글이라 받지 않았습니다: 대시보드 · 커뮤니케이션 #테스트');
+  assert.equal(err.message, '막힌 원격 접속에서 온 글이라 받지 않았습니다: 대시보드 · 채팅 #일반');
   assert.equal(users(), n); // 기록·에이전트에 넣지 않음
   assert.equal(a.sessions.remotesOf(sid)[0].messages, 1);
   // 다른 연결·PC 글은 그대로 받는다
@@ -163,7 +165,7 @@ test('에이전트가 받는 앞 대화·공유 글: 원격 접속 글은 그 �
     { type: 'turn.done', sessionId: 's', durationMs: 1, costUsd: null, isError: false },
     { type: 'user.message', sessionId: 's', text: '고마워', from: 'local' },
   ]);
-  assert.deepEqual(lines, ['사람(대시보드 · 커뮤니케이션 #테스트): 정리해줘', '에이전트: 정리함', '사람(local): 고마워']);
+  assert.deepEqual(lines, ['사람(대시보드 · 채팅 #일반): 정리해줘', '에이전트: 정리함', '사람(local): 고마워']);
 
   // 복사한 작업의 첫 지시에 붙는 앞 대화(가짜 CLI 는 받은 글을 되풀이한다)
   const { make } = world();
@@ -175,6 +177,6 @@ test('에이전트가 받는 앞 대화·공유 글: 원격 접속 글은 그 �
   await a.sessions.handle({ type: 'session.copy', sessionId: sid }, local);
   const copy = (await waitFor(a.events, (e) => e.type === 'session.created' && e.session.copiedFrom === sid)).session;
   const reply = await say(a.sessions, a.events, copy.id, '이어서');
-  assert.match(reply.text, /사람\(대시보드 · 커뮤니케이션 #테스트\): 견적 건/);
+  assert.match(reply.text, /사람\(대시보드 · 채팅 #일반\): 견적 건/);
   a.sessions.stopAll();
 });

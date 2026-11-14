@@ -149,3 +149,38 @@ test('다른 PC 작업 아래로: 한 일이 그 PC 의 위 작업으로 공유�
     sessions.stopAll();
   }
 });
+
+test('순서: 하위 작업끼리 옮긴 순서와 다른 PC 부모를 단 작업의 순서가 다시 켜도 그대로', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub order '));
+  const ws = join(base, 'ws');
+  mkdirSync(ws);
+  const make = () => {
+    const events: HostEvent[] = [];
+    const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+    sessions.subscribe((e) => events.push(e));
+    return { sessions, events };
+  };
+  const { sessions, events } = make();
+  const ids: string[] = [];
+  for (const t of ['위', '가', '나']) {
+    const n = events.filter((e) => e.type === 'session.created').length;
+    await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title: t }, local);
+    ids.push((events.filter((e) => e.type === 'session.created')[n] as any).session.id);
+  }
+  const [top, a, b] = ids;
+  await sessions.handle({ type: 'session.reparent', sessionId: a, parentId: top }, local);
+  await sessions.handle({ type: 'session.reparent', sessionId: b, parentId: top }, local);
+  await sessions.handle({ type: 'session.reorder', sessionId: b, rank: -100 }, local);
+  await sessions.handle({ type: 'session.reorder', sessionId: a, rank: 100 }, local);
+  sessions.setRemoteParent(top, { url: 'http://192.168.0.5:4319', id: 'x', pc: 'pc1' });
+  await sessions.handle({ type: 'session.reorder', sessionId: top, rank: 7 }, local);
+  sessions.stopAll();
+  const again = make();
+  again.sessions.restore();
+  assert.equal(again.sessions.info(b)?.rank, -100);
+  assert.equal(again.sessions.info(a)?.rank, 100);
+  assert.equal(again.sessions.info(a)?.splitFrom, top);
+  assert.equal(again.sessions.info(top)?.rank, 7); // 다른 PC 부모를 달아도 순서는 그대로
+  assert.equal(again.sessions.info(top)?.remoteParent?.id, 'x');
+  again.sessions.stopAll();
+});

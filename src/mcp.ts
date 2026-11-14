@@ -171,6 +171,12 @@ export const TASK_TOOLS = [
     inputSchema: { type: 'object', properties: { guide: { type: 'string', description: '합친 공통 지침 전체' }, items: { type: 'array', items: { type: 'string' }, description: '합친 회사 기억 목록(한 줄씩)' } }, required: ['guide', 'items'], additionalProperties: false },
   },
   {
+    name: 'session_intake',
+    title: '입력 거치기 켜기·끄기',
+    description: '작업의 "입력 거치기"(사람 지시를 입력 세션이 먼저 정리해 넘김)를 켜거나 끈다. session 이 없으면 이 작업, all=true 면 이 PC 의 모든 작업(입력 세션 자신·보관한 작업은 빼고). 예약·다른 작업이 보낸 글·/ 명령·바깥 시스템이 보낸 글은 켜도 바로 간다.',
+    inputSchema: { type: 'object', properties: { on: { type: 'boolean' }, session: { type: 'string', description: '작업 이름(session_list 의 name) 또는 id' }, all: { type: 'boolean' } }, required: ['on'], additionalProperties: false },
+  },
+  {
     name: 'intake_forward',
     title: '정리한 지시 넘기기(입력 세션만)',
     description: '입력 세션 전용: [입력 요청] 을 정리한 지시를 그 작업에 넘긴다. 작업은 정리본과 사람 원문을 함께 받는다. 역할이 더 맞는 다른 작업이 있으면 session 에 그 이름.',
@@ -322,6 +328,12 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
             return text(await sessions.memoryReconcileByMain(mainId, a.guide, a.items));
           } catch (err) {
             return text(`안 맞춤: ${(err as Error).message}`, true);
+          }
+        case 'session_intake':
+          try {
+            return text(sessions.intakeByMain(mainId, a.on, a.session, a.all));
+          } catch (err) {
+            return text(`안 바꿈: ${(err as Error).message}`, true);
           }
         case 'intake_forward':
           try {

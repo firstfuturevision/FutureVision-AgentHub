@@ -17,6 +17,7 @@ import type { AutoStart } from '../autostart.ts';
 import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { Peers } from '../peers.ts';
 import type { MemoryStore } from '../memory.ts';
+import type { CliUpdater } from '../cliupdate.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import type { ScreenControl } from '../screen.ts';
 import type { ClaudeCli } from '../models.ts';
@@ -35,8 +36,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/scre
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers; memory?: MemoryStore }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers, memory } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers; memory?: MemoryStore; cliUpdater?: CliUpdater }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers, memory, cliUpdater } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -139,7 +140,11 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
-          try { await sessions.setIntakeModel(body?.model); } catch (err) { return send(res, 400, (err as Error).message); }
+          try {
+            if (body?.model !== undefined) await sessions.setIntakeModel(body.model);
+            if (body?.newTasksOn !== undefined) sessions.intake.setNewTasksOn(body.newTasksOn);
+            if (typeof body?.allOn === 'boolean') sessions.setIntakeMany(body.allOn, undefined, true);
+          } catch (err) { return send(res, 400, (err as Error).message); }
           return json(res, 200, sessions.intake.public());
         }
       }
@@ -368,6 +373,18 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           if (!st.checking && (!st.checkedAt || Date.now() - Date.parse(st.checkedAt) > 10 * 60 * 1000)) void claudeCli.refresh();
         }
         return json(res, 200, claudeCli.public());
+      }
+      // 작업자 프로그램 자동 업데이트(왼쪽 "예약" 맨 위): 켜기·끄기·시각, 지금 확인
+      if (url.pathname === '/cli-update' && cliUpdater) {
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try {
+            if (body?.action === 'check') void cliUpdater.check();
+            else cliUpdater.set(body ?? {});
+          } catch (err) { return send(res, 400, (err as Error).message); }
+        }
+        return json(res, 200, cliUpdater.public());
       }
       if (url.pathname === '/clis' && clis) {
         if (req.method === 'GET') return json(res, 200, clis());

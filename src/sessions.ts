@@ -79,7 +79,7 @@ function formatSize(n: number): string {
   return n < 1024 ? `${n}B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
-/** 지시한 사람: 원격 접속으로 온 글이면 그 연결 이름(대시보드 · 커뮤니케이션 #테스트), 아니면 보낸 사람 */
+/** 지시한 사람: 원격 접속으로 온 글이면 그 연결 이름(대시보드 · 채팅 #일반), 아니면 보낸 사람 */
 const speaker = (e: { from: string; via?: RemoteVia }) => `사람(${e.via ? viaLabel(e.via) : e.from})`;
 const remoteKey = (app: string, label: string) => `${app}\u0000${label}`;
 
@@ -166,7 +166,8 @@ export class SessionManager {
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
   private aboutLine = false;
-  intake?: IntakeStore; // 입력 세션(이 PC 에 하나) — 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다
+  intake?: IntakeStore;
+  private makingIntake = false; // 입력 세션(이 PC 에 하나) — 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다
   memory?: MemoryStore; // 설정 → 기억(취향·고쳐 준 것, 공통 지침) — 모든 메인 작업이 받는다
   peers?: Peers; // 다른 PC 의 Agent Hub(왼쪽 "연결") — 작업 목록·보내기가 PC 를 넘는다
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
@@ -620,7 +621,8 @@ export class SessionManager {
     const have = this.intake.sessionId ? this.sessions.get(this.intake.sessionId) : undefined;
     if (have && !have.info.archived) return have;
     const before = new Set(this.sessions.keys());
-    await this.handle({ type: 'session.create', agent: 'claude', role: 'main', model: this.intake.model, title: '입력' }, { via: 'local', user: 'local' });
+    this.makingIntake = true;
+    try { await this.handle({ type: 'session.create', agent: 'claude', role: 'main', model: this.intake.model, title: '입력' }, { via: 'local', user: 'local' }); } finally { this.makingIntake = false; }
     const made = [...this.sessions.values()].find((l) => !before.has(l.info.id) && l.info.role === 'main');
     if (!made) return undefined;
     this.rename(made, '입력');
@@ -677,6 +679,32 @@ export class SessionManager {
     const t = this.sessions.get(req.taskId);
     this.intake!.log({ state: 'asked', request: req.id, taskId: req.taskId, task: t ? this.nameOf(t) : '(지워진 작업)', original: req.original, text: q });
     return '물음을 그 작업 화면에 띄움. 사람이 답하면 새 입력 요청으로 온다';
+  }
+
+  /** 입력 거치기 켜기·끄기: 작업 하나(key) 또는 이 PC 의 모든 메인 작업(all — 입력 세션 자신·보관한 작업은 빼고). 바꾼 수 */
+  setIntakeMany(on: boolean, key?: unknown, all = false): { changed: string[]; skipped: string[] } {
+    const targets = all ? [...this.sessions.values()].filter((l) => l.info.role === 'main') : [this.findTask(String(key ?? ''))];
+    const changed: string[] = [];
+    const skipped: string[] = [];
+    for (const l of targets) {
+      if (l.info.id === this.intake?.sessionId || l.info.archived) { skipped.push(this.nameOf(l)); continue; }
+      if (Boolean(l.info.viaIntake) === on) continue;
+      if (on) l.info.viaIntake = true;
+      else delete l.info.viaIntake;
+      this.publish({ type: 'session.intakeSet', sessionId: l.info.id, on });
+      changed.push(this.nameOf(l));
+    }
+    return { changed, skipped };
+  }
+
+  /** 메인 도구 session_intake */
+  intakeByMain(mainId: string, on: unknown, key?: unknown, all?: unknown): string {
+    const me = this.sessions.get(mainId);
+    if (!me) throw new Error('없는 작업');
+    if (me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 다른 작업 설정을 바꾸지 못함');
+    if (typeof on !== 'boolean') throw new Error('on 은 true/false');
+    const r = this.setIntakeMany(on, key ?? (all ? undefined : this.nameOf(me)), all === true);
+    return `입력 거치기 ${on ? '켬' : '끔'}: ${r.changed.length ? r.changed.join(', ') : '바뀐 작업 없음(이미 그 상태)'}${all ? ' · 뺀 것: 입력 세션 자신, 보관한 작업' : ''}`;
   }
 
   /** 설정 → 입력 세션 모델 바꾸기(있으면 그 세션도) */
@@ -1024,6 +1052,8 @@ export class SessionManager {
           origin,
           autoApprove: preset?.autoApprove,
           via: cmd.via,
+          // 새 작업 기본 입력 거치기(설정 → 입력): 사람이 이 화면에서 만든 메인 작업만(바깥 시스템·예약·입력 세션 자신은 빼고)
+          viaIntake: Boolean(this.intake?.newTasksOn && cmd.role === 'main' && !cmd.via && origin.user === 'local' && !this.makingIntake),
         });
         if (preset) live.role = preset;
         if (wp) live.guide = wp;
@@ -1580,6 +1610,7 @@ export class SessionManager {
     permMode?: PermMode;
     cliSessionId?: string; // 가져온 Claude Code 대화 — 첫 CLI 부터 --resume 으로 이어 간다
     via?: RemoteVia; // 원격 접속으로 만든 작업
+    viaIntake?: boolean; // 처음부터 입력 거치기
     seed?: (id: string) => void; // CLI 를 띄우기 전에 기록에 먼저 넣을 것(가져온 대화)
   }): Promise<Live> {
     const info: SessionInfo = {
@@ -1600,6 +1631,7 @@ export class SessionManager {
       ...(o.autoApprove && !o.permMode ? { autoApprove: true } : {}),
       ...(o.permMode ? { permMode: o.permMode } : {}),
       ...(o.cliSessionId ? { cliSessionId: o.cliSessionId, imported: true } : {}),
+      ...(o.viaIntake ? { viaIntake: true } : {}),
       title: o.title ?? (o.role === 'main' ? '메인 에이전트' : `${o.agent} 작업`),
       workdir: o.workdir,
       requestedBy: o.origin.user,
@@ -2037,7 +2069,7 @@ export function aboutNote(about?: string): string {
 }
 
 /**
- * 원격 접속으로 온 글이 입력 세션을 거치나: 바깥 시스템(대시보드 커뮤니케이션 @에이전트·프로젝트 업무 대화 등)은 자기 머리줄·규칙을 붙여 보내니 바로 간다.
+ * 원격 접속으로 온 글이 입력 세션을 거치나: 바깥 시스템(업무 웹의 채팅 호출 등)은 자기 머리줄·규칙을 붙여 보내니 바로 간다.
  * 다른 PC Agent Hub 에서 사람이 보낸 글("Agent Hub <PC> · 사람")만 거친다. via 가 없으면(이 PC 화면) 거친다
  */
 export function viaThroughIntake(via?: { app: string; label: string }): boolean {

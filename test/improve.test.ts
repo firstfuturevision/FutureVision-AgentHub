@@ -104,8 +104,8 @@ test('메인이 다른 작업 다루기: 목록·보내기·분담·다른 작�
   assert.equal(got.from, '작업 Dashboard');
   await assert.rejects(sessions.taskSendByMain(a, '없는것', 'x'), /없는 작업/);
 
-  assert.match(await sessions.taskSplitByMain(a, '커뮤니케이션 담당'), /분담 "커뮤니케이션 담당"/);
-  const split = sessions.taskList().find((x) => x.name === '커뮤니케이션 담당');
+  assert.match(await sessions.taskSplitByMain(a, '채팅 담당'), /분담 "채팅 담당"/);
+  const split = sessions.taskList().find((x) => x.name === '채팅 담당');
   assert.equal(split?.splitFrom, 'Dashboard');
 
   const s = sessions.scheduleSaveByMain(a, { session: '영업', prompt: '매일 견적 점검', repeat: 'daily', time: '09:10' });
@@ -115,7 +115,7 @@ test('메인이 다른 작업 다루기: 목록·보내기·분담·다른 작�
   assert.equal(sessions.scheduleListByMain(a, undefined, true).length, 1);
 
   // 읽기만인 작업은 다른 작업을 시키지 못한다(제 권한을 넘지 않게)
-  const comm = sessions.taskList().find((x) => x.name === '커뮤니케이션 담당')!;
+  const comm = sessions.taskList().find((x) => x.name === '채팅 담당')!;
   const commId = [...sessions.list()].find((x) => x.id.startsWith(comm.id))!.id;
   await sessions.handle({ type: 'session.configure', sessionId: commId, permMode: 'readonly' }, local);
   await assert.rejects(sessions.taskSendByMain(commId, '영업', 'DB 지워'), /다른 작업을 다루지 못함/);
@@ -193,11 +193,11 @@ test('공유 요약: 예약 지시는 첫 줄만', () => {
 test('이름 바꾸기: 예전 이름도 알아듣는다', async () => {
   const { sessions, events, create } = world();
   const a = await create();
-  await sessions.handle({ type: 'session.rename', sessionId: a, title: '커뮤니케이션 담당' }, local);
+  await sessions.handle({ type: 'session.rename', sessionId: a, title: '채팅 담당' }, local);
   await sessions.handle({ type: 'session.rename', sessionId: a, title: '커뮤니케이션 에이전트' }, local);
   const ev = events.filter((e) => e.type === 'session.renamed').at(-1) as any;
-  assert.deepEqual(ev.aliases, ['커뮤니케이션 담당']);
-  assert.equal(sessions.findTask('커뮤니케이션 담당').info.id, a);
+  assert.deepEqual(ev.aliases, ['채팅 담당']);
+  assert.equal(sessions.findTask('채팅 담당').info.id, a);
   assert.equal(sessions.findTask('커뮤니케이션 에이전트').info.id, a);
   sessions.stopAll();
 });

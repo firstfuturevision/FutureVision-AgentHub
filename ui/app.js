@@ -560,8 +560,10 @@ function pcGroups(box, pc, groups, singles, sendTo) {
 
 // ── 모든 예약(왼쪽 "예약" 탭): 시각순, 마지막 결과, 켜고 끄기·지우기, 같은 시각에 몰리면 알림 ──
 let allSchedules = [];
+let cliUpd = null; // 작업자 프로그램 자동 업데이트(예약 맨 위 기본 항목)
 async function loadAllSchedules() {
   allSchedules = await getJson('/schedules?all=1', []);
+  cliUpd = await getJson('/cli-update', cliUpd);
   syncSchedCount();
   if (!$('schedules-view').hidden) renderAllSchedules();
 }
@@ -596,6 +598,26 @@ function renderAllSchedules() {
   }
   const key = (x) => (x.repeat === 'interval' ? '00:00' : x.time ?? '99:99');
   const list = el('div', 'sched-list');
+  // 기본 항목: 작업자 프로그램(Claude Code·Gemini·Codex) 업데이트 — 하루 한 번, 작업이 모두 쉴 때
+  if (cliUpd) {
+    const row = el('div', `sched-row${cliUpd.enabled ? '' : ' off'}`);
+    const top = el('div', 'sched-top');
+    top.append(el('span', 'sched-when', `매일 ${String(cliUpd.hour).padStart(2, '0')}:00 뒤`), el('span', 'sched-task sys-task', '작업자 프로그램 업데이트(기본)'));
+    const sw = el('button', `switch${cliUpd.enabled ? ' on' : ''}`);
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch');
+    sw.setAttribute('aria-checked', String(cliUpd.enabled));
+    sw.setAttribute('aria-label', cliUpd.enabled ? '자동 업데이트 끄기' : '자동 업데이트 켜기');
+    sw.onclick = async () => { cliUpd = await postJson('/cli-update', { enabled: !cliUpd.enabled }) ?? cliUpd; renderAllSchedules(); };
+    const now = el('button', 'line-btn sched-del', cliUpd.running ? '확인하는 중' : '지금 확인');
+    now.type = 'button';
+    now.disabled = Boolean(cliUpd.running);
+    now.onclick = async () => { await postJson('/cli-update', { action: 'check' }); flash('작업자 프로그램 새 버전을 확인하고 있어요. 끝나면 알려 드려요'); cliUpd = { ...cliUpd, running: true }; renderAllSchedules(); };
+    top.append(sw, now);
+    row.append(top, el('div', 'sched-prompt', 'Claude Code·Gemini CLI·Codex 새 버전을 확인해 올리고, 모델 목록을 다시 받아요(새 모델이면 알림). 하던 일은 끊지 않고 모두 쉴 때. 실패하면 그대로 둬요'));
+    row.append(el('div', 'sched-meta', cliUpd.lastCheck ? `마지막 ${new Date(cliUpd.lastCheck).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${cliUpd.lastResult ?? ''}` : '아직 확인 안 함'));
+    list.append(row);
+  }
   for (const x of [...allSchedules].sort((a, b) => Number(b.enabled) - Number(a.enabled) || key(a).localeCompare(key(b)))) {
     const s = sessions.get(x.sessionId);
     const row = el('div', `sched-row${x.enabled ? '' : ' off'}`);
@@ -1404,7 +1426,18 @@ function renderIntake() {
   const live = intakeState.sessionId && sessions.get(intakeState.sessionId);
   $('intake-status').textContent = live ? `입력 세션 있음 · ${isBusy(live) ? '정리하는 중' : '대기'}${intakeState.pending ? ` · 넘기기 전 ${intakeState.pending}개` : ''}` : '입력 세션 없음(켠 작업에 처음 지시가 오면 생김)';
   $('intake-open').hidden = !live;
+  const nw = $('intake-new');
+  nw.classList.toggle('on', Boolean(intakeState.newTasksOn));
+  nw.setAttribute('aria-checked', String(Boolean(intakeState.newTasksOn)));
+  nw.onclick = async () => { const r = await postJson('/intake', { newTasksOn: !intakeState.newTasksOn }); if (r) { intakeState = { ...intakeState, ...r }; renderIntake(); } };
   $('intake-open').onclick = () => { viewId = intakeState.sessionId; showNav('sessions'); render(); };
+  const all = async (v) => {
+    if (!(await askDialog({ title: `이 PC 작업 모두 ${v ? '켜기' : '끄기'}`, text: v ? '모든 작업에 쓴 지시를 입력 세션이 먼저 정리합니다(입력 세션 자신·보관한 작업은 빼고). 예약·다른 작업이 보낸 글·/ 명령·바깥 시스템이 보낸 글은 그대로 바로 가요.' : '모든 작업의 입력 거치기를 끕니다.', ok: v ? '모두 켜기' : '모두 끄기' }))) return;
+    const r = await postJson('/intake', { allOn: v });
+    if (r) { for (const k of mains()) { if (v) k.info.viaIntake = true; else delete k.info.viaIntake; } intakeState = { ...intakeState, ...r }; renderIntake(); flash(`입력 거치기를 모두 ${v ? '켰어요' : '껐어요'}`); }
+  };
+  $('intake-all-on').onclick = () => all(true);
+  $('intake-all-off').onclick = () => all(false);
   const on = $('intake-tasks');
   on.replaceChildren();
   const list = mains().filter((k) => k.info.viaIntake);
@@ -1855,7 +1888,7 @@ function onEvent(ev) {
     case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
-    // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 커뮤니케이션 #테스트)
+    // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 채팅 #일반)
     case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments, at }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
@@ -2622,7 +2655,16 @@ function renderLinks(s) {
   const forks = [];
   const up = parentOfTask(s) && sessions.get(parentOfTask(s));
   if (up) forks.push({ s: up, label: '위 작업', sub: titleOf(up) });
-  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f) });
+  // 하위 작업: 이름과 마지막 보고 앞부분(공유가 대화에 묻혀도 여기서 한눈에)
+  const lastReport = (k) => [...k.items].reverse().find((it) => it.k === 'agent')?.t;
+  const firstLine = (t) => (t ?? '').replace(/[#*`>|_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f), report: firstLine(lastReport(f)) });
+  // 이 작업 아래에 둔 다른 PC 작업: 그 작업이 보내 온 마지막 공유의 마지막 보고
+  for (const r of remoteTasks().under.get(s.info.id) ?? []) {
+    const m = [...s.items].reverse().find((it) => it.k === 'merged' && it.fromId === `peer:${r.pc.name}:${r.t.id}`);
+    const rep = m && m.text.split('\n').reverse().find((l) => l.startsWith('에이전트:'));
+    forks.push({ remote: r, label: `하위 작업 · ${r.pc.name}`, sub: r.t.name, report: rep ? firstLine(rep.slice(5)) : '아직 공유 없음' });
+  }
   const running = [];
   const rest = [];
   for (const w of workersOf(s)) {
@@ -2634,7 +2676,7 @@ function renderLinks(s) {
   fillLinks($('p-subtasks'), rest);
 }
 
-/** 연결된 원격 접속: 바깥 시스템(사내 대시보드 등)이 /cmd 로 이 작업에 글을 보낸 곳. 막으면 그곳 글은 받지 않는다 */
+/** 연결된 원격 접속: 바깥 시스템(회사 업무 웹 등)이 /cmd 로 이 작업에 글을 보낸 곳. 막으면 그곳 글은 받지 않는다 */
 function renderRemotes(s) {
   const box = $('p-remotes');
   box.replaceChildren();
@@ -2684,6 +2726,16 @@ function fillLinks(box, links) {
   for (const l of links) {
     const b = el('button', 'p-item p-link');
     b.type = 'button';
+    if (l.remote) {
+      const text = el('span', 'p-name wrap');
+      text.append(el('b', '', l.label), document.createTextNode(` ${l.sub}`));
+      b.append(text, el('span', 'p-meta', l.remote.t.status === '작업 중' ? '작업 중' : '대기'));
+      b.onclick = () => openRemote(l.remote.pc, l.remote.t);
+      const wrap = el('div', 'p-linkwrap');
+      wrap.append(b, el('div', 'p-report', l.report));
+      box.append(wrap);
+      continue;
+    }
     const st = l.worker ? workerState(l.s) : pendingPerm(l.s) ? '승인 대기' : STATUS[l.s.info.status];
     const text = el('span', 'p-name wrap');
     text.append(el('b', '', l.label), document.createTextNode(l.sub ? ` ${l.sub.length > 40 ? l.sub.slice(0, 40) + '…' : l.sub}` : ''));
@@ -2692,7 +2744,8 @@ function fillLinks(box, links) {
       if (l.worker) { opened.add(l.s.info.id); render(); document.querySelector('.tasks')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
       else { viewId = l.s.info.id; render(); }
     };
-    box.append(b);
+    if (l.report) { const wrap = el('div', 'p-linkwrap'); wrap.append(b, el('div', 'p-report', l.report)); box.append(wrap); }
+    else box.append(b);
   }
 }
 
@@ -3082,6 +3135,24 @@ function remoteGroup(n, depth, tagged) {
     for (const k of n.kids) box.append(k.local ? localGroupFn(k.local, depth + 1) : remoteGroup(k, depth + 1, false));
     g.append(box);
   }
+  // 같은 PC·같은 자리의 다른 PC 작업끼리 순서 바꾸기: 위·아래 가장자리에 놓으면 그 PC 에 순서를 보낸다(그 PC 목록 순서 = 여기 순서)
+  const sameSpot = () => draggingRemote && draggingRemote.pc.url === n.pc.url && draggingRemote.t.id !== n.t.id && remoteSpot(draggingRemote.t) === remoteSpot(n.t);
+  const zone = (e) => { const r = b.getBoundingClientRect(); return dropZone((e.clientY - r.top) / r.height); };
+  b.addEventListener('dragover', (e) => {
+    if (!sameSpot() || zone(e) === 'inside') return b.classList.remove('drop-before', 'drop-after');
+    e.preventDefault();
+    e.stopPropagation();
+    b.classList.toggle('drop-before', zone(e) === 'before');
+    b.classList.toggle('drop-after', zone(e) === 'after');
+  });
+  b.addEventListener('dragleave', () => b.classList.remove('drop-before', 'drop-after'));
+  b.addEventListener('drop', (e) => {
+    if (!sameSpot() || zone(e) === 'inside') return;
+    e.preventDefault();
+    e.stopPropagation();
+    b.classList.remove('drop-before', 'drop-after');
+    void moveRemote(draggingRemote, n, zone(e));
+  });
   // 이 PC 작업을 이 다른 PC 작업 아래로: 가운데에 놓으면(이 PC 작업의 기록에 남긴다 — 그 PC 화면도 같은 모양)
   b.addEventListener('dragover', (e) => { if (draggingTask && !draggingRemote) { e.preventDefault(); b.classList.add('drop-inside'); } });
   b.addEventListener('dragleave', () => b.classList.remove('drop-inside'));
@@ -3092,6 +3163,22 @@ function remoteGroup(n, depth, tagged) {
     void setMyRemoteParent(draggingTask, { url: n.pc.url, id: n.t.id, pc: n.pc.name });
   });
   return g;
+}
+/** 다른 PC 작업이 놓인 자리(같은 자리끼리만 순서를 바꾼다): 이 PC 작업 아래면 그 작업, 아니면 그 PC 안의 원본 이름 */
+const remoteSpot = (t) => (t.remoteParent ? `rp:${t.remoteParent.url}|${t.remoteParent.id}` : `pc:${t.splitFrom ?? t.forkedFrom ?? ''}`);
+/** 다른 PC 작업 순서 바꾸기: 같은 자리 형제들 사이의 순서 값을 정해 그 PC 에 session.reorder 로. 화면에 먼저 */
+async function moveRemote(r, target, where) {
+  const pc = (peerState?.peers ?? []).find((p) => p.url === r.pc.url);
+  if (!pc) return;
+  const sib = pc.summary.tasks.filter((t) => remoteSpot(t) === remoteSpot(target.t) && t.id !== r.t.id).sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  const i = sib.findIndex((t) => t.id === target.t.id) + (where === 'after' ? 1 : 0);
+  const before = sib[i - 1], after = sib[i];
+  const GAP = 60000;
+  const rank = !before ? (after.rank ?? 0) - GAP : !after ? (before.rank ?? 0) + GAP : ((before.rank ?? 0) + (after.rank ?? 0)) / 2;
+  const t = pc.summary.tasks.find((x) => x.id === r.t.id);
+  if (t) t.rank = rank;
+  renderList();
+  await send({ type: 'session.reorder', sessionId: remoteKey(pc.url, r.t.id), rank });
 }
 let localGroupFn = null; // renderList 의 이 PC 작업 그리기(다른 PC 작업 아래에 둔 것을 그릴 때)
 /** 이 PC 작업을 다른 PC 작업 아래로(parent) 또는 풀기(null). 화면에 먼저, 실패하면 되돌림 */
@@ -3170,6 +3257,8 @@ function pickTask(title, list) {
 // 끌어 놓기: 줄의 가운데에 놓으면 그 작업의 하위 작업으로, 위·아래 가장자리면 그 작업의 앞·뒤로(단계가 다르면 그 단계로 옮김).
 // 목록의 빈 곳에 놓으면 맨 위 작업으로. 자기 자신·자기 아래 작업 밑으로는 못 간다
 let draggingTask = null;
+/** 줄 안에서 놓은 높이(0~1) → 앞·하위로·뒤. 순서 바꾸기가 더 흔해서 위·아래를 넓게(35%씩), 가운데 30%만 하위로 */
+const dropZone = (y) => (y < 0.35 ? 'before' : y > 0.65 ? 'after' : 'inside');
 function setParentLocal(k, parentId) {
   if (parentId) delete k.info.remoteParent; // 이 PC 안의 부모로 옮기면 다른 PC 부모는 풀린다(서버도 같게)
   delete k.info.forkedFrom;
@@ -3192,7 +3281,7 @@ function dragTask(b, s) {
   const where = (e) => {
     const r = b.getBoundingClientRect();
     const y = (e.clientY - r.top) / r.height;
-    return y < 0.28 ? 'before' : y > 0.72 ? 'after' : 'inside';
+    return dropZone(y);
   };
   const ok = () => draggingTask && draggingTask !== s && !descendsFrom(s, draggingTask);
   b.addEventListener('dragover', (e) => {
@@ -3297,7 +3386,7 @@ function taskRow(s, depth, open) {
   // 일하는 중이면 지금 하는 일과 경과 시간, 아니면 AI · 상태 · 만든 시각
   const state = wait ? '승인 대기' : busy ? `${doingOf(s) || '작업 중'} · ${sinceText(s.turnStart ?? Date.now())}` : ask ? '확인 필요' : fresh ? '새 답' : STATUS[s.info.status];
   if (!depth) {
-    const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '대시보드 · ' : ''}${time}`);
+    const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '웹 · ' : ''}${time}`);
     sub.title = sub.textContent;
     b.append(sub);
   } else b.title = `${state} · ${time}`;

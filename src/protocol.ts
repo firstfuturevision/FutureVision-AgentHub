@@ -16,8 +16,8 @@ export type SessionRole = 'main' | 'worker' | 'direct';
 export type PermMode = 'ask' | 'readonly';
 
 /**
- * 원격 접속 — 바깥 시스템(사내 대시보드 등)이 HTTP(/events + /cmd)로 이 작업에 붙어 글을 주고받을 때 자기를 밝히는 표.
- * app = 시스템 이름(예: 대시보드), label = 그 안의 자리(예: 커뮤니케이션 #테스트), ref = 그 자리를 여는 주소(있으면)
+ * 원격 접속 — 바깥 시스템(회사 업무 웹 등)이 HTTP(/events + /cmd)로 이 작업에 붙어 글을 주고받을 때 자기를 밝히는 표.
+ * app = 시스템 이름(예: 대시보드), label = 그 안의 자리(예: 채팅 #일반), ref = 그 자리를 여는 주소(있으면)
  */
 export interface RemoteVia { app: string; label: string; ref?: string }
 /** 작업에 연결된 원격 접속 하나 — 작업 기록에서 모은다(app + label 이 같으면 같은 연결) */
@@ -205,7 +205,7 @@ export function parseVia(v: unknown): RemoteVia | undefined {
   return { app, label, ...(ref ? { ref } : {}) };
 }
 
-/** 원격 접속을 사람에게 보이는 이름: "대시보드 · 커뮤니케이션 #테스트" */
+/** 원격 접속을 사람에게 보이는 이름: "대시보드 · 채팅 #일반" */
 export const viaLabel = (v: RemoteVia) => `${v.app} · ${v.label}`;
 
 /** 바깥에서 들어온 JSON을 명령으로 확인한다. 모르는 모양은 null. */

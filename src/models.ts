@@ -6,7 +6,7 @@ import type { ModelOption } from './protocol.ts';
 /**
  * Claude 모델 목록·CLI 버전 — 코드에 고정해 두면 새 모델(예: Fable 5.2)이 나와도 안 보인다.
  *  - 모델: Claude Code CLI 에게 직접 묻는다(stream-json 의 control_request initialize → 응답의 models). 토큰을 쓰지 않는다.
- *    CLI 가 모르는 모델은 띄워도 "unrecognized_model" 로 거절되므로, CLI 가 아는 목록이 곧 쓸 수 있는 목록이다.
+ *    CLI 가 아는 목록이 곧 고를 목록이다. CLI 가 모르는 새 모델 ID 를 주면 "unrecognized_model" 경고만 남기고 그대로 보낼 때가 있지만(2.1.294 에서 claude-fable-5-2 확인), 새 모델은 CLI 를 업데이트해서 목록으로 받는다.
  *  - 버전: `claude --version` 과 npm 의 최신(@anthropic-ai/claude-code)을 견주어 새 버전이 있으면 연동에 업데이트 버튼(`claude update`).
  *  - 켤 때와 6시간마다 다시 묻고 data/claude-models.json 에 둔다(다음에 켤 때 바로 쓰게).
  */
