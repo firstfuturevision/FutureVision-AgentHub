@@ -298,6 +298,8 @@ function showNav(nav) {
   $('settings').hidden = nav !== 'settings';
   $('schedules-view').hidden = nav !== 'schedules';
   $('links-view').hidden = nav !== 'links';
+  $('archive-view').hidden = nav !== 'archive';
+  if (nav === 'archive') renderArchive();
   if (nav === 'schedules') void loadAllSchedules();
   if (nav === 'links') { renderTaskLinks(true); void loadPeers(true); }
   if (nav === 'settings') {
@@ -332,7 +334,7 @@ function renderPeers(box) {
   box.append(el('h3', 'link-h', 'PC'));
   box.append(el('p', 'hint', '사무실 네트워크의 다른 PC Agent Hub 입니다. 그 PC 에서 설정 → 연동 → 원격 접속을 켜면 저절로 보입니다(안 보이면 그 PC 에 보이는 원격 접속 주소를 아래에 더합니다). 작업에서 "PC이름/작업 에 전해 줘"라고 하면 다른 PC 작업에도 보냅니다.'));
   const list = el('div', 'sched-list');
-  const mine = [...sessions.values()].filter((s) => s.info.role === 'main');
+  const mine = mains();
   const me = el('div', 'sched-row');
   const top = el('div', 'sched-top');
   top.append(el('span', 'sched-when', peerState?.me ?? '이 PC'), el('span', 'link-kind', '이 PC'));
@@ -386,7 +388,7 @@ function renderPeers(box) {
 }
 
 function taskLinks() {
-  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker');
+  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived);
   const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
   for (const s of tasks) {
     for (const it of s.items) {
@@ -420,7 +422,7 @@ function renderTaskLinks(force) {
   box.append(el('p', 'hint', 'PC 마다 서로 이어진 작업(분담·포크로 갈라졌거나 서로 글을 보낸 작업)을 묶어 보입니다. 이 PC 작업을 누르면 그 작업으로, 다른 PC 작업을 누르면 그 PC 화면이 새 탭으로 열립니다.'));
   // 이 PC: 기록에서 바로(작업끼리 보낸 글도 묶는다)
   const { groups } = taskLinks();
-  const mine = [...sessions.values()].filter((s) => s.info.role === 'main');
+  const mine = mains();
   const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: s.info.splitFrom ? '분담' : '포크', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
   const grouped = new Set(groups.flat().map((s) => s.info.id));
   pcGroups(box, peerState?.me ?? '이 PC', groups.map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).map(node), true);
@@ -1639,7 +1641,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
-  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
+  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -1688,6 +1690,7 @@ function onEvent(ev) {
       break;
     case 'session.renamed': s.info.customTitle = ev.title; if (ev.aliases) s.info.aliases = ev.aliases; break;
     case 'session.reordered': s.info.rank = ev.rank; break;
+    case 'session.archived': if (ev.archived) { s.info.archived = true; if (viewId === s.info.id && !$('chat').hidden && replayed) viewId = null; } else delete s.info.archived; renderArchiveCount(); break;
     case 'session.about': if (ev.about) s.info.about = ev.about; else delete s.info.about; break;
     case 'session.rewound': {
       // 되감기: upTo 번째 사람 지시까지만 남기고 그 뒤는 화면에서도 걷는다(기록 파일에는 남음)
@@ -1773,7 +1776,7 @@ function onEvent(ev) {
 }
 
 // ── 그리기 ──────────────────────────────────
-const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main').sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
+const mains = () => [...sessions.values()].filter((s) => s.info.role === 'main' && !s.info.archived).sort((a, b) => b.info.createdAt.localeCompare(a.info.createdAt));
 const workersOf = (s) => s.items.filter((it) => it.k === 'worker').map((it) => sessions.get(it.id)).filter(Boolean);
 // 승인을 기다리는 건 일하는 중일 때뿐이다(묻는 CLI 는 차례 안에서 묻는다). 쉬는 작업에 남은 답 없는 요청은 기다리는 게 아니다
 const pendingPerm = (s) => (s.info.status === 'working' || s.info.status === 'starting') && s.items.some((it) => it.k === 'perm' && !it.resolved);
@@ -1924,6 +1927,11 @@ function openTaskMenu(s, x, y) {
     ['복사', () => {
       pendingCopy = s.info.id;
       send({ type: 'session.copy', sessionId: s.info.id });
+    }],
+    ['보관', async () => {
+      const kids = mainsAll().filter((k) => k !== s && descendsFrom(k, s));
+      const busy = [s, ...kids].some((k) => k.info.status === 'working' || k.info.status === 'starting');
+      if (await askDialog({ title: '작업 보관', text: `${titleOf(s).split('\n')[0].slice(0, 80)}${kids.length ? ` 와 그 아래 작업 ${kids.length}개` : ''}를 목록에서 숨깁니다. 보관하는 동안 예약은 돌지 않고, 다른 작업도 보내지 못합니다.${busy ? ' 하던 일은 멈춥니다.' : ''} 왼쪽 "보관"에서 꺼낼 수 있어요.`, ok: '보관' })) send({ type: 'session.archive', sessionId: s.info.id, archived: true });
     }],
     ['삭제', async () => {
       const running = s.info.status !== 'ended' ? '진행 중이면 멈춥니다. ' : '';
@@ -2718,10 +2726,55 @@ function openSchedForm(s, x) {
 const folded = new Set((() => { try { return JSON.parse(localStorage.getItem('hub.folded') || '[]'); } catch { return []; } })());
 function saveFolded() { try { localStorage.setItem('hub.folded', JSON.stringify([...folded])); } catch {} }
 
+// 보관: 목록에서 숨긴 작업(지우기 전 단계). 왼쪽 "보관"에서 보고 꺼내거나 지운다
+const mainsAll = () => [...sessions.values()].filter((s) => s.info.role === 'main');
+function descendsFrom(k, root) {
+  for (let p = parentOfTask(k), n = 0; p && n < 50; p = sessions.get(p) && parentOfTask(sessions.get(p)), n++) if (p === root.info.id) return true;
+  return false;
+}
+function renderArchiveCount() {
+  const n = mainsAll().filter((s) => s.info.archived).length;
+  $('archive-count').textContent = n ? String(n) : '';
+  if (!$('archive-view').hidden) renderArchive();
+}
+function renderArchive() {
+  const box = $('archive-all');
+  box.replaceChildren();
+  const arch = mainsAll().filter((s) => s.info.archived);
+  box.append(el('p', 'hint', `보관한 작업 ${arch.length}개. 보관하는 동안 예약은 돌지 않고, 다른 작업도 보내지 못합니다. 꺼내면 원래 자리로 돌아가요(그 아래 작업도 함께).`));
+  const list = el('div', 'sched-list');
+  const roots = arch.filter((s) => !arch.some((p) => p.info.id === parentOfTask(s)));
+  for (const s of roots.sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0))) {
+    const kids = arch.filter((k) => descendsFrom(k, s));
+    const row = el('div', 'sched-row');
+    const top = el('div', 'sched-top');
+    const name = el('button', 'sched-task', titleOf(s).split('\n')[0]);
+    name.type = 'button';
+    name.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
+    const out = el('button', 'line-btn', '꺼내기');
+    out.type = 'button';
+    out.onclick = () => send({ type: 'session.archive', sessionId: s.info.id, archived: false });
+    const del = el('button', 'line-btn sched-del', '삭제');
+    del.type = 'button';
+    del.onclick = async () => {
+      if (!(await askDialog({ title: '작업 삭제', text: `${titleOf(s).split('\n')[0].slice(0, 80)}${kids.length ? ` 와 그 아래 작업 ${kids.length}개` : ''}. 기록 파일은 남습니다.`, ok: '삭제', danger: true }))) return;
+      for (const k of [...kids].reverse()) await send({ type: 'session.delete', sessionId: k.info.id });
+      await send({ type: 'session.delete', sessionId: s.info.id });
+    };
+    top.append(name, out, del);
+    row.append(top);
+    const meta = [kids.length ? `아래 작업 ${kids.length}개: ${kids.map((k) => titleOf(k).split('\n')[0]).slice(0, 6).join(', ')}${kids.length > 6 ? ' …' : ''}` : '', s.lastAt ? `마지막 ${new Date(s.lastAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''].filter(Boolean).join('  ·  ');
+    if (meta) row.append(el('div', 'sched-meta', meta));
+    list.append(row);
+  }
+  if (!arch.length) list.append(el('p', 'hint', '보관한 작업이 없어요. 작업 목록에서 작업의 메뉴 → 보관.'));
+  box.append(list);
+}
+
 // 목록 순서: 사람이 끌어 옮긴 자리(rank, 서버에 남아 어느 기기든 같다)가 있으면 그것,
 // 없으면 맨 위 단계는 최근 것부터 · 갈래(포크 · 분담)는 오래된 것부터. 계층은 못 바꾸고 같은 단계 안에서만 옮긴다
 const parentOfTask = (k) => k.info.forkedFrom ?? k.info.splitFrom;
-const isTopTask = (k) => !parentOfTask(k) || !sessions.get(parentOfTask(k));
+const isTopTask = (k) => !parentOfTask(k) || !sessions.get(parentOfTask(k)) || Boolean(sessions.get(parentOfTask(k)).info.archived) !== Boolean(k.info.archived);
 const rankOf = (k) => k.info.rank ?? (isTopTask(k) ? -1 : 1) * Date.parse(k.info.createdAt);
 const byRank = (a, b) => rankOf(a) - rankOf(b);
 /** k 와 같은 단계(같은 원본 아래, 또는 맨 위)의 작업들, 보이는 순서대로 */

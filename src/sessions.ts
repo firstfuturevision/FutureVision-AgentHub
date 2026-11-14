@@ -288,6 +288,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.archived') { if (e.archived) info.archived = true; else delete info.archived; }
         if (e.type === 'session.about') { if (e.about) info.about = e.about; else delete info.about; }
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
@@ -607,6 +608,16 @@ export class SessionManager {
     return live.info.customTitle ?? (first && first.type === 'user.message' ? first.text.replace(/\s+/g, ' ').slice(0, 40) : '새 작업');
   }
 
+  /** 분담·포크로 갈라진 아래 작업 전부 */
+  private descendants(live: Live): Live[] {
+    const out: Live[] = [];
+    const walk = (id: string) => {
+      for (const s of this.sessions.values()) if (s.info.role === 'main' && (s.info.splitFrom ?? s.info.forkedFrom) === id && !out.includes(s)) { out.push(s); walk(s.info.id); }
+    };
+    walk(live.info.id);
+    return out;
+  }
+
   /** 역할 설명 바꾸기(빈 글 = 지움) */
   private setAbout(live: Live, about: string) {
     const v = about.trim().slice(0, 500);
@@ -642,7 +653,7 @@ export class SessionManager {
   findTask(key: string): Live {
     const k = String(key ?? '').trim().toLowerCase();
     if (!k) throw new Error('작업 이름을 주세요(session_list 의 name)');
-    const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main');
+    const mains = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived);
     const byId = mains.filter((l) => l.info.id.toLowerCase().startsWith(k));
     if (byId.length === 1 && k.length >= 4) return byId[0];
     // 지금 이름이 먼저, 없으면 예전 이름(별칭)으로
@@ -666,7 +677,7 @@ export class SessionManager {
 
   /** 메인 작업 목록: 이름, id, 상태, 분담 원본, 예약 수, 권한 */
   taskList() {
-    return [...this.sessions.values()].filter((l) => l.info.role === 'main').map((l) => {
+    return [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived).map((l) => {
       const from = l.info.splitFrom ?? l.info.forkedFrom;
       const src = from ? this.sessions.get(from) : undefined;
       return {
@@ -685,7 +696,7 @@ export class SessionManager {
 
   /** 다른 PC 가 GET /peer/summary 로 가져가는 이 PC 요약: 메인 작업(전체 id) */
   peerSummary(name: string, version?: string): PeerSummary {
-    const tasks = [...this.sessions.values()].filter((l) => l.info.role === 'main').map((l) => {
+    const tasks = [...this.sessions.values()].filter((l) => l.info.role === 'main' && !l.info.archived).map((l) => {
       const from = l.info.splitFrom ?? l.info.forkedFrom;
       const src = from ? this.sessions.get(from) : undefined;
       return {
@@ -938,6 +949,22 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         this.rename(live, cmd.title);
+        return;
+      }
+      case 'session.archive': {
+        // 보관·꺼내기: 그 작업과 그 아래(분담·포크로 갈라진) 작업까지. 보관하면 하던 차례는 멈춘다
+        const live = this.get(cmd.sessionId);
+        if (!live) return;
+        const all = [live, ...this.descendants(live)];
+        for (const t of all) {
+          if (Boolean(t.info.archived) === cmd.archived) continue;
+          if (cmd.archived) {
+            for (const w of this.sessions.values()) if (w.info.parentId === t.info.id) this.halt(w, origin.user);
+            if (t.info.status === 'working' || t.info.status === 'starting') this.halt(t, origin.user);
+            t.info.archived = true;
+          } else delete t.info.archived;
+          this.publish({ type: 'session.archived', sessionId: t.info.id, archived: cmd.archived });
+        }
         return;
       }
       case 'session.setAbout': {
@@ -1194,6 +1221,12 @@ export class SessionManager {
     if (!this.schedules) return;
     for (const s of this.schedules.due(now)) {
       if (this.scheduleRunning.has(s.id)) continue;
+      // 보관한 작업의 예약은 돌리지 않는다(다음 차례로만 넘긴다)
+      if (this.sessions.get(s.sessionId)?.info.archived) {
+        this.schedules.markRun(s.id, now, '보관 중이라 건너뜀');
+        this.schedulesChanged();
+        continue;
+      }
       // 간격 예약: 앞 차례의 일이 아직 안 끝났으면 이번 차례는 건너뛴다(지시가 쌓이지 않게)
       const st = this.sessions.get(s.sessionId)?.info.status;
       if (s.repeat === 'interval' && (st === 'working' || st === 'starting')) {
