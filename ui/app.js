@@ -297,7 +297,9 @@ function showNav(nav) {
   $('chat').hidden = nav !== 'sessions';
   $('settings').hidden = nav !== 'settings';
   $('schedules-view').hidden = nav !== 'schedules';
+  $('links-view').hidden = nav !== 'links';
   if (nav === 'schedules') void loadAllSchedules();
+  if (nav === 'links') renderTaskLinks(true);
   if (nav === 'settings') {
     renderSettings();
     loadPresets();
@@ -310,6 +312,117 @@ function showNav(nav) {
   renderPanel();
 }
 for (const b of document.querySelectorAll('[data-nav]')) b.onclick = () => showNav(b.dataset.nav);
+
+// ── 연결(왼쪽 "연결" 탭): 서로 이어진 작업 묶음 — 분담·포크, 작업끼리 보낸 글(session_send), 바깥 시스템 ──
+/** "작업 이름" 으로 온 글의 보낸 작업 찾기(이름을 바꿨어도 예전 이름으로) */
+function taskByName(name) {
+  for (const s of sessions.values()) if (s.info.role !== 'worker' && (titleOf(s) === name || (s.info.aliases ?? []).includes(name))) return s;
+  return null;
+}
+function taskLinks() {
+  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker');
+  const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
+  for (const s of tasks) {
+    for (const it of s.items) {
+      if (it.k !== 'user' || !it.from?.startsWith('작업 ')) continue;
+      const from = taskByName(it.from.slice(3));
+      const key = `${from?.info.id ?? it.from}>${s.info.id}`;
+      const e = sends.get(key) ?? { from, fromName: it.from.slice(3), to: s, n: 0, at: 0, t: '' };
+      e.n++;
+      if ((it.at ?? 0) >= e.at) { e.at = it.at ?? 0; e.t = it.t; }
+      sends.set(key, e);
+    }
+  }
+  // 묶음: 분담·포크로 이어졌거나 서로 글을 보낸 작업끼리
+  const up = new Map(tasks.map((s) => [s.info.id, s.info.id]));
+  const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
+  const join = (a, b) => { if (up.has(a) && up.has(b)) up.set(find(a), find(b)); };
+  for (const s of tasks) { const p = s.info.splitFrom ?? s.info.forkedFrom; if (p) join(s.info.id, p); }
+  for (const e of sends.values()) if (e.from) join(e.from.info.id, e.to.info.id);
+  const groups = new Map();
+  for (const s of tasks) { const g = find(s.info.id); (groups.get(g) ?? groups.set(g, []).get(g)).push(s); }
+  return { groups: [...groups.values()].filter((g) => g.length > 1), sends: [...sends.values()], remote: tasks.filter((s) => s.remotes?.length) };
+}
+let linksAt = 0;
+function renderTaskLinks(force) {
+  // 탭이 열려 있을 때만. 답이 조각조각 올 때 모든 기록을 매번 훑지 않게(누르려던 단추가 그사이 바뀌지 않게도) 2초에 한 번
+  if ($('links-view').hidden || (!force && Date.now() - linksAt < 2000)) return;
+  linksAt = Date.now();
+  const { groups, sends, remote } = taskLinks();
+  const box = $('links-all');
+  box.replaceChildren();
+  box.append(el('p', 'hint', '서로 이어진 작업 묶음입니다. 분담·포크로 갈라졌거나 서로 글을 보낸 작업끼리 묶입니다. 작업끼리는 묶여 있지 않아도 이름만 알면 보낼 수 있어요(작업에서 "○○ 작업에 전해 줘"). 작업 이름을 누르면 그 작업으로 갑니다.'));
+  const when = (t) => (t ? new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+  const open = (s) => () => { viewId = s.info.id; showNav('sessions'); render(); };
+  const taskBtn = (s, cls = 'sched-task') => {
+    const b = el('button', cls, titleOf(s));
+    b.type = 'button';
+    b.onclick = open(s);
+    return b;
+  };
+  const list = el('div', 'sched-list');
+  for (const g of groups.sort((a, b) => Math.max(...b.map((s) => s.lastAt ?? 0)) - Math.max(...a.map((s) => s.lastAt ?? 0)))) {
+    const card = el('div', 'sched-row link-group');
+    const ids = new Set(g.map((s) => s.info.id));
+    // 분담·포크 나무: 원본이 묶음 밖(또는 없음)인 것부터, 그 아래 갈라진 것
+    const kids = (id) => g.filter((s) => (s.info.splitFrom ?? s.info.forkedFrom) === id);
+    const roots = g.filter((s) => !ids.has(s.info.splitFrom ?? s.info.forkedFrom ?? ''));
+    const tree = el('div', 'link-tree');
+    const add = (s, depth) => {
+      const row = el('div', 'link-task');
+      row.style.paddingLeft = `${depth * 16}px`;
+      row.append(el('span', `link-dot ${isBusy(s) ? 'busy' : ''}`));
+      row.append(taskBtn(s, 'link-name'));
+      const kind = depth ? (s.info.splitFrom ? '분담' : '포크') : '';
+      if (kind) row.append(el('span', 'link-kind', kind));
+      if (isBusy(s)) row.append(el('span', 'link-kind', '작업 중'));
+      tree.append(row);
+      for (const k of kids(s.info.id)) add(k, depth + 1);
+    };
+    for (const r of roots) add(r, 0);
+    // 주고받은 글이 먼저(최근 것부터), 그 아래 작업 나무
+    const mine = sends.filter((e) => ids.has(e.to.info.id)).sort((a, b) => b.at - a.at);
+    if (mine.length) {
+      card.append(el('div', 'link-sub', `주고받은 글 ${mine.reduce((n, e) => n + e.n, 0)}개`));
+      const log = el('div', 'link-sends');
+      for (const e of mine) {
+        const row = el('div', 'link-send');
+        row.append(el('span', 'link-arrow', `${e.from ? titleOf(e.from) : e.fromName} → ${titleOf(e.to)}`));
+        row.append(el('span', 'sched-meta', `${e.n}번${e.at ? ` · 마지막 ${when(e.at)}` : ''}`));
+        log.append(row, el('div', 'sched-prompt', e.t.replace(/\s+/g, ' ').slice(0, 160)));
+      }
+      card.append(log);
+    }
+    card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree);
+    // 묶음 전체에 알리기: 사람이 보낸 글로 묶음의 모든 작업에 들어간다
+    const all = el('button', 'line-btn', '묶음 전체에 보내기');
+    all.type = 'button';
+    all.onclick = async () => {
+      const text = await askDialog({ title: `묶음 전체에 보내기 · 작업 ${g.length}개`, text: g.map(titleOf).join(', '), input: '', placeholder: '모든 작업에 보낼 글', ok: '보내기' });
+      if (!text) return;
+      for (const s of g) await send({ type: 'user.message', sessionId: s.info.id, text });
+      flash(`작업 ${g.length}개에 보냈어요`);
+    };
+    const foot = el('div', 'link-foot');
+    foot.append(all);
+    card.append(foot);
+    list.append(card);
+  }
+  if (!groups.length) list.append(el('p', 'hint', '아직 서로 이어진 작업이 없어요. 작업을 분담하거나 작업끼리 글을 보내면 여기에 묶여 보입니다.'));
+  box.append(list);
+  if (remote.length) {
+    box.append(el('h3', 'link-h', '바깥 시스템 연결'));
+    const rl = el('div', 'sched-list');
+    for (const s of remote) {
+      const row = el('div', 'sched-row');
+      const top = el('div', 'sched-top');
+      top.append(taskBtn(s));
+      row.append(top, el('div', 'sched-meta', s.remotes.map((r) => `${r.app} · ${r.label}`).join(', ')));
+      rl.append(row);
+    }
+    box.append(rl);
+  }
+}
 
 // ── 모든 예약(왼쪽 "예약" 탭): 시각순, 마지막 결과, 켜고 끄기·지우기, 같은 시각에 몰리면 알림 ──
 let allSchedules = [];
@@ -1413,7 +1526,7 @@ es.onerror = () => {
 es.onmessage = (m) => onEvent(JSON.parse(m.data));
 
 function onEvent(ev) {
-  if (ev.type === 'replay.done') { replayed = true; if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
+  if (ev.type === 'replay.done') { replayed = true; linksAt = 0; if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
   if ((ev.type === 'notice' || ev.type === 'error') && !ev.sessionId) return flash(ev.message, ev.type === 'error');
   // 프리셋이 바뀌면(설정 화면이든 메인 에이전트든) 설정 화면을 다시 읽는다
   if (ev.type === 'presets.changed') { // 설정 목록·메인 선택·@ 팝업 모두 새로(공유 레포에서 받은 것 포함)
@@ -1491,7 +1604,7 @@ function onEvent(ev) {
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
     // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 커뮤니케이션 #테스트)
-    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
+    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments, at }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -1808,6 +1921,7 @@ function render() {
   renderChat();
   renderPanel();
   renderClaudeCode();
+  renderTaskLinks();
 }
 
 // ── 새 작업: 이 PC 의 Claude Code 세션 이어 하기(이 화면에서만 — 대시보드 연결에는 없음) ──

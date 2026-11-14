@@ -16,6 +16,7 @@
         <button id="side-close" class="icon only-mobile" type="button" aria-label="목록 닫기">✕</button>
       </div>
       <button type="button" data-nav="schedules" aria-current="false" class="new-task side-sched"><span class="nav-ico"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.6V8l2.3 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>예약<span id="sched-count" class="sched-count"></span></button>
+      <button type="button" data-nav="links" aria-current="false" class="new-task side-sched"><span class="nav-ico"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="4" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="4" r="2.1" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="2.1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.9 7l4.2-2M5.9 9l4.2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>연결</button>
       <button id="new-task" class="new-task" type="button"><span class="nav-ico">＋</span>새 작업</button>
       <div id="side-alerts" class="side-alerts"></div>
       <nav id="task-list" class="task-list"></nav>
@@ -33,6 +34,17 @@
       </header>
       <div class="scroll">
         <div class="settings" id="sched-all"></div>
+      </div>
+    </main>
+
+    <!-- 가운데: 작업끼리의 연결(분담·포크·전달·바깥 시스템) -->
+    <main id="links-view" class="settings-view" hidden>
+      <header class="chat-top">
+        <button class="icon only-mobile side-open" type="button" aria-label="목록 열기">☰</button>
+        <span class="chat-title">연결</span>
+      </header>
+      <div class="scroll">
+        <div class="settings" id="links-all"></div>
       </div>
     </main>
 
