@@ -90,6 +90,7 @@ export type HostEvent =
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다
   | { type: 'agent.health'; agent: AgentKind; state: 'ok' | 'error'; message: string } // AI 연결 상태(로그인 만료·크레딧 부족 등). GET /health 로도
+  | { type: 'session.reparented'; sessionId: string; parentId: string | null } // 계층 옮김: 이 작업의 부모(null = 맨 위). 새 부모에게는 옮긴 뒤 한 일부터 공유
   | { type: 'session.intakeSet'; sessionId: string; on: boolean } // 입력 거치기를 켜거나 끔
   | { type: 'session.intake'; sessionId: string; state: 'pending' | 'asked' | 'forwarded' | 'routed'; text?: string; request?: string } // 입력 세션이 이 작업의 지시를 정리 중·물음·넘김·다른 작업으로 보냄
   | { type: 'session.archived'; sessionId: string; archived: boolean } // 보관하거나 꺼냄
@@ -124,6 +125,8 @@ export type ClientCommand =
   | { type: 'session.setAbout'; sessionId: string; about: string }
   | { type: 'session.archive'; sessionId: string; archived: boolean }
   | { type: 'session.setIntake'; sessionId: string; on: boolean }
+  | { type: 'session.reparent'; sessionId: string; parentId: string | null }
+  | { type: 'session.mergeInto'; sessionId: string; targetId: string }
   | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
@@ -248,6 +251,12 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       if (!str(c.sessionId) || !title) return null;
       return { type: 'session.rename', sessionId: c.sessionId as string, title };
     }
+    case 'session.reparent':
+      if (!str(c.sessionId) || !(c.parentId === null || str(c.parentId))) return null;
+      return { type: 'session.reparent', sessionId: c.sessionId as string, parentId: (c.parentId as string | null) };
+    case 'session.mergeInto':
+      if (!str(c.sessionId) || !str(c.targetId)) return null;
+      return { type: 'session.mergeInto', sessionId: c.sessionId as string, targetId: c.targetId as string };
     case 'session.setIntake':
       if (!str(c.sessionId) || typeof c.on !== 'boolean') return null;
       return { type: 'session.setIntake', sessionId: c.sessionId as string, on: c.on };

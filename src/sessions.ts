@@ -102,7 +102,7 @@ function conversation(history: HostEvent[], upTo?: number): string[] {
       users++;
       lines.push(`${speaker(e)}: ${e.text}`);
     } else if (e.type === 'agent.text' && !e.partial) lines.push(`에이전트: ${e.text}`);
-    else if (e.type === 'session.merged') lines.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${e.text}`);
+    else if (e.type === 'session.merged') lines.push(`[하위 작업 공유: ${e.title}]\n${e.text}`);
   }
   return lines;
 }
@@ -126,7 +126,7 @@ export function digest(events: HostEvent[]): string[] {
     if (e.type === 'user.message') { flush(); out.push(`${speaker(e)}: ${e.from === '예약' ? clip(e.text.split('\n')[0], 200) : clip(e.text, 1500)}`); }
     else if (e.type === 'agent.text' && !e.partial) last = e.text;
     else if (e.type === 'turn.done') flush();
-    else if (e.type === 'session.merged') { flush(); out.push(`[${e.kind === 'split' ? '분담' : '포크'} 공유: ${e.title}]\n${clip(e.text, 3000)}`); }
+    else if (e.type === 'session.merged') { flush(); out.push(`[하위 작업 공유: ${e.title}]\n${clip(e.text, 3000)}`); }
   }
   flush();
   return out;
@@ -290,6 +290,7 @@ export class SessionManager {
       for (const e of events) {
         if (e.type === 'session.renamed') { info.customTitle = e.title; if (e.aliases) info.aliases = e.aliases; }
         if (e.type === 'session.reordered') info.rank = e.rank;
+        if (e.type === 'session.reparented') { delete info.forkedFrom; if (e.parentId) info.splitFrom = e.parentId; else delete info.splitFrom; }
         if (e.type === 'session.intakeSet') { if (e.on) info.viaIntake = true; else delete info.viaIntake; }
         if (e.type === 'session.archived') { if (e.archived) info.archived = true; else delete info.archived; }
         if (e.type === 'session.about') { if (e.about) info.about = e.about; else delete info.about; }
@@ -682,6 +683,17 @@ export class SessionManager {
     if (live && live.info.model !== this.intake.model) await this.handle({ type: 'session.configure', sessionId: live.info.id, model: this.intake.model }, { via: 'local', user: 'local' });
   }
 
+  /** 부모 바꾸기(기록에 남겨 다시 켜도 그대로) */
+  private reparent(live: Live, parentId: string | null) {
+    const now = live.info.splitFrom ?? live.info.forkedFrom ?? null;
+    if (now === parentId && !live.info.forkedFrom) return;
+    delete live.info.forkedFrom;
+    if (parentId) live.info.splitFrom = parentId;
+    else delete live.info.splitFrom;
+    delete live.info.rank; // 새 자리에서는 기본 순서로
+    this.publish({ type: 'session.reparented', sessionId: live.info.id, parentId });
+  }
+
   /** 분담·포크로 갈라진 아래 작업 전부 */
   private descendants(live: Live): Live[] {
     const out: Live[] = [];
@@ -706,7 +718,7 @@ export class SessionManager {
     for (let i = live.history.length - 1; i >= 0; i--) {
       const e = live.history[i];
       if (e.type !== 'user.message') continue;
-      const line = e.text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('[분담 공유') && !l.startsWith('[첨부') && !l.startsWith('사람(') && !l.startsWith('에이전트:') && !l.startsWith('- 첨부'));
+      const line = e.text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('[분담 공유') && !l.startsWith('[하위 작업 공유') && !l.startsWith('[포크 공유') && !l.startsWith('[첨부') && !l.startsWith('사람(') && !l.startsWith('에이전트:') && !l.startsWith('- 첨부'));
       if (line) return line.length > 100 ? `${line.slice(0, 100)}…` : line;
     }
     return undefined;
@@ -982,7 +994,7 @@ export class SessionManager {
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
         this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
         // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)
-        if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && !cmd.text.trimStart().startsWith('/')) {
+        if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && !cmd.via?.label.startsWith('작업 ') && !cmd.text.trimStart().startsWith('/')) {
           if (await this.toIntake(live, cmd.text, atts)) return;
         }
         // 첨부: 모든 파일은 작업 폴더 경로로 알려 주고(에이전트가 열어 봄), 이미지는 이미지째 함께 보낸다
@@ -1027,6 +1039,31 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live) return;
         this.rename(live, cmd.title);
+        return;
+      }
+      case 'session.reparent': {
+        // 끌어 놓기로 계층 옮기기: 다른 작업 아래(하위 작업)로, 또는 맨 위로. 자기 자신·자기 아래 작업 밑으로는 못 간다
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main') return;
+        const parent = cmd.parentId ? this.get(cmd.parentId) : undefined;
+        if (cmd.parentId && (!parent || parent.info.role !== 'main' || parent === live || this.descendants(live).includes(parent))) {
+          return this.publish({ type: 'error', sessionId: live.info.id, message: '그 작업 아래로는 옮길 수 없음(자기 자신이나 자기 아래 작업)' });
+        }
+        this.reparent(live, parent?.info.id ?? null);
+        return;
+      }
+      case 'session.mergeInto': {
+        // 합치기: 이 작업이 한 일을 대상 작업에 넘기고, 아래 작업은 대상 아래로 옮기고, 이 작업은 보관한다(지우지 않아 되돌릴 수 있다)
+        const live = this.get(cmd.sessionId);
+        const target = this.get(cmd.targetId);
+        if (!live || !target || live === target || live.info.role !== 'main' || target.info.role !== 'main') return;
+        if (this.descendants(live).includes(target)) return this.publish({ type: 'error', sessionId: live.info.id, message: '자기 아래 작업에는 합칠 수 없음 — 먼저 그 작업을 밖으로 옮긴다' });
+        this.shareTo(live, target, 'split', 'all', true);
+        for (const k of [...this.sessions.values()]) if (k.info.role === 'main' && (k.info.splitFrom ?? k.info.forkedFrom) === live.info.id) this.reparent(k, target.info.id);
+        if (live.info.status === 'working' || live.info.status === 'starting') this.halt(live, origin.user);
+        live.info.archived = true;
+        this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
+        this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함)` });
         return;
       }
       case 'session.setIntake': {
@@ -1753,8 +1790,6 @@ export class SessionManager {
   /** 답이 끝날 때마다: 포크 → 원본, 분담 묶음 안에서는 끝난 쪽부터 모든 분담으로 */
   private share(live: Live) {
     if (live.info.role === 'worker') return;
-    const fork = live.info.forkedFrom ? this.sessions.get(live.info.forkedFrom) : undefined;
-    if (fork) this.shareTo(live, fork, 'fork', 'all');
     // 분담 공유는 위로만: 분담이 한 일은 자기 원본에게, 원본도 분담이면 그 원본에게 이어 넘긴다(맨 위 작업이 전체를 본다).
     // 아래·옆(원본 → 분담, 분담 ↔ 분담)으로는 보내지 않는다 — 받는 작업 지시 앞에 남의 일이 줄줄이 붙지 않게. 아래로 알릴 것은 session_send 로
     let from = live;
@@ -1770,7 +1805,8 @@ export class SessionManager {
 
   /** 분담해 온 원본(없으면 undefined) */
   private splitOrigin(live: Live): Live | undefined {
-    return live.info.splitFrom ? this.sessions.get(live.info.splitFrom) : undefined;
+    const p = live.info.splitFrom ?? live.info.forkedFrom; // 포크·분담 모두 "하위 작업" — 같은 규칙으로 위로만
+    return p ? this.sessions.get(p) : undefined;
   }
 
 
@@ -1779,16 +1815,18 @@ export class SessionManager {
    * 보내는 것은 차례마다 사람 지시와 그 차례의 마지막 보고뿐(중간 진행 말은 빼서 받는 쪽 컨텍스트를 아낀다).
    * target 에게서 받은 공유는 빼고 센다(양쪽 공유가 서로 메아리치지 않게).
    */
-  private shareTo(from: Live, target: Live, kind: 'fork' | 'split', what: 'own' | 'relay' | 'all' = 'all') {
+  private shareTo(from: Live, target: Live, kind: 'fork' | 'split', what: 'own' | 'relay' | 'all' = 'all', whole = false) {
     // 어디부터: 자기 일과 넘겨받은 공유를 따로 센다. 예전 기록(relay 표시 없음)은 자기 일로 본다
     const mine = target.history.filter((e) => e.type === 'session.merged' && e.fromId === from.info.id);
     const prevOwn = mine.filter((e) => !(e.type === 'session.merged' && e.relay)).at(-1);
     const prevRelay = mine.filter((e) => e.type === 'session.merged' && e.relay).at(-1);
     const created = target.history.find((e) => e.type === 'session.created');
     // 처음이면 원본 → 분담은 분담한 때부터(그 앞은 이미 이어받음)
-    const start = target.info.splitFrom === from.info.id && created ? (this.order.get(created) ?? 0) : 0;
+    // 계층을 옮겨 새 부모가 됐으면 옮긴 뒤부터(옛 대화가 한꺼번에 가지 않게). 합치기(whole)는 처음부터
+    const moved = [...from.history].reverse().find((e) => e.type === 'session.reparented' && e.parentId === target.info.id);
+    const start = whole ? 0 : target.info.splitFrom === from.info.id && created ? (this.order.get(created) ?? 0) : moved ? (this.order.get(moved) ?? 0) : 0;
     const cursor = (e: HostEvent | undefined) => (e && e.type === 'session.merged' ? (e.until ?? this.order.get(e) ?? 0) : undefined);
-    const since = what === 'relay' ? (cursor(prevRelay) ?? cursor(prevOwn) ?? start) : (cursor(prevOwn) ?? start);
+    const since = whole ? 0 : what === 'relay' ? (cursor(prevRelay) ?? cursor(prevOwn) ?? start) : (cursor(prevOwn) ?? start);
     const events = from.history.filter((e) => (this.order.get(e) ?? 0) > since
       && !(e.type === 'session.merged' && e.fromId === target.info.id)
       && (what === 'all' || (what === 'relay') === (e.type === 'session.merged')));
@@ -1796,13 +1834,11 @@ export class SessionManager {
     if (!fresh.length) return;
     const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
     const firstUser = from.history.find((e) => e.type === 'user.message');
-    const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : kind === 'split' ? '분담' : '포크');
+    const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : '하위 작업');
     const text = tail(fresh.join('\n'));
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}), ...(what === 'relay' ? { relay: true } : {}) });
-    const head = kind === 'split'
-      ? `[분담 공유: ${title} — 같은 일을 나눠 맡은 쪽이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`
-      : `[포크 공유: ${title} — 원본에서 갈라져 따로 한 일(사람 지시와 마지막 보고). 결과를 반영한다]`;
-    (target.merges ??= []).push({ label: `${kind === 'split' ? '분담' : '포크'} 공유 · ${title}`, text: `${head}\n${text}` });
+    const head = `[하위 작업 공유: ${title} — 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`;
+    (target.merges ??= []).push({ label: `하위 작업 공유 · ${title}`, text: `${head}\n${text}` });
     this.publishContext(target);
   }
 

@@ -76,7 +76,7 @@ test('복사: 설정·에이전트·대화를 가져가지만 원본과 잇지 �
   sessions.stopAll();
 });
 
-test('포크 공유: 포크의 답이 끝날 때마다 새 대화만 원본에 가고, 원본은 다음 지시에 받는다', async () => {
+test('하위 작업 공유: 포크의 답이 끝날 때마다 새 대화만 원본에 가고, 원본은 다음 지시에 받는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획');
@@ -92,7 +92,7 @@ test('포크 공유: 포크의 답이 끝날 때마다 새 대화만 원본에 �
   assert.equal(m1.text.split('\n')[0], '사람(local): 대안 A 검토');
   // 원본은 다음 지시에 공유받은 내용을 받는다(화면 기록에는 사람이 쓴 글만)
   const reply = await say(sessions, events, orig.id, '이어서');
-  assert.match(reply.text, /\[포크 공유: 대안 A 검토/);
+  assert.match(reply.text, /\[하위 작업 공유: 대안 A 검토/);
   assert.match(reply.text, /이어서$/);
   assert.ok(events.some((e) => e.type === 'user.message' && e.sessionId === orig.id && e.text === '이어서'));
   // 원본의 답은 포크로 공유되지 않는다(포크 → 원본 한 방향)
@@ -107,7 +107,7 @@ test('포크 공유: 포크의 답이 끝날 때마다 새 대화만 원본에 �
   sessions.stopAll();
 });
 
-test('포크 공유: CLI 가 꺼진 원본도 공유를 받고, 다음 지시에 다시 떠서 앞 대화와 공유를 한 번씩 이어받는다', async () => {
+test('하위 작업 공유: CLI 가 꺼진 원본도 공유를 받고, 다음 지시에 다시 떠서 앞 대화와 공유를 한 번씩 이어받는다', async () => {
   const { sessions, events } = setup();
   const orig = await newMain(sessions, events);
   await say(sessions, events, orig.id, '계획');
@@ -120,7 +120,7 @@ test('포크 공유: CLI 가 꺼진 원본도 공유를 받고, 다음 지시에
 
   const reply = await say(sessions, events, orig.id, '다음');
   assert.match(reply.text, /사람\(local\): 계획/);
-  assert.equal(reply.text.split('[포크 공유: 조사 결과 정리').length - 1, 1); // 공유는 한 번만
+  assert.equal(reply.text.split('[하위 작업 공유: 조사 결과 정리').length - 1, 1); // 공유는 한 번만
   assert.match(reply.text, /다음$/);
   sessions.stopAll();
 });
@@ -156,11 +156,11 @@ test('분담: 분담이 한 일은 원본에게만 가고, 원본이 한 일은 
 
   // 원본의 다음 지시에 분담 쪽 진행이 붙는다. 원본의 일은 분담에게 가지 않는다(아래로는 보내지 않음)
   const r2 = await say(sessions, events, orig.id, 'B 부분');
-  assert.match(r2.text, /\[분담 공유: A 부분/);
+  assert.match(r2.text, /\[하위 작업 공유: A 부분/);
   assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === part.id).length, 0);
 
   const r3 = await say(sessions, events, part.id, 'C 부분');
-  assert.doesNotMatch(r3.text, /분담 공유/);
+  assert.doesNotMatch(r3.text, /하위 작업 공유/);
   assert.equal(events.filter((e) => e.type === 'session.merged' && e.sessionId === orig.id).length, 2); // C 부분만 새로
   sessions.stopAll();
 });
@@ -268,7 +268,7 @@ test('컨텍스트: 사용량과, 앞 대화·공유가 다음 지시에 붙을 
   // 포크의 답이 끝나면 원본에 공유가 대기로 생기고, 원본의 다음 지시에 넣으면 대기가 풀린다
   const shared = lastItems(orig.id);
   assert.equal(shared.length, 1);
-  assert.match(shared[0].label, /^포크 공유 · 대안 A/);
+  assert.match(shared[0].label, /^하위 작업 공유 · 대안 A/);
   assert.equal(shared[0].pending, true);
   assert.ok(shared[0].chars > 0);
   await say(sessions, events, orig.id, '이어서');

@@ -84,7 +84,7 @@ test('공유 요약: 차례마다 사람 지시와 마지막 보고만, 다른 �
   assert.equal(out[0], '사람(local): 사이트맵 고쳐줘');
   assert.equal(out[1], '에이전트: 고쳤습니다. 사이트맵에 3개 추가.');
   assert.ok(!out.join('\n').includes('Now tests.'));
-  assert.match(out[2], /^\[분담 공유: 홈페이지\]/);
+  assert.match(out[2], /^\[하위 작업 공유: 홈페이지\]/);
   assert.ok(out[2].length < 3200);
   assert.deepEqual(out.slice(3), ['사람(예약): 푸시해', '에이전트: 푸시함']);
 });
@@ -154,7 +154,7 @@ test('새 코드 있음: 켠 뒤 src 가 바뀌면 알고, 끝나면 다시 켜�
   assert.equal(restarted, 1);
 });
 
-test('분담 공유: 위로만 — 아래 분담의 일은 가운데를 거쳐 맨 위까지 한 번씩, 옆·아래로는 안 감', async () => {
+test('하위 작업 공유: 위로만 — 아래 분담의 일은 가운데를 거쳐 맨 위까지 한 번씩, 옆·아래로는 안 감', async () => {
   const { sessions, events, create } = world();
   const top = await create();
   await sessions.handle({ type: 'session.rename', sessionId: top, title: '맨 위' }, local);
@@ -179,7 +179,7 @@ test('분담 공유: 위로만 — 아래 분담의 일은 가운데를 거쳐 �
   // 가운데가 자기 일을 하면 맨 위는 가운데 일만 받는다(아래 일은 이미 갔으니 넘겨받은 공유 꼴로 다시 가지 않음). 아래로는 안 감
   await sessions.handle({ type: 'user.message', sessionId: mid, text: '가운데 일 YY' }, local);
   await waitFor(events, (e) => e.type === 'turn.done' && e.sessionId === mid && events.some((x) => x.type === 'session.merged' && x.sessionId === top && x.text.includes('가운데 일 YY')));
-  const relayed = events.filter((e) => e.type === 'session.merged' && e.sessionId === top && /^\[분담 공유: 아래\]$/m.test(e.text));
+  const relayed = events.filter((e) => e.type === 'session.merged' && e.sessionId === top && /^\[하위 작업 공유: 아래\]$/m.test(e.text));
   assert.equal(relayed.length, 1);
   assert.equal(events.filter((e) => e.type === 'session.merged' && (e.sessionId === low || e.sessionId === side)).length, 0);
   sessions.stopAll();

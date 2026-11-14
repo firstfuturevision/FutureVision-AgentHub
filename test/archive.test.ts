@@ -63,3 +63,52 @@ test('보관: 아래 작업까지 숨고, 목록·보내기에서 빠지고, 예
   sessions.stopAll();
   b.sessions.stopAll();
 });
+
+test('계층 옮기기·합치기: 끌어 놓은 부모로 옮기고(새 부모에겐 옮긴 뒤부터 공유), 합치면 한 일을 넘기고 아래 작업을 옮기고 보관', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub tree '));
+  const ws = join(base, 'ws');
+  mkdirSync(ws);
+  const events: HostEvent[] = [];
+  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+  sessions.subscribe((e) => events.push(e));
+  try {
+    const mk = async (title: string) => {
+      const n = events.filter((e) => e.type === 'session.created').length;
+      await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title }, local);
+      const id = (events.filter((e) => e.type === 'session.created')[n] as any).session.id;
+      await sessions.handle({ type: 'session.rename', sessionId: id, title }, local);
+      return id;
+    };
+    const say = async (id: string, text: string) => {
+      const n = events.filter((e) => e.type === 'turn.done' && e.sessionId === id).length;
+      await sessions.handle({ type: 'user.message', sessionId: id, text }, local);
+      await waitFor(events, () => events.filter((e) => e.type === 'turn.done' && e.sessionId === id).length > n);
+    };
+    const a = await mk('가');
+    const b = await mk('나');
+    await say(b, '옛 일 OLD');
+    // 나 를 가 아래로
+    await sessions.handle({ type: 'session.reparent', sessionId: b, parentId: a }, local);
+    assert.equal(sessions.info(b)?.splitFrom, a);
+    await sessions.handle({ type: 'session.reparent', sessionId: a, parentId: b }, local); // 자기 아래 작업 밑으로는 못 감
+    assert.equal(sessions.info(a)?.splitFrom, undefined);
+    assert.ok(events.some((e) => e.type === 'error' && /옮길 수 없음/.test(e.message)));
+    await say(b, '새 일 NEW');
+    const toA = events.filter((e) => e.type === 'session.merged' && e.sessionId === a) as any[];
+    assert.equal(toA.length, 1);
+    assert.match(toA[0].text, /새 일 NEW/);
+    assert.doesNotMatch(toA[0].text, /옛 일 OLD/); // 옮긴 뒤부터
+    // 다 를 만들고 나 를 다 에 합치기: 나 의 일 전체가 다 로, 나 는 보관
+    const c = await mk('다');
+    await sessions.handle({ type: 'session.mergeInto', sessionId: b, targetId: c }, local);
+    const toC = events.filter((e) => e.type === 'session.merged' && e.sessionId === c) as any[];
+    assert.equal(toC.length, 1);
+    assert.match(toC[0].text, /옛 일 OLD/);
+    assert.equal(sessions.info(b)?.archived, true);
+    // 맨 위로
+    await sessions.handle({ type: 'session.reparent', sessionId: b, parentId: null }, local);
+    assert.equal(sessions.info(b)?.splitFrom, undefined);
+  } finally {
+    sessions.stopAll();
+  }
+});

@@ -424,7 +424,7 @@ function renderTaskLinks(force) {
   // 이 PC: 기록에서 바로(작업끼리 보낸 글도 묶는다)
   const { groups } = taskLinks();
   const mine = mains();
-  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: s.info.splitFrom ? '분담' : '포크', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
+  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: '하위', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
   const grouped = new Set(groups.flat().map((s) => s.info.id));
   const sendLocal = async (ids, text) => { for (const id of ids) await send({ type: 'user.message', sessionId: id, text }); return ids.length; };
   const sendPeer = (p) => async (ids, text) => {
@@ -453,7 +453,7 @@ function renderTaskLinks(force) {
     if (!p.ok) continue;
     const tasks = p.summary.tasks;
     const byName = new Map(tasks.map((t) => [t.name, t.id]));
-    const nodes = tasks.map((t) => ({ id: t.id, name: t.name, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: t.splitFrom ? '분담' : '포크', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
+    const nodes = tasks.map((t) => ({ id: t.id, name: t.name, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
     const up = new Map(nodes.map((n) => [n.id, n.id]));
     const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
     for (const n of nodes) if (n.parent && up.has(n.parent)) up.set(find(n.id), find(n.parent));
@@ -1907,20 +1907,16 @@ const titleOf = (s) => {
   return s.info.customTitle || first?.t || (first?.files?.length ? first.files[0].name : '') || (s.info.forkedFrom ? '포크한 작업' : s.info.splitFrom ? '분담한 작업' : s.info.copiedFrom ? '복사한 작업' : '새 작업');
 };
 
-// ── 작업 메뉴: 우클릭 또는 ⋯ → 이름 바꾸기 · 포크 · 분담 · 복사 · 삭제 ──
-// 포크 = 대화를 이어받아 갈라짐(답이 끝날 때마다 원본에 공유), 분담 = 이어받고 원본과 서로 공유, 복사 = 공유 없는 사본
+// ── 작업 메뉴: 우클릭 또는 ⋯ → 이름 바꾸기 · 하위 작업 · 합치기 · 복사 · 보관 · 삭제 ──
+// 하위 작업 = 대화를 이어받아 아래에 달림(한 일이 위로 공유, 예전 포크·분담), 복사 = 공유 없는 사본(다른 방법 시험)
 let pendingFork = null;
 let pendingCopy = null;
-function forkTask(s, upTo) {
-  pendingFork = s.info.id;
-  send({ type: 'session.fork', sessionId: s.info.id, ...(upTo !== undefined ? { upTo } : {}) });
-}
 function splitTask(s, upTo) {
   pendingFork = s.info.id;
   send({ type: 'session.split', sessionId: s.info.id, ...(upTo !== undefined ? { upTo } : {}) });
 }
 /**
- * 메시지 우클릭(폰은 길게 누르기): 여기로 되감기 · 여기서 포크 · 여기서 분담.
+ * 메시지 우클릭(폰은 길게 누르기): 여기로 되감기 · 여기서 하위 작업 · 다른 방법 시험(복사).
  * turn = 이 메시지가 속한 사람 지시 차례(1부터). 사람 지시에서 되감으면 그 지시 앞으로 돌아가고 글을 입력칸에 돌려놓는다
  */
 function messageMenu(s, it, turn, e) {
@@ -1938,8 +1934,7 @@ function messageMenu(s, it, turn, e) {
       send({ type: 'session.rewind', sessionId: s.info.id, upTo: back });
       if (it.k === 'user') { input.value = it.t; input.dispatchEvent(new Event('input')); input.focus(); }
     }],
-    ['여기서 포크', () => forkTask(s, turn)],
-    ['여기서 분담', () => splitTask(s, turn)],
+    ['여기서 하위 작업', () => splitTask(s, turn)],
   ];
   for (const [label, fn] of items) {
     const b = el('button', '', label);
@@ -1971,8 +1966,13 @@ function openTaskMenu(s, x, y) {
         ...(i >= 0 && i < sib.length - 1 ? [['아래로 옮기기', () => moveTask(s, i + 1)]] : []),
       ];
     })(),
-    ['포크', () => forkTask(s)],
-    ['분담', () => splitTask(s)],
+    ['하위 작업 만들기', () => splitTask(s)],
+    ['다른 작업에 합치기', async () => {
+      const t = await pickTask(`${titleOf(s).split('\n')[0].slice(0, 60)} 를 합칠 작업`, mains().filter((k) => k !== s && !descendsFrom(k, s)));
+      if (!t) return;
+      const kids = mains().filter((k) => parentOfTask(k) === s.info.id).length;
+      if (await askDialog({ title: '작업 합치기', text: `${titleOf(s).split('\n')[0].slice(0, 60)} 가 지금까지 한 일을 ${titleOf(t).split('\n')[0].slice(0, 60)} 에 넘기고${kids ? `, 그 아래 작업 ${kids}개도 그쪽으로 옮긴 뒤` : ''} 이 작업은 보관합니다(지우지 않아 왼쪽 보관에서 꺼낼 수 있어요).`, ok: '합치기' })) send({ type: 'session.mergeInto', sessionId: s.info.id, targetId: t.info.id });
+    }],
     ['복사', () => {
       pendingCopy = s.info.id;
       send({ type: 'session.copy', sessionId: s.info.id });
@@ -2535,10 +2535,9 @@ const chars = (n) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k자` : `${n}자`);
 /** 연결된 세션(포크 관계) · 백그라운드(지금 도는 하위 에이전트) · 하위 작업(끝났거나 쉬는 하위 에이전트 일) */
 function renderLinks(s) {
   const forks = [];
-  if (s.info.forkedFrom && sessions.get(s.info.forkedFrom)) forks.push({ s: sessions.get(s.info.forkedFrom), label: '포크 원본', sub: titleOf(sessions.get(s.info.forkedFrom)) });
-  for (const f of sessions.values()) if (f.info.forkedFrom === s.info.id) forks.push({ s: f, label: '포크', sub: titleOf(f) });
-  if (s.info.splitFrom && sessions.get(s.info.splitFrom)) forks.push({ s: sessions.get(s.info.splitFrom), label: '분담 원본', sub: titleOf(sessions.get(s.info.splitFrom)) });
-  for (const f of sessions.values()) if (f.info.splitFrom === s.info.id) forks.push({ s: f, label: '분담', sub: titleOf(f) });
+  const up = parentOfTask(s) && sessions.get(parentOfTask(s));
+  if (up) forks.push({ s: up, label: '위 작업', sub: titleOf(up) });
+  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f) });
   const running = [];
   const rest = [];
   for (const w of workersOf(s)) {
@@ -2901,7 +2900,51 @@ function renderList() {
 }
 
 // 끌어 놓기: 같은 단계의 작업 위에서만 놓을 수 있고, 줄의 위쪽 절반이면 그 앞, 아래쪽이면 그 뒤로
+/** 작업 하나 고르는 창(검색되는 목록) */
+function pickTask(title, list) {
+  return new Promise((resolve) => {
+    const back = el('div', 'dlg-back');
+    const box = el('div', 'dlg');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    const q = el('input', 'dlg-input');
+    q.placeholder = '작업 이름으로 찾기';
+    const ul = el('div', 'pick-list');
+    const done = (v) => { back.remove(); resolve(v); };
+    const draw = () => {
+      ul.replaceChildren();
+      for (const k of list.filter((k) => titleOf(k).toLowerCase().includes(q.value.trim().toLowerCase())).slice(0, 50)) {
+        const b = el('button', 'pick-item', titleOf(k).split('\n')[0]);
+        b.type = 'button';
+        b.onclick = () => done(k);
+        ul.append(b);
+      }
+    };
+    const no = el('button', 'dlg-no', '취소');
+    no.type = 'button';
+    no.onclick = () => done(null);
+    const foot = el('div', 'dlg-foot');
+    foot.append(no);
+    q.oninput = draw;
+    q.onkeydown = (e) => { if (e.key === 'Escape') done(null); };
+    box.append(el('div', 'dlg-title', title), q, ul, foot);
+    back.append(box);
+    back.onmousedown = (e) => { if (e.target === back) done(null); };
+    document.body.append(back);
+    draw();
+    q.focus();
+  });
+}
+
+// 끌어 놓기: 줄의 가운데에 놓으면 그 작업의 하위 작업으로, 위·아래 가장자리면 그 작업의 앞·뒤로(단계가 다르면 그 단계로 옮김).
+// 목록의 빈 곳에 놓으면 맨 위 작업으로. 자기 자신·자기 아래 작업 밑으로는 못 간다
 let draggingTask = null;
+function setParentLocal(k, parentId) {
+  delete k.info.forkedFrom;
+  if (parentId) k.info.splitFrom = parentId; else delete k.info.splitFrom;
+  delete k.info.rank;
+  send({ type: 'session.reparent', sessionId: k.info.id, parentId: parentId ?? null });
+}
 function dragTask(b, s) {
   b.draggable = true;
   b.ondragstart = (e) => {
@@ -2912,29 +2955,59 @@ function dragTask(b, s) {
   };
   b.ondragend = () => {
     draggingTask = null;
-    for (const x of document.querySelectorAll('.task.drop-before, .task.drop-after, .task.dragging')) x.classList.remove('drop-before', 'drop-after', 'dragging');
+    for (const x of document.querySelectorAll('.task.drop-before, .task.drop-after, .task.drop-inside, .task.dragging, .task-list.drop-top')) x.classList.remove('drop-before', 'drop-after', 'drop-inside', 'dragging', 'drop-top');
   };
   const where = (e) => {
     const r = b.getBoundingClientRect();
-    return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+    const y = (e.clientY - r.top) / r.height;
+    return y < 0.28 ? 'before' : y > 0.72 ? 'after' : 'inside';
   };
-  const ok = () => draggingTask && draggingTask !== s && siblingsOf(s).includes(draggingTask);
+  const ok = () => draggingTask && draggingTask !== s && !descendsFrom(s, draggingTask);
   b.ondragover = (e) => {
     if (!ok()) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
     const w = where(e);
     b.classList.toggle('drop-before', w === 'before');
     b.classList.toggle('drop-after', w === 'after');
+    b.classList.toggle('drop-inside', w === 'inside');
   };
-  b.ondragleave = () => b.classList.remove('drop-before', 'drop-after');
+  b.ondragleave = () => b.classList.remove('drop-before', 'drop-after', 'drop-inside');
   b.ondrop = (e) => {
     if (!ok()) return;
     e.preventDefault();
+    e.stopPropagation();
     const moved = draggingTask;
+    const w = where(e);
+    if (w === 'inside') {
+      if (parentOfTask(moved) !== s.info.id) setParentLocal(moved, s.info.id);
+      folded.delete(s.info.id); // 놓은 곳을 펼쳐 보인다
+      saveFolded();
+      return renderList();
+    }
+    const parent = isTopTask(s) ? null : parentOfTask(s);
+    if ((isTopTask(moved) ? null : parentOfTask(moved)) !== parent) setParentLocal(moved, parent);
     const i = siblingsOf(s).filter((k) => k !== moved).indexOf(s);
-    moveTask(moved, where(e) === 'before' ? i : i + 1);
+    moveTask(moved, w === 'before' ? i : i + 1);
   };
+}
+// 목록의 빈 곳(작업 줄 밖)에 놓으면 맨 위 작업으로
+{
+  const list = $('task-list');
+  list.addEventListener('dragover', (e) => {
+    if (!draggingTask || isTopTask(draggingTask) || e.target !== list) return list.classList.remove('drop-top');
+    e.preventDefault();
+    list.classList.add('drop-top');
+  });
+  list.addEventListener('dragleave', () => list.classList.remove('drop-top'));
+  list.addEventListener('drop', (e) => {
+    list.classList.remove('drop-top');
+    if (!draggingTask || isTopTask(draggingTask) || e.target !== list) return;
+    e.preventDefault();
+    setParentLocal(draggingTask, null);
+    renderList();
+  });
 }
 
 /** 작업 한 줄. 포크(depth>0)는 이름만. open: 포크가 달려 있으면 펼침 여부, 없으면 null */
@@ -2948,7 +3021,7 @@ function taskRow(s, depth, open) {
   const ask = !wait && askIn(s); // 답했는데 사람에게 물은 것 · 할 일이 남음
   const time = new Date(s.info.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
-  if (depth && s.info.splitFrom) head.append(el('span', 'task-tag', '분담')); // 서로 공유하는 갈래
+  if (depth) head.append(el('span', 'task-tag', '하위')); // 한 일이 위로 공유되는 하위 작업
   head.append(el('span', `task-title${fresh ? ' fresh' : ''}`, titleOf(s)));
   if (ask) {
     const dot = el('span', 'task-ask');
@@ -3024,12 +3097,9 @@ function renderChat() {
   const log = $('log');
   log.replaceChildren();
   if (s) {
-    if (s.info.forkedFrom) {
-      const from = sessions.get(s.info.forkedFrom);
-      log.append(el('div', 'note', from ? `${titleOf(from)} 에서 포크. 여기서 한 일은 원본에 공유돼요` : '지워진 작업에서 포크'));
-    } else if (s.info.splitFrom) {
-      const from = sessions.get(s.info.splitFrom);
-      log.append(el('div', 'note', from ? `${titleOf(from)} 와 분담. 서로 한 일이 다음 지시에 공유돼요` : '지워진 작업에서 분담'));
+    if (parentOfTask(s)) {
+      const from = sessions.get(parentOfTask(s));
+      log.append(el('div', 'note', from ? `${titleOf(from)} 의 하위 작업. 여기서 한 일은 위 작업에 공유돼요` : '지워진 작업의 하위 작업'));
     } else if (s.info.copiedFrom) {
       const from = sessions.get(s.info.copiedFrom);
       log.append(el('div', 'note', `${from ? titleOf(from) : '지워진 작업'} 에서 복사`));
@@ -3209,22 +3279,22 @@ function el(tag, cls, text) {
   return e;
 }
 
-/** 메인의 답: 마우스를 올리면 "여기서 포크" — 이 차례까지의 대화를 가져가 갈라진다 */
+/** 메인의 답: 마우스를 올리면 "여기서 하위 작업" — 이 차례까지의 대화를 가져가 아래에 달린다 */
 function agentItem(s, it, upTo) {
   const div = item(it);
-  const b = el('button', 'msg-fork', '여기서 포크');
+  const b = el('button', 'msg-fork', '여기서 하위 작업');
   b.type = 'button';
-  b.title = '이 답까지의 대화를 이어받아 새 작업으로';
-  b.onclick = () => forkTask(s, upTo);
+  b.title = '이 답까지의 대화를 이어받아 하위 작업으로(한 일이 이 작업에 공유돼요)';
+  b.onclick = () => splitTask(s, upTo);
   div.append(b);
   div.oncontextmenu = (e) => messageMenu(s, it, upTo, e);
   return div;
 }
 
-/** 포크에서 공유받은 대화: 접힌 카드, 누르면 그 대화 */
+/** 하위 작업에서 공유받은 대화: 접힌 카드, 누르면 그 대화 */
 function mergedItem(it) {
   const box = el('details', 'merged');
-  const head = el('summary', '', `${it.split ? '분담' : '포크'} 공유 · ${it.t}`);
+  const head = el('summary', '', `하위 작업 공유 · ${it.t}`);
   const body = el('div', 'merged-body');
   for (const turn of mergedTurns(it.text)) {
     const div = el('div', 'merged-turn');
