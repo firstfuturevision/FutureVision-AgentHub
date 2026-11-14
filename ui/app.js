@@ -2676,20 +2676,20 @@ function renderList() {
     }
     return g;
   };
-  // 사람이 봐야 할 작업(승인 대기 · 확인 필요): 맨 위 단추로 하나씩 차례로 간다
+  // 사람이 봐야 할 작업(승인 대기 · 확인 필요): 왼쪽 위 단추로 하나씩 차례로 간다.
+  // 목록 안이 아니라 높이가 정해진 머리줄에 둔다 — 생기고 없어질 때 작업 목록이 위아래로 밀리지 않게
   const need = [];
   const walk = (s) => { if (waitingIn(s) || askIn(s)) need.push(s); kidsOf(s).forEach(walk); };
   all.filter(isTopTask).sort(byRank).forEach(walk);
+  const go = $('need-btn');
+  go.hidden = !need.length;
   if (need.length) {
     const at = need.findIndex((k) => k.info.id === viewId);
     const next = need[(at + 1) % need.length];
-    const go = el('button', 'task-need');
-    go.append(el('span', 'task-ask'), el('span', 'task-need-label', `확인할 작업 ${need.length}`));
-    go.type = 'button';
-    go.title = `다음: ${titleOf(next)}`;
-    go.append(el('span', 'task-need-next', at >= 0 && need.length > 1 ? '다음 ›' : '›'));
+    go.replaceChildren(el('span', 'task-ask'), el('span', '', `확인 ${need.length}`), el('span', 'task-need-next', '›'));
+    go.title = `확인할 작업 ${need.length}개 · 다음: ${titleOf(next)}`;
+    go.setAttribute('aria-label', go.title);
     go.onclick = () => { viewId = next.info.id; showNav('sessions'); render(); };
-    list.append(go);
   }
   for (const s of all.filter(isTopTask).sort(byRank)) list.append(group(s, 0));
   if (!list.children.length) list.append(el('div', 'side-label', '아직 작업이 없어요'));
