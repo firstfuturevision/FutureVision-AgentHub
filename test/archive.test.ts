@@ -21,7 +21,7 @@ import { waitFor } from './helpers.ts';
 const fake = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs');
 const local = { via: 'local' as const, user: 'local' };
 
-test('보관: 아래 작업까지 숨고, 목록·보내기에서 빠지고, 예약은 건너뛰고, 다시 켜도 그대로', async () => {
+test('보관: 아래 작업까지 숨기고, 목록·보내기에서 빠지고, 예약은 건너뛰고, 다시 켜도 그대로', async () => {
   const base = mkdtempSync(join(tmpdir(), 'agent hub archive '));
   const ws = join(base, 'ws');
   mkdirSync(ws);

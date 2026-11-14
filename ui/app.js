@@ -2299,7 +2299,7 @@ function renderAbout(s) {
     ta.value = s.info.about ?? '';
     ta.rows = 4;
     ta.maxLength = 500;
-    ta.placeholder = '예: 영업 담당. 크몽·숨고 문의 응답과 외주 공고·제안서를 맡는다. 개발 일은 받지 않는다.';
+    ta.placeholder = '예: 영업 담당. 고객 문의 응답과 견적·제안서를 맡는다. 개발 일은 받지 않는다.';
     const acts = el('div', 'p-acts');
     const save = el('button', 'p-mini', '저장');
     const cancel = el('button', 'p-mini', '취소');
