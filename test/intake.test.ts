@@ -140,7 +140,7 @@ test('입력 거치기 모두 켜기: 입력 세션 자신·보관한 작업은 
     // 바로 가야 하는 글: 예약, 다른 작업, / 명령, 대시보드 @에이전트
     const n0 = events.filter((e) => e.type === 'session.intake').length;
     await sessions.handle({ type: 'user.message', sessionId: a, text: '[예약] 점검' }, { via: 'local', user: '예약' });
-    await sessions.handle({ type: 'user.message', sessionId: a, text: '전달' }, { via: 'local', user: '작업 Future Vision' });
+    await sessions.handle({ type: 'user.message', sessionId: a, text: '전달' }, { via: 'local', user: '작업 본부' });
     await sessions.handle({ type: 'user.message', sessionId: a, text: '/compact' }, local);
     await sessions.handle({ type: 'user.message', sessionId: b, text: '[업무 웹 채팅 · #일반] 질문', via: { app: '대시보드', label: '채팅 #일반' } }, local);
     assert.equal(events.filter((e) => e.type === 'session.intake').length, n0);

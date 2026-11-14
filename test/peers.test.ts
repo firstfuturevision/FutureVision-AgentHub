@@ -48,10 +48,10 @@ test('Peers: 손으로 더한 PC 의 요약을 읽고 "PC/작업"으로 보낸�
     assert.equal(v.ok, true);
     assert.equal(v.name, 'pc2');
     assert.equal(v.summary!.tasks[0].name, '영업');
-    assert.equal(await peers.send('pc2', '영업', '안녕', 'Future Vision'), 'pc2 의 영업 에 보냄');
+    assert.equal(await peers.send('pc2', '영업', '안녕', '본부'), 'pc2 의 영업 에 보냄');
     assert.equal(got[0].type, 'user.message');
     assert.equal(got[0].sessionId, 'abcdef12-0000-0000-0000-000000000000');
-    assert.equal(got[0].via.label, '작업 Future Vision');
+    assert.equal(got[0].via.label, '작업 본부');
     await assert.rejects(peers.send('pc2', '없는작업', 'x', 'a'), /없는 작업/);
     await assert.rejects(peers.send('pc9', '영업', 'x', 'a'), /연결된 PC 가 아님/);
     // 사람이 화면에서: 그 PC 에 있는 작업에만, 보낸 곳은 "사람"
