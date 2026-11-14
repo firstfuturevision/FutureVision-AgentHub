@@ -468,7 +468,8 @@ function renderTaskLinks(force) {
   if (!groups.length) list.append(el('p', 'hint', '아직 서로 이어진 작업이 없어요. 작업을 분담하거나 작업끼리 글을 보내면 여기에 묶여 보입니다.'));
   box.append(list);
   if (remote.length) {
-    box.append(el('h3', 'link-h', '바깥 시스템 연결'));
+    box.append(el('h3', 'link-h', '대시보드 등 바깥에서 붙은 작업'));
+    box.append(el('p', 'hint', '사내 대시보드 같은 바깥 시스템이 글을 보내는 이 PC 작업입니다(예: 대시보드 프로젝트에서 작업 PC 로 이 PC 를 고르면 생기는 "프로젝트 · 이름" 작업). 아래 줄이 보내는 곳이고, 그 작업의 작업 정보 → 연결된 원격 접속에서 막을 수 있어요.'));
     const rl = el('div', 'sched-list');
     for (const s of remote) {
       const row = el('div', 'sched-row');
