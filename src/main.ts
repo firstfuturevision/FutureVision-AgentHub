@@ -25,7 +25,7 @@ import { Peers } from './peers.ts';
 import { MemoryStore } from './memory.ts';
 import { IntakeStore } from './intake.ts';
 import { CliUpdater } from './cliupdate.ts';
-import { LimitStore } from './limits.ts';
+import { LimitStore, probeClaudeLimits } from './limits.ts';
 import { ScreenControl } from './screen.ts';
 import { ClaudeCli } from './models.ts';
 import { startLocalServer } from './transports/local.ts';
@@ -208,6 +208,9 @@ const cliUpdater = new CliUpdater({
   installed: () => serverOpts.clis!(),
   busy: () => sessions.list().some((s) => s.status === 'working' || s.status === 'starting'),
   notify: (m) => sessions.notice(m),
+  // 올린 뒤 시험: 기본 로그인으로 아주 작은 요청 — 받은 한도 정보는 연동 화면에
+  smokeClaude: () => probeClaudeLimits(cfg.claude.command, sessions.claudeEnvFor('default')),
+  onLimits: (info) => sessions.limits?.record('claude', 'default', info),
 });
 serverOpts.cliUpdater = cliUpdater;
 const server = await (async () => {

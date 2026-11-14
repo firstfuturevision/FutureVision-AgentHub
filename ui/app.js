@@ -794,7 +794,7 @@ const getJson = async (url, fallback) => {
 getJson('/permissions', permState).then((x) => { permState = x ?? permState; renderPanel(); });
 let limitState = {}; // 연결별 사용 한도 { 'claude:default': { windows, at, turns, costUsd } }
 async function loadAuth() {
-  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState, claudeCli, limitState] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState), getJson('/claude-cli', null), getJson('/limits', limitState)]);
+  [authState, cliState, ghState, updState, sharedState, autoState, remoteState, permState, claudeCli, limitState, cliUpd] = await Promise.all([getJson('/auth', {}), getJson('/clis', {}), getJson('/github', null), getJson('/update', null), getJson('/shared', null), getJson('/autostart', null), getJson('/remote', null), getJson('/permissions', permState), getJson('/claude-cli', null), getJson('/limits', limitState), getJson('/cli-update', cliUpd)]);
   useClaudeModels(claudeCli);
   renderAuth();
   renderPresets(); renderWorkPresets(); renderTools(); renderSkills(); // 올리기 버튼은 공유 설정을 받은 뒤에
@@ -1294,6 +1294,16 @@ function renderAuthRow(row, a, st, pending) {
   }
   body.append(el('div', 'hint-inline auth-help', AUTH_HELP[a]));
   body.append(limitLines(a, st));
+  // 최근 업데이트와 바뀐 점(작업자 프로그램 자동 업데이트가 남긴 것)
+  const tool = { claude: 'Claude Code', gemini: '@google/gemini-cli', codex: '@openai/codex' }[a];
+  const note = (cliUpd?.notes ?? []).filter((x) => x.tool === tool).at(-1);
+  if (note) {
+    const d = el('details', 'update-note');
+    d.append(el('summary', '', `최근 업데이트 ${note.from} → ${note.to} (${new Date(note.at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}) · 바뀐 점 ${note.lines.length}개`));
+    for (const l of note.lines) d.append(el('div', 'auth-note', `- ${l}`));
+    if (!note.lines.length) d.append(el('div', 'auth-note', '바뀐 내용을 가져오지 못했어요'));
+    body.append(d);
+  }
   row.append(body);
 }
 
