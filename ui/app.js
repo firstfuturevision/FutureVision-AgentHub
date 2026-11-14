@@ -327,7 +327,7 @@ function taskByName(name) {
 let peerState = null; // { me, peers: [{ url, manual, name, ok, error, summary }] }
 async function loadPeers(fresh) {
   const r = await getJson(`/peers${fresh ? '?fresh=1' : ''}`, null);
-  if (r) peerState = r;
+  if (r) peerState = { myUrls: peerState?.myUrls, ...r };
   renderTaskLinks(true);
   renderList(); // 왼쪽 목록의 다른 PC 작업
 }
@@ -2995,9 +2995,21 @@ function remoteGroup(n, depth, tagged) {
   return g;
 }
 async function setRemoteParent(r, parentId) {
+  // 놓는 즉시 화면에 먼저(같은 PC 작업처럼), 그 PC 에 알리는 것은 뒤에. 실패하면 되돌리고 알린다
+  const t = (peerState?.peers ?? []).find((p) => p.url === r.pc.url)?.summary.tasks.find((x) => x.id === r.t.id);
+  const before = t?.remoteParent;
+  const me = peerState?.myUrls?.[0];
+  if (t) {
+    if (parentId && me) t.remoteParent = { url: me, id: parentId, pc: peerState.me };
+    else delete t.remoteParent;
+    renderList();
+  }
   const res = await fetch('/peers/parent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: r.pc.url, taskId: r.t.id, parentId }) });
-  if (!res.ok) return flash(await res.text(), true);
-  peerState = await res.json();
+  if (!res.ok) {
+    if (t) { if (before) t.remoteParent = before; else delete t.remoteParent; renderList(); }
+    return flash(await res.text(), true);
+  }
+  peerState = { myUrls: peerState?.myUrls, ...(await res.json()) }; // 옛 서버 응답엔 이 PC 주소가 없다 — 알던 것을 쓴다
   flash(parentId ? `${r.t.name} 를 ${titleOf(sessions.get(parentId))} 아래로 옮겼어요 · 그 작업이 한 일이 위로 공유돼요` : `${r.t.name} 를 ${r.pc.name} 묶음으로 되돌렸어요`);
   renderList();
 }

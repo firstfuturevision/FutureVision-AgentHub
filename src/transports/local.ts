@@ -42,6 +42,9 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   /**
    * 요청 처리 — 이 PC 화면과 원격(같은 사무실 네트워크)이 똑같이 쓴다. 비밀번호도 권한 구분도 없다(사용자 결정 2026-11-12).
    */
+  // 연결 상태(화면이 받는 모양 하나로): 이 PC 이름·원격 접속 주소(다른 PC 작업이 이 PC 아래에 있는지 알아보는 데 씀)·다른 PC 들
+  const peerState = async (fresh = false) => ({ me: peers!.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers!.all(fresh) });
+
   const route = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
     try {
@@ -67,18 +70,18 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         const body = (await readJson(req, res)) as any;
         if (body === undefined) return;
         try { await peers.setParent(String(body?.url ?? ''), String(body?.taskId ?? ''), body?.parentId ? String(body.parentId) : null, peers.summary().name); } catch (err) { return send(res, 400, (err as Error).message); }
-        return json(res, 200, { me: peers.summary().name, peers: await peers.all(true) });
+        return json(res, 200, await peerState(true));
       }
       if (req.method === 'GET' && url.pathname === '/peer/summary') return json(res, 200, peers ? peers.summary() : { name: '', tasks: [] });
       if (url.pathname === '/peers' && peers) {
-        if (req.method === 'GET') return json(res, 200, { me: peers.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers.all(url.searchParams.has('fresh')) });
+        if (req.method === 'GET') return json(res, 200, await peerState(url.searchParams.has('fresh')));
         if (req.method === 'POST') {
           const body = (await readJson(req, res)) as any;
           if (body === undefined) return;
           try { peers.add(body?.url); } catch (err) { return send(res, 400, (err as Error).message); }
-          return json(res, 200, { me: peers.summary().name, peers: await peers.all() });
+          return json(res, 200, await peerState());
         }
-        if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, { me: peers.summary().name, peers: await peers.all() }); }
+        if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, await peerState()); }
       }
       // 다른 PC 의 입력 세션 모델·기억 맞추기(그 PC 의 원격 접속으로)
       if (url.pathname === '/peers/settings' && peers && req.method === 'POST') {
