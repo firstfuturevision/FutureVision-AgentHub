@@ -307,6 +307,7 @@ function showNav(nav) {
     loadAuth();
     loadSkills();
     loadWorkPresets();
+    loadMemory();
   }
   closeSide();
   renderPanel();
@@ -1317,6 +1318,51 @@ function fillWorkPresetSelect() {
 let toolList = [];
 const tform = $('tool-form');
 
+// ── 설정 → 기억: 취향·고쳐 준 것(모든 작업이 받는다), 공통 지침 ──
+let memState = null;
+async function loadMemory() {
+  memState = await getJson('/memory', memState);
+  renderMemory();
+}
+async function postMemory(body) {
+  const r = await fetch('/memory', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { flash(await r.text(), true); return false; }
+  memState = await r.json();
+  renderMemory();
+  return true;
+}
+function renderMemory() {
+  if (!memState) return;
+  const g = $('mem-guide');
+  if (document.activeElement !== g && !g.dataset.dirty) g.value = memState.guide ?? '';
+  const list = $('mem-list');
+  list.replaceChildren();
+  for (const m of [...memState.items].reverse()) {
+    const row = el('div', 'mem-row');
+    row.append(el('span', 'mem-text', m.text), el('span', 'mem-by', `${m.by} · ${new Date(m.at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}`));
+    const edit = el('button', 'p-mini', '고치기');
+    edit.type = 'button';
+    edit.onclick = async () => {
+      const text = await askDialog({ title: '기억 고치기', input: m.text, ok: '저장' });
+      if (text) void postMemory({ action: 'edit', id: m.id, text });
+    };
+    const del = el('button', 'p-mini', '지우기');
+    del.type = 'button';
+    del.onclick = async () => { if (await askDialog({ title: '기억 지우기', text: m.text, ok: '지우기', danger: true })) void postMemory({ action: 'remove', id: m.id }); };
+    row.append(edit, del);
+    list.append(row);
+  }
+  if (!memState.items.length) list.append(el('p', 'hint', '아직 기억한 것이 없어요.'));
+}
+$('mem-guide').oninput = () => { $('mem-guide').dataset.dirty = '1'; $('mem-guide-note').textContent = '저장 안 됨'; };
+$('mem-guide-save').onclick = async () => {
+  if (await postMemory({ action: 'guide', text: $('mem-guide').value })) { delete $('mem-guide').dataset.dirty; $('mem-guide-note').textContent = '저장함 · 작업마다 다음 지시에 붙어요'; }
+};
+$('mem-add').onsubmit = async (e) => {
+  e.preventDefault();
+  if (await postMemory({ action: 'add', text: $('mem-text').value })) $('mem-text').value = '';
+};
+
 async function loadTools() {
   try {
     const r = await fetch('/tools');
@@ -1601,6 +1647,7 @@ function onEvent(ev) {
     if (!$('settings').hidden) void getJson('/shared', sharedState).then((s) => { sharedState = s; renderAuth(); });
     return;
   }
+  if (ev.type === 'memory.changed') { if (!$('settings').hidden) void loadMemory(); return; }
   if (ev.type === 'schedules.changed') { scheduleCache.clear(); void loadAllSchedules(); return renderPanel(); } // 예약이 바뀌거나 실행됨
   if (ev.type === 'agent.health') { health[ev.agent] = { state: ev.state, message: ev.message }; return renderAlerts(); } // AI 연결 상태
 

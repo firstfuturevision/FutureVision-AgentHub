@@ -22,6 +22,7 @@ import { SharedRepo } from './shared.ts';
 import { AutoStart } from './autostart.ts';
 import { RemoteAccess } from './remote.ts';
 import { Peers } from './peers.ts';
+import { MemoryStore } from './memory.ts';
 import { ScreenControl } from './screen.ts';
 import { ClaudeCli } from './models.ts';
 import { startLocalServer } from './transports/local.ts';
@@ -141,6 +142,10 @@ sessions.screen = screen; // 메인 에이전트의 화면 도구(screen_*)
 const peers = new Peers(join(cfg.dataDir, 'peers.json'), remote);
 peers.summary = () => sessions.peerSummary(hostname());
 sessions.peers = peers;
+// 설정 → 기억: 사람의 취향·고쳐 준 것과 공통 지침 — 모든 메인 작업이 받는다(처음엔 전부, 그 뒤엔 바뀐 것만)
+const memory = new MemoryStore(join(cfg.dataDir, 'memory.json'));
+sessions.memory = memory;
+memory.onChange = () => sessions.publishMemory();
 peers.start();
 // Claude 모델 목록·CLI 버전: CLI 에게 물어 채운다(켤 때·6시간마다). 화면의 /info 는 cfg.models 를 그대로 보여 준다
 const claudeCli = new ClaudeCli({ command: cfg.claude.command, file: join(cfg.dataDir, 'claude-models.json') });
@@ -179,6 +184,7 @@ const serverOpts: Parameters<typeof startLocalServer>[0] = { port: cfg.port, uiD
   // 원격 접속(사무실 네트워크만, 공용 비밀번호). 끄면 이 PC 에서만. 원격 포트 기본 = 화면 포트 + 2
   remote,
   peers,
+  memory,
   screen,
   claudeCli,
 };

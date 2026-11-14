@@ -84,6 +84,7 @@ export type HostEvent =
   | { type: 'permission.resolved'; sessionId: string; requestId: string; allow: boolean; by: string }
   | { type: 'turn.done'; sessionId: string; durationMs: number; costUsd: number | null; isError: boolean }
   | { type: 'notice'; agent?: AgentKind; message: string }
+  | { type: 'memory.changed' } // 설정 → 기억이 바뀜 — 설정 화면이 다시 읽는다
   | { type: 'presets.changed' } // 프리셋이 바뀜(화면·메인 어디서든) — 설정 화면이 다시 읽는다
   | { type: 'schedules.changed' } // 예약이 바뀌거나 실행됨 — 작업 정보 패널이 다시 읽는다
   | { type: 'agent.health'; agent: AgentKind; state: 'ok' | 'error'; message: string } // AI 연결 상태(로그인 만료·크레딧 부족 등). GET /health 로도

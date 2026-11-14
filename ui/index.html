@@ -63,6 +63,7 @@
             <button type="button" role="tab" data-set="presets" aria-selected="false">에이전트</button>
             <button type="button" role="tab" data-set="skills" aria-selected="false">스킬</button>
             <button type="button" role="tab" data-set="tools" aria-selected="false">툴</button>
+            <button type="button" role="tab" data-set="memory" aria-selected="false">기억</button>
           </nav>
 
           <section data-tab="connect">
@@ -193,6 +194,18 @@
               </div>
             </form>
             <div id="tool-list" class="preset-list"></div>
+          </section>
+
+          <section data-tab="memory" hidden>
+            <p class="hint">모든 작업이 함께 아는 것입니다. AI 가 무엇이든 같은 것을 받습니다(작업마다 처음엔 전부, 그 뒤엔 바뀐 것만).</p>
+            <h3 class="mem-h">공통 지침</h3>
+            <p class="hint">모든 작업이 따르는 글. 예: 지시를 받으면 먼저 하는 확인 절차, 참고할 사내 문서.</p>
+            <textarea id="mem-guide" class="about-input" rows="10" maxlength="6000" placeholder="1. 지시를 받으면 무엇을 하려는지 한두 줄로 정리하고, 이 작업 역할에 맞는지 본다(아니면 맞는 작업에 보낸다)&#10;2. 앞의 지시·기억과 어긋나는지 본다&#10;3. 애매하거나 어긋나거나 되돌리기 어려우면 묻고, 아니면 짐작한 것을 적고 바로 시작한다"></textarea>
+            <div class="form-actions"><button id="mem-guide-save" type="button" class="primary">저장</button><span id="mem-guide-note" class="hint"></span></div>
+            <h3 class="mem-h">기억</h3>
+            <p class="hint">사람의 취향·성향·고쳐 준 것. 에이전트가 사람이 결과를 고치거나 "그게 아니라"라고 할 때 한 줄씩 남깁니다. 두 번 말하지 않게.</p>
+            <form id="mem-add" class="peer-add"><input id="mem-text" class="key-input" maxlength="300" placeholder="예: 보고에 이모지 쓰지 않기" autocomplete="off"><button type="submit" class="line-btn">더하기</button></form>
+            <div id="mem-list" class="mem-list"></div>
           </section>
         </div>
       </div>

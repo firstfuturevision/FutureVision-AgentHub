@@ -16,6 +16,7 @@ import type { ScheduleStore } from './schedules.ts';
 import { ClaudeHistory, claudeHome, claudeTranscript } from './external.ts';
 import type { ScreenControl } from './screen.ts';
 import type { Peers, PeerSummary } from './peers.ts';
+import type { MemoryStore } from './memory.ts';
 
 export type AdapterFactory = (agent: AgentKind) => AgentAdapter;
 export type TerminalOpener = (agent: AgentKind, dir: string, profile?: boolean) => Promise<void>;
@@ -60,6 +61,7 @@ interface Live {
   carry?: string; // 복제한 작업: 첫 지시에 붙일 원래 대화
   role?: Preset; // 에이전트로 시작한 세션: 첫 지시에 붙일 역할 지침
   guide?: WorkPreset; // 프리셋(작업 환경)으로 시작한 세션: 첫 지시에 붙일 지침
+  memSeen?: { rev: number; guideRev: number; ids: string[] }; // 이 작업이 받은 기억·공통 지침(다음엔 바뀐 것만)
   merges?: { label: string; text: string }[]; // 포크·분담에서 공유받은 것: 다음 지시에 붙일 내용
   ctx?: { label: string; chars: number }[]; // 이번 CLI 에 이미 넣은 것(앞 대화, 공유) — 다시 띄우면 비운다
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
@@ -163,6 +165,7 @@ export class SessionManager {
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
   private aboutLine = false;
+  memory?: MemoryStore; // 설정 → 기억(취향·고쳐 준 것, 공통 지침) — 모든 메인 작업이 받는다
   peers?: Peers; // 다른 PC 의 Agent Hub(왼쪽 "연결") — 작업 목록·보내기가 PC 를 넘는다
   /** 권한 묻지 않기(모든 작업) — 설정 → 연동. 켜면 모든 작업의 도구 권한을 묻지 않고 허용한다(작업별 설정보다 앞선다) */
   autoApproveAll = false;
@@ -712,6 +715,22 @@ export class SessionManager {
     return down.length ? [...here, ...other, { note: `연결 안 된 PC — ${down.join('; ')}` }] : [...here, ...other];
   }
 
+  /** 기억이 바뀌었음을 화면에 알린다(설정 → 기억이 다시 읽음) */
+  publishMemory() { this.publish({ type: 'memory.changed' }); }
+
+  /** 기억 남기기·보기·지우기(메인 도구) */
+  memoryByMain(mainId: string, op: 'save' | 'list' | 'delete', a: Record<string, unknown>): string {
+    if (!this.memory) throw new Error('기억 기능이 없음');
+    const me = this.sessions.get(mainId);
+    if (!me) throw new Error('없는 작업');
+    if (op === 'list') return JSON.stringify(this.memory.public().items.map((x) => ({ id: x.id, text: x.text, by: x.by })), null, 2);
+    if (me.info.permMode) throw new Error('늘 묻기·읽기만인 작업은 기억을 바꾸지 못함');
+    if (op === 'delete') { this.memory.remove(a.id); return '지움'; }
+    const item = this.memory.add(a.text, this.nameOf(me));
+    me.memSeen = this.memory.noteFor(me.memSeen).seen; // 자기가 남긴 것은 다시 받지 않는다
+    return `기억함(${item.id}): ${item.text}`;
+  }
+
   /** 역할 설명 쓰기(메인 도구): key 가 없으면 이 작업 */
   taskAboutByMain(mainId: string, about: unknown, key?: unknown): string {
     const { target } = this.crossTask(mainId, key);
@@ -1078,6 +1097,12 @@ export class SessionManager {
     }
     // 역할 설명: 지시마다 지금 역할을 한 줄 앞에 붙인다 — 맡는 일이 바뀌었으면 에이전트가 session_about 으로 고친다(지침은 hub 안내에, 따로 AI 를 부르지 않는다)
     if (this.aboutLine && live.info.role === 'main' && !text.trimStart().startsWith('/')) text = `${aboutNote(live.info.about)}\n${text}`;
+    // 기억·공통 지침: 처음엔 전부, 그 뒤로는 바뀐 것만
+    if (this.memory && live.info.role === 'main' && !text.trimStart().startsWith('/')) {
+      const note = this.memory.noteFor(live.memSeen);
+      live.memSeen = note.seen;
+      if (note.text) text = `${note.text}\n\n${text}`;
+    }
     const sent = this.pendingContext(live).map(({ label, chars }) => ({ label, chars }));
     if (live.merges?.length) {
       text = `${live.merges.map((m) => m.text).join('\n\n')}\n\n[이어서 할 일]\n${text}`;

@@ -16,6 +16,7 @@ import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
 import type { AutoStart } from '../autostart.ts';
 import { isPrivateAddress, isOwnHost, type RemoteAccess } from '../remote.ts';
 import type { Peers } from '../peers.ts';
+import type { MemoryStore } from '../memory.ts';
 import type { CommandOrigin } from '../protocol.ts';
 import type { ScreenControl } from '../screen.ts';
 import type { ClaudeCli } from '../models.ts';
@@ -34,8 +35,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/scre
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers; memory?: MemoryStore }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers, memory } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -57,6 +58,22 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, { me: peers.summary().name, peers: await peers.all() });
         }
         if (req.method === 'DELETE') { peers.remove(url.searchParams.get('url')); return json(res, 200, { me: peers.summary().name, peers: await peers.all() }); }
+      }
+      // 설정 → 기억: 취향·고쳐 준 것(모든 작업이 받는다), 공통 지침
+      if (url.pathname === '/memory' && memory) {
+        if (req.method === 'GET') return json(res, 200, memory.public());
+        if (req.method === 'POST') {
+          const body = (await readJson(req, res)) as any;
+          if (body === undefined) return;
+          try {
+            if (body?.action === 'add') memory.add(body.text, '사람');
+            else if (body?.action === 'edit') memory.edit(body.id, body.text);
+            else if (body?.action === 'remove') memory.remove(body.id);
+            else if (body?.action === 'guide') memory.setGuide(body.text);
+            else return send(res, 400, '모르는 요청');
+          } catch (err) { return send(res, 400, (err as Error).message); }
+          return json(res, 200, memory.public());
+        }
       }
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, sessions.health); // AI 마다 연결 상태
       if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local' });

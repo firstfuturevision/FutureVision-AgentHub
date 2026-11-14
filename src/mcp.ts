@@ -26,7 +26,7 @@ const INSTRUCTIONS = [
   '사람이 프리셋(작업 환경: 작업 폴더·함께 연결할 폴더·작업 방식 지침·기본 메인 에이전트)을 만들거나 고치거나 지워 달라고 하면 preset_list / preset_save / preset_delete 를 쓴다. 에이전트와 프리셋은 다른 것이다.',
   '사람이 프리셋·에이전트·스킬·툴을 "공유 레포에 올려 달라"고 하면 share_push 로 이름을 주어 올린다(사람 승인 후). 목록의 shared=true 는 이미 공유받은 것이라 고칠 수 없다.',
   '사람이 예약("매일 ○시에", "매주 월요일에" 등)을 부탁하면 새 작업을 만들지 말고 schedule_save 로 건다. 다른 작업(예: 영업)에 걸어 달라면 session 에 그 작업 이름을 준다. 권한·모델 같은 이 작업의 설정은 짐작하지 말고 session_info 로 확인한다. Agent Hub 의 HTTP 주소나 코드를 직접 건드려 작업·예약을 만들지 않는다.',
-  '다른 작업(왼쪽 작업 목록의 작업)에 알릴 일이 있거나 사람이 "○○ 작업에 전해 줘"라고 하면 session_list 로 이름을 확인하고 session_send 로 보낸다. 다른 PC 의 Agent Hub 작업("PC이름/작업")도 같은 방법으로 보낸다. 받을 작업은 session_list 의 역할 설명(about)을 보고 고른다. 사람 지시 앞의 [이 작업 역할: …] 은 이 작업의 지금 역할이다 — 이번 일로 이 작업이 계속 맡을 일(역할·범위·맡지 않는 것)이 새로 생기거나 바뀌었거나 비어 있는데 드러났으면, 마치기 전에 session_about 으로 두세 문장으로 고친다. 한 번뿐인 일은 넣지 않고 같으면 그대로 둔다. 이 줄과 역할 고침은 사람에게 따로 말하지 않는다. 분담을 만들어 달라면 session_split 으로 만든다. 사람에게 복사해 붙여 달라고 하지 않는다.',
+  '다른 작업(왼쪽 작업 목록의 작업)에 알릴 일이 있거나 사람이 "○○ 작업에 전해 줘"라고 하면 session_list 로 이름을 확인하고 session_send 로 보낸다. 다른 PC 의 Agent Hub 작업("PC이름/작업")도 같은 방법으로 보낸다. 받을 작업은 session_list 의 역할 설명(about)을 보고 고른다. 사람 지시 앞의 [이 작업 역할: …] 은 이 작업의 지금 역할이다 — 이번 일로 이 작업이 계속 맡을 일(역할·범위·맡지 않는 것)이 새로 생기거나 바뀌었거나 비어 있는데 드러났으면, 마치기 전에 session_about 으로 두세 문장으로 고친다. 한 번뿐인 일은 넣지 않고 같으면 그대로 둔다. 이 줄과 역할 고침은 사람에게 따로 말하지 않는다. 사람이 결과를 고치거나 \"그게 아니라\"·\"앞으로는\"처럼 취향·성향을 드러내면 memory_save 로 한 줄 남긴다(모든 작업이 함께 받아 두 번 말하지 않게). 지시 앞의 [공통 지침]·[기억] 은 사람이 정한 것이라 따른다. 분담을 만들어 달라면 session_split 으로 만든다. 사람에게 복사해 붙여 달라고 하지 않는다.',
   SCREEN_INSTRUCTION,
 ].join('\n');
 
@@ -145,6 +145,24 @@ export const TASK_TOOLS = [
     title: '작업 역할 설명 쓰기',
     description: '작업의 역할 설명(무엇을 맡는지, 범위, 맡지 않는 것)을 쓴다. 다른 작업이 session_list 에서 보고 어디로 보낼지 고르는 데 쓴다. 두세 문장으로 짧게. session 이 없으면 이 작업. 빈 글이면 지운다.',
     inputSchema: { type: 'object', properties: { about: { type: 'string', description: '역할 설명(500자까지)' }, session: { type: 'string', description: '다른 작업이면 그 이름(session_list 의 name) 또는 id' } }, required: ['about'], additionalProperties: false },
+  },
+  {
+    name: 'memory_save',
+    title: '기억 남기기',
+    description: '사람의 취향·성향·고쳐 준 것을 한 줄로 남긴다. 모든 작업(다른 AI 포함)이 다음 지시부터 받는다. 사람이 결과를 고치거나 "그게 아니라", "~하지 마", "앞으로는 ~"이라고 하면 남긴다. 한 번뿐인 지시나 이 작업만의 일은 남기지 않는다. 짧게, 이유가 있으면 함께(예: "보고에 이모지 쓰지 않기 — 촌스럽다고 함").',
+    inputSchema: { type: 'object', properties: { text: { type: 'string', description: '기억할 것 한 줄(300자까지)' } }, required: ['text'], additionalProperties: false },
+  },
+  {
+    name: 'memory_list',
+    title: '기억 보기',
+    description: '모든 작업이 함께 아는 기억(사람의 취향·고쳐 준 것) 목록과 id.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'memory_delete',
+    title: '기억 지우기',
+    description: '틀렸거나 사람이 바꾼 기억을 지운다(memory_list 의 id). 바뀐 내용은 memory_save 로 새로 남긴다.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
   },
   {
     name: 'session_split',
@@ -273,6 +291,14 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
           const list = await sessions.taskListAll();
           return ok({ content: [{ type: 'text', text: JSON.stringify(list, null, 2) }], structuredContent: { sessions: list } });
         }
+        case 'memory_save':
+        case 'memory_list':
+        case 'memory_delete':
+          try {
+            return text(sessions.memoryByMain(mainId, msg.params.name === 'memory_save' ? 'save' : msg.params.name === 'memory_list' ? 'list' : 'delete', a));
+          } catch (err) {
+            return text(`안 됨: ${(err as Error).message}`, true);
+          }
         case 'session_about':
           try {
             return text(sessions.taskAboutByMain(mainId, a.about, a.session));

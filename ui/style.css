@@ -561,3 +561,8 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .about-input { width: 100%; box-sizing: border-box; font: 13px/1.5 var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 9px; resize: vertical; }
 .about-input:focus { outline: none; border-color: var(--ink-faint); }
 .link-pc { font-size: 13px; font-weight: 600; color: var(--ink-soft); margin: 14px 0 0; }
+.mem-h { font-size: 14px; margin: 18px 0 2px; }
+.mem-list { display: flex; flex-direction: column; margin-top: 8px; }
+.mem-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); }
+.mem-text { flex: 1; min-width: 0; font-size: 13.5px; }
+.mem-by { font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
