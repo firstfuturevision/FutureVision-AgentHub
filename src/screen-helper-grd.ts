@@ -211,6 +211,11 @@ async function handle(a: string[]) {
       const p = at(v, a[2], a[3]);
       v.wheel(p.x, p.y, Number(a[4]));
     } else if (c === 'key') {
+      // 한/영: GNOME 원격 데스크톱은 RDP 한/영 키(0x72)를 Hangul 키로 넘기지 않는다 → ibus-hangul 기본 전환 키 Shift+Space 로 보낸다(2026-11-15 확인)
+      if (Number(a[2]) === 21) {
+        if (a[1] === 'd') { v.scancode(0x2a, false, true); v.scancode(0x39, false, true); v.scancode(0x39, false, false); v.scancode(0x2a, false, false); }
+        return;
+      }
       const sc = SCANCODE[Number(a[2])];
       if (sc) v.scancode(sc[0], sc[1], a[1] === 'd');
     } else if (c === 'text') {
