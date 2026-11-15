@@ -745,6 +745,8 @@ for (const b of document.querySelectorAll('[data-term]')) {
 const closeSide = () => $('side').classList.remove('open');
 for (const b of document.querySelectorAll('.side-open')) b.onclick = () => $('side').classList.add('open');
 $('side-close').onclick = closeSide;
+// 폰: 목록 바깥(대화 쪽)을 누르면 목록을 닫는다
+document.addEventListener('pointerdown', (e) => { const side = $('side'); if (side.classList.contains('open') && !side.contains(e.target) && !e.target.closest('.side-open, .ctx-menu, .dlg-back, dialog, .screen')) closeSide(); }, true);
 
 // ── 설정 화면 ────────────────────────────────
 // 탭: 에이전트 프리셋 | 연동 | 툴
