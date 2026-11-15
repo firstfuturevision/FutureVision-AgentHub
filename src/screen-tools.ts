@@ -66,7 +66,7 @@ export const SCREEN_TOOLS = [
   {
     name: 'screen_type',
     title: '글자 입력',
-    description: '지금 입력 칸에 글자를 넣는다(한글 포함, 줄바꿈은 Enter). 먼저 칸을 눌러 둔다.',
+    description: '지금 입력 칸에 글자를 넣는다(한글 포함, 줄바꿈은 Enter, 20000자까지). 먼저 칸을 눌러 둔다. 한글 등 영어 밖 글자나 긴 글은 클립보드로 붙여 넣고 칸 글을 다시 읽어 확인한다 — 다르면 "글자 깨짐" 오류가 온다.',
     inputSchema: {
       type: 'object',
       properties: { text: { type: 'string' }, screenshot: { type: 'boolean' } },
@@ -204,8 +204,14 @@ export async function handleScreenTool(name: string, a: any, mainId: string, scr
       did = `${a.direction === 'up' ? '위' : '아래'}로 ${n}칸 스크롤`;
     } else if (name === 'screen_type') {
       if (typeof a.text !== 'string' || !a.text) return err('text 가 비었음');
-      await screen.input(v.m, [{ t: 'text', s: a.text.slice(0, 2000) }]);
-      did = `글자 ${a.text.length}자 넣음`;
+      if (a.text.length > 20000) return err('글이 너무 김(20000자까지). 나눠서 넣는다');
+      const r = await screen.typeText(v.m, a.text);
+      // 붙여 넣은 글이 칸에 그대로 없으면 부르는 쪽이 모르고 지나가지 않게 오류로 알린다
+      if (r.check === 'mismatch') {
+        const head = (r.got ?? '').replace(/\s+/g, ' ').slice(0, 120);
+        return err(`글자 깨짐 또는 안 들어감: 붙여 넣은 뒤 칸 글을 다시 읽었더니 원문과 다름${head ? `(읽은 앞부분: "${head}")` : '(읽은 글 없음 — 입력 칸을 먼저 눌렀는지 본다)'}. 칸을 비우고 다시 넣는다`);
+      }
+      did = `글자 ${a.text.length}자 넣음${r.via === 'paste' ? ' (붙여 넣기 · 다시 읽어 확인함)' : ''}`;
     } else if (name === 'screen_key') {
       await screen.input(v.m, comboEvents(String(a.keys ?? '')));
       did = `키 ${a.keys}`;

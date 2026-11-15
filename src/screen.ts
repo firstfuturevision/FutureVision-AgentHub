@@ -30,6 +30,7 @@ const VIEW_WINDOW = 3000; // 이 시간 안에 프레임을 받아 간 화면 = 
 const IDLE_EXIT = 60_000; // 아무도 안 보면 도우미를 끈다(Agent Hub 가 푼 화면 잠금도 이때 다시 잠근다)
 const ASK_TIMEOUT = 20_000; // 도우미 답을 기다리는 최대 시간
 const NO_ANSWER = '화면 도우미가 답하지 않음';
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const execAsync = promisify(execFile);
 const deflateAsync = promisify(deflate);
 const NO_DESKTOP = '데스크톱 화면이 없는 곳에서 켠 Agent Hub. 데스크톱에 로그인한 뒤 그 안에서 켜세요';
@@ -91,14 +92,16 @@ export class ScreenControl {
   private unlockTried = 0;
   readonly supported: boolean;
   /** 원격으로 보는 사람과 이 PC 사이 클립보드 글 주고받기 */
-  readonly clipboard: Clipboard;
+  readonly clipboard: Pick<Clipboard, 'get' | 'set'>;
   error: string | null = null;
+  /** 붙여 넣기로 글자를 넣을지(리눅스: 키를 하나씩 치면 ASCII 밖 글자는 Ctrl+Shift+U 16진 입력에 기대는데, Chrome 처럼 입력기가 그 조합을 받지 않는 앱에선 코드가 그대로 들어간다) */
+  private pasteText: boolean;
 
   /**
    * source: screen-helper.cs, x11Source: screen-helper-x11.py(기본 = 같은 폴더).
    * 시험용: helperCommand = 이 명령을 도우미로 띄운다, loginctl = 잠금 풀기·잠그기 명령 대신
    */
-  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[]; loginctl?: (args: string[]) => Promise<string> }) {
+  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[]; loginctl?: (args: string[]) => Promise<string>; clipboard?: Pick<Clipboard, 'get' | 'set'>; pasteText?: boolean }) {
     this.loginctl = opts.loginctl ?? (async (args) => String((await execAsync('loginctl', args, { timeout: 8000 })).stdout));
     this.file = opts.file;
     this.exe = join(opts.binDir, 'screen-helper.exe');
@@ -106,12 +109,13 @@ export class ScreenControl {
     this.x11Source = opts.x11Source ?? join(dirname(opts.source), 'screen-helper-x11.py');
     this.grdSource = join(dirname(opts.source), 'screen-helper-grd.ts');
     this.rdpFile = join(dirname(opts.file), 'screen-rdp.json');
-    this.clipboard = new Clipboard({ script: join(dirname(opts.source), 'clipboard-x11.py') });
+    this.clipboard = opts.clipboard ?? new Clipboard({ script: join(dirname(opts.source), 'clipboard-x11.py') });
     this.helperCommand = opts.helperCommand;
     const c = opts.helperCommand ? { kind: null, reason: null } : platformCheck(this.source, this.x11Source, this.grdSource);
     this.kind = c.kind;
     this.reason = c.reason;
     this.supported = Boolean(opts.helperCommand) || c.kind !== null;
+    this.pasteText = opts.pasteText ?? (c.kind === 'x11' || c.kind === 'grd');
     let v: any = {};
     try { if (existsSync(this.file)) v = JSON.parse(readFileSync(this.file, 'utf8')); } catch {}
     this.s = { enabled: v.enabled === true };
@@ -222,14 +226,70 @@ export class ScreenControl {
     if (!Array.isArray(events)) throw new Error('events 는 배열');
     await this.ensure();
     const m = int(monitor, 0, 15);
-    const lines: string[] = [];
+    let lines: string[] = [];
+    let sent = 0;
+    const flush = () => { if (lines.length) this.child?.stdin?.write(lines.join('\n') + '\n'); sent += lines.length; lines = []; };
     for (const e of events.slice(0, 200)) {
+      // 붙여 넣어야 할 글(ASCII 밖 글자 · 긴 글)은 앞 입력을 먼저 보내고 클립보드로
+      if (e && typeof e === 'object' && (e as any).t === 'text' && typeof (e as any).s === 'string' && this.needsPaste((e as any).s)) {
+        flush();
+        await this.paste(m, (e as any).s);
+        sent++;
+        continue;
+      }
       const line = toLine(m, e);
       if (line) lines.push(line);
     }
-    if (lines.length) this.child?.stdin?.write(lines.join('\n') + '\n');
+    flush();
     this.lastUse = Date.now();
-    return lines.length;
+    return sent;
+  }
+
+  needsPaste(s: string): boolean {
+    return this.pasteText && (/[^\x00-\x7e]/.test(s) || s.length > 2000);
+  }
+
+  private keys(m: number, vks: [number, boolean][]) {
+    this.child?.stdin?.write(vks.map(([vk, d]) => toLine(m, { t: 'key', d, vk })).join('\n') + '\n');
+  }
+  private combo(m: number, mod: number, vk: number) { this.keys(m, [[mod, true], [vk, true], [vk, false], [mod, false]]); }
+
+  /** 클립보드로 붙여 넣기(앞 클립보드 글은 넣은 뒤 되돌린다) */
+  private async paste(m: number, text: string, restore = true): Promise<void> {
+    const prev = restore ? await this.clipboard.get().catch(() => null) : null;
+    await this.clipboard.set(text.replace(/\r\n?/g, '\n'));
+    this.combo(m, 162, 86); // Ctrl+V
+    await sleep(400);
+    if (prev !== null && prev !== text) await this.clipboard.set(prev).catch(() => {});
+  }
+
+  /**
+   * 글자 넣기(화면 제어 도구). 붙여 넣기로 넣었으면 그 칸 글을 모두 골라 복사해 다시 읽고(Ctrl+A · Ctrl+C, 끝으로 →) 넣은 글이 그대로 들어갔는지 본다.
+   * check: ok = 그대로, mismatch = 다름(깨짐), unknown = 키로 쳐서 확인하지 않음. 앞 클립보드 글은 되돌린다.
+   */
+  async typeText(monitor: number, text: string): Promise<{ via: 'keys' | 'paste'; check: 'ok' | 'mismatch' | 'unknown'; got?: string }> {
+    await this.ensure();
+    const m = int(monitor, 0, 15);
+    this.lastUse = Date.now();
+    if (!this.needsPaste(text)) {
+      const line = toLine(m, { t: 'text', s: text });
+      if (line) this.child?.stdin?.write(line + '\n');
+      return { via: 'keys', check: 'unknown' };
+    }
+    const prev = await this.clipboard.get().catch(() => null);
+    const want = text.replace(/\r\n?/g, '\n');
+    await this.paste(m, want, false);
+    // 다시 읽기: 칸 안 글을 모두 골라 복사한다(입력 칸이면 그 칸만 골라진다), 그다음 → 로 고름을 풀어 끝에 둔다
+    await this.clipboard.set('').catch(() => {});
+    this.combo(m, 162, 65); // Ctrl+A
+    await sleep(150);
+    this.combo(m, 162, 67); // Ctrl+C
+    await sleep(500);
+    const got = await this.clipboard.get().catch(() => '');
+    this.keys(m, [[39, true], [39, false]]); // →
+    if (prev !== null) await this.clipboard.set(prev).catch(() => {});
+    const norm = (s: string) => s.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC');
+    return { via: 'paste', check: norm(got).includes(norm(want).trim()) ? 'ok' : 'mismatch', got };
   }
 
   viewerCount() {

@@ -92,3 +92,65 @@ test('MCP: 화면 도구가 도구 목록에 있고, tools/call 로 그림을 �
     screen.stop();
   }
 });
+
+/** 붙여 넣기 시험용: 가짜 클립보드 + 가짜 입력 칸(도우미 기록의 Ctrl+V · Ctrl+C 를 읽어 칸에 붙이고 칸 글을 복사한다) */
+function pasteWorld(mangle = (s: string) => s) {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub paste '));
+  const log = join(base, 'input.log');
+  let seen = 0;
+  const st = { clip: '앞에 복사해 둔 글', field: '', sets: [] as string[] };
+  const replay = () => {
+    const all = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [];
+    for (; seen < all.length; seen++) {
+      if (all[seen] === 'key d 86') st.field += mangle(st.clip);
+      if (all[seen] === 'key d 67') st.clip = st.field;
+    }
+  };
+  const clipboard = {
+    get: async () => { await new Promise((ok) => setTimeout(ok, 30)); replay(); return st.clip; },
+    set: async (t: string) => { replay(); st.clip = t; st.sets.push(t); },
+  };
+  const screen = new ScreenControl({ file: join(base, 'screen.json'), binDir: base, source: join(src, 'screen-helper.cs'), helperCommand: [process.execPath, join(here, 'fake-screen.mjs'), log, 'raw'], clipboard, pasteText: true });
+  const lines = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter((l) => l && !l.startsWith('indicator')) : []);
+  return { screen, st, lines };
+}
+
+test('글자 넣기(리눅스): 한글 · 긴 글은 클립보드로 붙여 넣고 칸 글을 다시 읽어 확인, 앞 클립보드는 되돌린다', async () => {
+  const { screen, st, lines } = pasteWorld();
+  try {
+    screen.set({ enabled: true });
+    await handleScreenTool('screen_view', {}, 'm1', screen);
+    const text = '안녕하세요 · 시험 글입니다.\n둘째 줄: 범위·수량·금액·기간\n\n셋째 문단 abc 123';
+    const r = (await handleScreenTool('screen_type', { text, screenshot: false }, 'm1', screen))!;
+    assert.ok(!r.isError, (r.content[0] as any).text);
+    assert.match((r.content[0] as any).text, /붙여 넣기 · 다시 읽어 확인함/);
+    assert.equal(st.field, text);
+    assert.equal(st.clip, '앞에 복사해 둔 글'); // 되돌림
+    const l = lines();
+    assert.ok(!l.some((x) => x.startsWith('text ')), '한 글자씩 치지 않는다');
+    for (const k of ['key d 86', 'key d 65', 'key d 67', 'key d 39']) assert.ok(l.includes(k), k);
+    // 짧은 영어는 그대로 키로
+    await handleScreenTool('screen_type', { text: 'hello', screenshot: false }, 'm1', screen);
+    await until(() => lines().some((x) => x.startsWith('text ')));
+    // 사람 화면의 글자 칸(/screen/input 의 text)도 한글이면 붙여 넣기(확인은 하지 않음)
+    st.field = '';
+    await screen.input(0, [{ t: 'text', s: '폰에서 보낸 한글' }]);
+    assert.equal(st.field, '폰에서 보낸 한글');
+  } finally {
+    screen.stop();
+  }
+});
+
+test('글자 넣기: 붙인 글이 칸에 그대로 없으면 "글자 깨짐" 오류로 알린다', async () => {
+  const { screen } = pasteWorld((s) => s.replace(/·/g, '�'));
+  try {
+    screen.set({ enabled: true });
+    await handleScreenTool('screen_view', {}, 'm1', screen);
+    const r = (await handleScreenTool('screen_type', { text: '금액·기간', screenshot: false }, 'm1', screen))!;
+    assert.equal(r.isError, true);
+    assert.match((r.content[0] as any).text, /글자 깨짐/);
+    assert.equal((await handleScreenTool('screen_type', { text: 'x'.repeat(20001), screenshot: false }, 'm1', screen))!.isError, true);
+  } finally {
+    screen.stop();
+  }
+});
