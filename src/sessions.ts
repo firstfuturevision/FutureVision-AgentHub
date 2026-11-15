@@ -1131,7 +1131,7 @@ export class SessionManager {
           return this.publish({ type: 'error', sessionId: cmd.sessionId, message: `막힌 원격 접속에서 온 글이라 받지 않았습니다: ${viaLabel(cmd.via)}` });
         }
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
-        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
+        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}), ...(origin.author && !cmd.via ? { author: origin.author } : {}) });
         // 컨텍스트 정리 부탁(글 전체가 그 말일 때만): AI 에게 보통 지시로 보내지 않고 앱이 정리한다
         if (isCompactRequest(cmd.text) && !atts.length) return this.compact(live, origin.user);
         // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)

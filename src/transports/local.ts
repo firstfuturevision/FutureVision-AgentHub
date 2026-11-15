@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { join, extname } from 'node:path';
 import { parseCommand } from '../protocol.ts';
 import { handleMcp } from '../mcp.ts';
@@ -21,7 +21,8 @@ import type { Peers } from '../peers.ts';
 import type { MemoryStore } from '../memory.ts';
 import type { CliUpdater } from '../cliupdate.ts';
 import { probeClaudeLimits } from '../limits.ts';
-import type { CommandOrigin } from '../protocol.ts';
+import type { Author, CommandOrigin } from '../protocol.ts';
+import { networkInterfaces } from 'node:os';
 import type { ScreenControl } from '../screen.ts';
 import type { ClaudeCli } from '../models.ts';
 import { listFolders, createFolder, browseFolders } from '../folders.ts';
@@ -39,8 +40,8 @@ const STATIC = new Set(['/index.html', '/app.js', '/md.js', '/style.css', '/scre
  * 공용 PC 앞 "직접 작업" 화면. 127.0.0.1 에만 열린다.
  * 화면 → 호스트: POST /cmd (JSON), 호스트 → 화면: GET /events (SSE)
  */
-export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers; memory?: MemoryStore; cliUpdater?: CliUpdater }): Promise<Server> {
-  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers, memory, cliUpdater } = opts;
+export function startLocalServer(opts: { port: number; uiDir: string; sessions: SessionManager; info: Record<string, unknown>; presets?: PresetStore; tools?: ToolStore; auth?: AuthStore; github?: GitHub; updater?: Updater; openInstall?: (title: string, command: string) => Promise<void>; clis?: () => Record<string, { installed: boolean; missing: string[] }>; hubSkills?: HubSkillStore; workPresets?: WorkPresetStore; schedules?: ScheduleStore; shared?: SharedRepo; autostart?: AutoStart; remote?: RemoteAccess; screen?: ScreenControl; claudeCli?: ClaudeCli; peers?: Peers; memory?: MemoryStore; cliUpdater?: CliUpdater; relayToken?: string }): Promise<Server> {
+  const { port, uiDir, sessions, info, presets, tools, auth, github, updater, openInstall, clis, hubSkills, workPresets, schedules, shared, autostart, remote, screen, claudeCli, peers, memory, cliUpdater, relayToken } = opts;
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   /**
@@ -52,7 +53,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   // 연결 상태(화면이 받는 모양 하나로): 이 PC 이름·원격 접속 주소(다른 PC 작업이 이 PC 아래에 있는지 알아보는 데 씀)·다른 PC 들
   const peerState = async (fresh = false) => ({ me: peers!.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers!.all(fresh) });
 
-  const route = async (req: IncomingMessage, res: ServerResponse) => {
+  const route = async (req: IncomingMessage, res: ServerResponse, lanReq = false) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
     try {
       if (req.method === 'GET' && url.pathname === '/events') return events(req, res, sessions);
@@ -173,7 +174,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         }
       }
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, sessions.health); // AI 마다 연결 상태
-      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local' });
+      if (req.method === 'POST' && url.pathname === '/cmd') return await command(req, res, sessions, { via: 'local', user: 'local', author: authorOf(req, lanReq, relayToken) });
       // 원격 접속 — 켜기·끄기
       if (url.pathname === '/remote' && remote) {
         if (req.method === 'GET') return json(res, 200, { ...remote.public(), error: lanError, local: `http://127.0.0.1:${port}` });
@@ -586,7 +587,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
     // 다른 사이트에서 이 주소로 보내는 요청 차단: Origin 이 있으면 이 주소와 같아야 한다
     const origin = req.headers.origin;
     if (origin && origin.replace(/^https?:\/\//, '') !== req.headers.host) return send(res, 403, '허용되지 않은 Origin');
-    return route(req, res);
+    return route(req, res, true);
   };
   const syncLan = async () => {
     if (!remote) return;
@@ -747,6 +748,33 @@ async function mcp(req: IncomingMessage, res: ServerResponse, sessions: SessionM
   }
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(Array.isArray(body) ? out : out[0]));
+}
+
+/** 머리말 값: 한글 등은 encodeURIComponent 로 넘긴다 */
+function headerText(v: string | string[] | undefined, max: number): string {
+  const raw = (Array.isArray(v) ? v[0] : v ?? '').trim();
+  let t = raw;
+  try { t = decodeURIComponent(raw); } catch {}
+  return t.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
+}
+
+/**
+ * 화면에서 온 사람 글을 누가 · 어디서 썼는지.
+ *  - 앞단 중계(로그인을 맡는 웹 등)가 X-Agent-Hub-Relay: <data/relay-token 내용> 와 X-Agent-Hub-User: <이름>(URL 인코딩, 선택 X-Agent-Hub-Via: <길 이름>)을 붙이면 그 이름
+ *  - 키가 없거나 틀리면 이름은 받지 않는다(같은 망 누구나 원격 접속에 머리말을 적어 보낼 수 있어서)
+ *  - 그 밖: 이 PC 화면이면 "이 PC", 원격 접속이면 "원격 접속 · <주소>"(이 PC 안의 중계가 루프백으로 붙으면 "원격 연결")
+ */
+export function authorOf(req: IncomingMessage, lanReq: boolean, relayToken?: string): Author {
+  const key = headerText(req.headers['x-agent-hub-relay'], 200);
+  const name = headerText(req.headers['x-agent-hub-user'], 60);
+  if (relayToken && key && name && key.length === relayToken.length && timingSafeEqual(Buffer.from(key), Buffer.from(relayToken))) {
+    return { name, path: headerText(req.headers['x-agent-hub-via'], 40) || '원격 연결' };
+  }
+  if (!lanReq) return { path: '이 PC' };
+  const ip = (req.socket.remoteAddress ?? '').replace(/^::ffff:/i, '');
+  if (ip === '::1' || ip.startsWith('127.')) return { path: '원격 연결' };
+  const mine = Object.values(networkInterfaces()).some((l) => l?.some((n) => n.address.replace(/^::ffff:/i, '') === ip));
+  return mine ? { path: '이 PC' } : { path: `원격 접속 · ${ip}` };
 }
 
 async function command(req: IncomingMessage, res: ServerResponse, sessions: SessionManager, origin: CommandOrigin) {

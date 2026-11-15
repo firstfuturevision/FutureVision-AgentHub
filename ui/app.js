@@ -1961,7 +1961,7 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
+      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -3696,6 +3696,11 @@ function stampText(it) {
   const m = Math.round(it.took / 60_000);
   return `${t} · ${m >= 60 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${m}분`} 걸림`;
 }
+/** 사람 글을 쓴 사람 · 들어온 길(없으면 빈 글자 — 옛 글은 지어 붙이지 않는다) */
+function whoOf(it) {
+  if (it.author) return [it.author.name, it.author.path].filter(Boolean).join(' · ');
+  return it.from && it.from !== 'local' ? it.from : '';
+}
 function dayLine(ms) {
   const d = new Date(ms);
   const today = dayKey(ms) === dayKey(Date.now());
@@ -3715,10 +3720,21 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
     if (day !== lastDay && days) into.append(dayLine(it.at));
     lastDay = day;
   };
+  // 사람 글: 쓴 사람 · 들어온 길(중계가 넘긴 이름, 이 PC, 원격 접속, 예약, 다른 작업 …). 앞 사람 글과 쓴 사람이 다르면 진하게
+  let lastWho = null;
+  for (let i = from - 1; i >= 0 && lastWho === null; i--) if (items[i].k === 'user') lastWho = whoOf(items[i]);
   const stamp = (it) => {
     const node = into.lastElementChild;
     if (!node || !it.at || !STAMPED.has(it.k) || it.pending) return;
     const t = el('span', 'msg-time', stampText(it));
+    if (it.k === 'user') {
+      const who = whoOf(it);
+      if (who) {
+        const w = el('span', `msg-who${lastWho !== null && who !== lastWho ? ' changed' : ''}`, who);
+        t.prepend(w, ' · ');
+      }
+      lastWho = who;
+    }
     t.title = new Date(it.at).toLocaleString();
     const fork = node.querySelector(':scope > .msg-fork');
     if (fork) node.insertBefore(t, fork); else node.append(t);
@@ -3906,7 +3922,8 @@ function mergedTurns(text) {
 
 function item(it) {
   const div = el('div', it.k.startsWith('line') ? it.k : `msg ${it.k}${it.pending ? ' pending' : ''}${it.failed ? ' failed' : ''}`);
-  const from = it.failed ? '못 보냄 — 다시 보내 주세요' : it.pending ? '보내는 중' : it.from;
+  // 사람 글의 보낸 곳 · 쓴 사람은 시각 줄에(renderItems). 여기엔 보내는 중 · 못 보냄만
+  const from = it.failed ? '못 보냄 — 다시 보내 주세요' : it.pending ? '보내는 중' : it.k === 'user' && it.at ? null : it.from;
   if (from && from !== 'local') div.append(el('span', 'from', from));
   if (it.t) div.append(it.k === 'agent' ? renderMarkdown(it.t) : document.createTextNode(it.t)); // 에이전트 답만 마크다운
   if (it.files?.length) {

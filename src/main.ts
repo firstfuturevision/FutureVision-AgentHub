@@ -1,6 +1,6 @@
-import { mkdirSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -227,6 +227,16 @@ const cliUpdater = new CliUpdater({
   onLimits: (info) => sessions.limits?.record('claude', 'default', info),
 });
 serverOpts.cliUpdater = cliUpdater;
+serverOpts.relayToken = relayToken(join(cfg.dataDir, 'relay-token'));
+
+/** 앞단 중계 키: 로그인을 맡는 중계가 이 파일 내용을 X-Agent-Hub-Relay 로 함께 보내야 X-Agent-Hub-User 이름을 믿는다(처음 켤 때 만듦, 이 PC 사용자만 읽기) */
+function relayToken(file: string): string {
+  try { if (existsSync(file)) { const t = readFileSync(file, 'utf8').trim(); if (t.length >= 32) return t; } } catch {}
+  const t = randomBytes(32).toString('hex');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${t}\n`, { mode: 0o600 });
+  return t;
+}
 const server = await (async () => {
   for (let i = 0; ; i++) {
     try {

@@ -72,7 +72,7 @@ export type HostEvent =
   | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
   | { type: 'session.cli'; sessionId: string; cliSessionId: string } // CLI 가 알려 준 대화 id(바뀔 때만)
   | { type: 'session.imported'; sessionId: string; shown: number } // Claude Code 에서 가져옴 — 앞의 shown 개는 그 대화의 끝부분
-  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia }
+  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia; author?: Author }
   // 원격 접속 막기·풀기(기록에 남아 다시 켜도 그대로)
   | { type: 'session.remoteBlocked'; sessionId: string; app: string; label: string; blocked: boolean; by: string }
   // 연결된 원격 접속 목록 — 바뀔 때마다 전체. 기록에서 모은 것이라 기록하지 않고, 화면이 붙을 때 다시 보낸다
@@ -150,9 +150,16 @@ export type ClientCommand =
   | { type: 'terminal.open'; agent: AgentKind; sessionId?: string; workdir?: string; profile?: boolean }; // profile: Agent Hub 전용 프로필로 로그인
 
 // 명령을 보낸 쪽 — 로그인·권한 확인은 대시보드가 하고, 호스트는 결과만 받는다.
+/**
+ * 화면에서 사람이 쓴 글을 누가 · 어디서 썼는지(화면에만 보이고 AI 에게 가는 글에는 넣지 않는다).
+ * name 은 앞단 중계가 중계 키(data/relay-token)와 함께 넘겨 준 때만 — 아무나 요청에 이름을 적어 남의 이름으로 보이게 할 수 없게.
+ */
+export interface Author { name?: string; path: string }
+
 export interface CommandOrigin {
   via: 'local' | 'dashboard';
   user: string;
+  author?: Author; // 화면(POST /cmd)에서 온 사람 글의 쓴 사람 · 들어온 길
   trusted?: boolean; // PC 앞과 같은 권한(원격 접속에서 "PC 앞과 같은 권한"을 켰을 때)
 }
 
