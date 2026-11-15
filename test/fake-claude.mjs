@@ -140,6 +140,19 @@ async function handle(text) {
   }
 
   // 멈춤 시험: 멈출 때까지 기다렸다가 실제 CLI 처럼 error_during_execution 으로 끝난다
+  // 대화 중 정리 명령: "/compact …" → 실제 CLI 처럼 compact_boundary(앞뒤 토큰) 와 빈 결과
+  if (text.startsWith('/compact')) {
+    globalThis.compactArg = text.slice(8).trim();
+    out({ type: 'system', subtype: 'status', status: 'compacting', session_id: sid });
+    out({ type: 'system', subtype: 'compact_boundary', session_id: sid, compact_metadata: { trigger: 'manual', pre_tokens: 28661, post_tokens: 12583 } });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0, result: '', session_id: sid });
+    return;
+  }
+  if (text.includes('정리할 때 받은 것?')) {
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: `정리 지시: ${globalThis.compactArg ?? '없음'}` }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0, session_id: sid });
+    return;
+  }
   // 아래에 오래 도는 프로세스 띄우기(작업자가 띄운 서버 흉내): "자식 띄움"
   if (text === '자식 띄움') {
     const { spawn } = await import('node:child_process');

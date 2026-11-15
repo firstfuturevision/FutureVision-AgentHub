@@ -104,6 +104,8 @@ export type HostEvent =
   | { type: 'session.renamed'; sessionId: string; title: string; aliases?: string[] } // aliases: 예전 이름들 — 이름으로 찾는 바깥 시스템이 끊기지 않게
   | { type: 'session.reordered'; sessionId: string; rank: number }
   | { type: 'session.rewound'; sessionId: string; upTo: number; by?: string }
+  | { type: 'session.compacting'; sessionId: string; queued?: boolean } // 컨텍스트 정리 시작(queued: 하던 일이 끝나면)
+  | { type: 'session.compacted'; sessionId: string; mode: 'cli' | 'summary'; before?: number; after?: number; unit: 'tokens' | 'chars'; summary?: string; error?: string } // 정리 끝: cli = CLI 의 정리 명령, summary = 에이전트가 쓴 정리본으로 새 대화
   | { type: 'session.deleted'; sessionId: string }
   | { type: 'session.dirs'; sessionId: string; dirs: string[] }
   // 에이전트 설정을 바꿈 — 메인 CLI 를 새 설정으로 다시 띄웠다(바뀐 SessionInfo 전체)
@@ -137,7 +139,8 @@ export type ClientCommand =
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
   | { type: 'session.split'; sessionId: string; upTo?: number } // 분담: 포크처럼 이어받고, 원본과 서로 한 일을 주고받는다(양쪽 공유). upTo: 그 차례까지만
-  | { type: 'session.rewind'; sessionId: string; upTo: number } // 되감기: 사람 지시 upTo 차례까지만 남기고 그 뒤 대화는 에이전트가 잊는다(파일은 그대로)
+  | { type: 'session.rewind'; sessionId: string; upTo: number }
+  | { type: 'session.compact'; sessionId: string } // 컨텍스트 정리 // 되감기: 사람 지시 upTo 차례까지만 남기고 그 뒤 대화는 에이전트가 잊는다(파일은 그대로)
   | { type: 'session.import'; cliSessionId: string } // 이 PC 의 Claude Code 세션을 가져와 그 대화에 이어 간다(PC 앞에서만)
   | { type: 'session.delete'; sessionId: string } // 목록에서 지운다(작업자 포함, 돌고 있으면 끝냄). 기록 파일은 남긴다
   | { type: 'session.dirs'; sessionId: string; dirs: string[] } // 연결 폴더 바꾸기(작업 폴더 뿌리 아래 폴더 이름들)
@@ -311,6 +314,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       const upTo = Number.isInteger(c.upTo) && (c.upTo as number) >= 0 ? (c.upTo as number) : undefined;
       return { type: 'session.split', sessionId: c.sessionId as string, ...(upTo !== undefined ? { upTo } : {}) };
     }
+    case 'session.compact':
+      if (typeof c.sessionId !== 'string') return null;
+      return { type: 'session.compact', sessionId: c.sessionId };
     case 'session.rewind':
       if (!str(c.sessionId) || !Number.isInteger(c.upTo) || (c.upTo as number) < 0) return null;
       return { type: 'session.rewind', sessionId: c.sessionId as string, upTo: c.upTo as number };

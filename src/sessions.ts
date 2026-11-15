@@ -71,6 +71,8 @@ interface Live {
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
   dormant?: boolean; // 호스트를 다시 켜서 CLI 가 아직 없음 — 다음 지시 때 띄운다
   resume?: string; // 다음에 띄울 CLI 가 이어 갈 Claude 대화 id(--resume)
+  compactPending?: string; // 컨텍스트 정리를 부탁한 사람 — 하던 차례가 끝나면 정리한다
+  compacting?: { mode: 'cli' | 'summary'; before: number; text?: string; done?: boolean }; // 정리 중인 차례
   idleSince?: number; // 쉬기 시작한 때 — 오래 쉬면 CLI 를 내려 메모리를 돌려준다(sleepIdle)
   remotes?: Map<string, RemoteLink>; // 연결된 원격 접속(app + label → 연결). 기록 전체에서 모은다 — 기록이 길어 앞이 잘려도 남게
 }
@@ -105,6 +107,11 @@ function conversation(history: HostEvent[], upTo?: number): string[] {
       turnAt.push(lines.length);
       users++;
       lines.push(`${speaker(e)}: ${e.text}`);
+    } else if (e.type === 'session.compacted' && e.summary) {
+      // 컨텍스트 정리(정리본 방식): 앞 줄은 정리본 하나로. 정리 앞으로 되감아도 정리본은 남는다
+      lines.length = 0;
+      lines.push(`[앞 대화 정리본]\n${e.summary}`);
+      turnAt.fill(1);
     } else if (e.type === 'agent.text' && !e.partial) lines.push(`에이전트: ${e.text}`);
     else if (e.type === 'session.merged') lines.push(`[하위 작업 공유: ${e.title}]\n${e.text}`);
   }
@@ -1087,6 +1094,8 @@ export class SessionManager {
         }
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
         this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}) });
+        // 컨텍스트 정리 부탁(글 전체가 그 말일 때만): AI 에게 보통 지시로 보내지 않고 앱이 정리한다
+        if (isCompactRequest(cmd.text) && !atts.length) return this.compact(live, origin.user);
         // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)
         if (this.intake && live.info.viaIntake && live.info.id !== this.intake.sessionId && isHumanOrigin(origin.user) && viaThroughIntake(cmd.via) && !cmd.text.trimStart().startsWith('/')) {
           if (await this.toIntake(live, cmd.text, atts)) return;
@@ -1259,6 +1268,11 @@ export class SessionManager {
         if (!live) return;
         if (live.info.role === 'worker') return this.publish({ type: 'error', sessionId: cmd.sessionId, message: '하위 에이전트는 분담할 수 없음. 메인 작업을 분담하세요' });
         await this.forkLive(live, origin, ' (분담)', cmd.upTo, 'split');
+        return;
+      }
+      case 'session.compact': {
+        const live = this.get(cmd.sessionId);
+        if (live) await this.compact(live, origin.user);
         return;
       }
       case 'session.rewind': {
@@ -1878,11 +1892,15 @@ export class SessionManager {
       if (ev.type === 'session.ended') turn.ended = ev.reason;
       if (turn.done || turn.ended) for (const w of [...turn.waiters]) w();
     }
+    if (live.compacting && ev.type === 'agent.text' && !ev.partial) live.compacting.text = ev.text;
+    if (live.compacting && ev.type === 'session.compacted') { live.compacting.done = true; live.memSeen = undefined; }
     if (ev.type === 'turn.done') {
       // 차례가 끝났는데 답하지 않은 승인 요청이 남아 있으면 더는 답할 곳이 없다 — "승인 대기"로 남지 않게 닫는다
       this.closePerms(live, '차례 끝남');
+      if (live.compacting) return this.finishCompact(live, ev.isError);
       this.setStatus(live, 'idle');
       this.share(live);
+      if (live.compactPending) { const by = live.compactPending; setTimeout(() => void this.compact(live, by), 0); } // 하던 일이 끝났으니 부탁받은 정리
       const run = live.schedRun;
       if (run && run.skip > 0) run.skip--; // 예약 지시 앞에 하던 차례
       else if (run) this.finishScheduled(live, ev.isError || run.error ? `실패: ${run.error ?? '오류로 끝남'}` : `끝남 · ${Math.round((Date.now() - run.started) / 1000)}초`);
@@ -2012,6 +2030,58 @@ export class SessionManager {
   private publishContext(live: Live) {
     const items = [...(live.ctx ?? []).map((c) => ({ ...c, pending: false })), ...this.pendingContext(live)];
     this.publish({ type: 'context.items', sessionId: live.info.id, items });
+  }
+
+  /**
+   * 컨텍스트 정리. 하던 차례가 있으면 끝난 뒤에. 정리 전 기록은 그대로 남는다(화면 · 기록 파일).
+   *  - Claude: CLI 의 /compact 에 남길 것(역할 · 하던 일 · 남은 할 일 · 사람이 정한 것 · 기억 · 공통 지침)을 붙여 보낸다 → compact_boundary 의 앞뒤 토큰
+   *  - 그 밖(Codex · Gemini 등 ACP): 에이전트에게 정리본을 쓰게 한 뒤 CLI 를 내리고, 다음 지시에 정리본 + 그 뒤 대화만 붙여 새로 띄운다
+   * 정리 뒤 첫 지시에는 기억 · 공통 지침을 처음처럼 다시 붙인다.
+   */
+  async compact(live: Live, by: string): Promise<void> {
+    if (live.compacting) return;
+    const st = live.info.status;
+    if (st === 'working' || st === 'starting' || this.waitingPerm(live)) {
+      live.compactPending = by;
+      this.publish({ type: 'session.compacting', sessionId: live.info.id, queued: true });
+      return;
+    }
+    live.compactPending = undefined;
+    if (live.dormant && !(await this.wake(live))) return;
+    const cli = live.info.agent === 'claude';
+    const said = conversation(live.history).join('\n');
+    live.compacting = { mode: cli ? 'cli' : 'summary', before: cli ? 0 : said.length };
+    this.publish({ type: 'session.compacting', sessionId: live.info.id });
+    this.setStatus(live, 'working');
+    const keep = '이 작업의 역할, 진행 중이던 일과 남은 할 일, 사람이 정한 것과 고쳐 준 것, [기억]과 [공통 지침]의 규칙, 다루던 파일 · 주소 · 이름';
+    // Claude 의 /compact 는 그대로(앞에 다른 글이 붙으면 명령이 아니다). 정리본 방식은 보통 지시처럼(새로 띄운 CLI 면 앞 대화가 붙는다)
+    live.adapter.send(cli
+      ? `/compact 정리본에 꼭 남길 것: ${keep}. 끝난 잡담과 도구 출력 원문은 줄인다.`
+      : this.compose(live, `[컨텍스트 정리] 지금까지의 대화를 새 대화에서 이어서 일할 수 있게 정리본으로 써 줘. 꼭 남길 것: ${keep}. 끝난 잡담과 도구 출력 원문은 빼고, 정리본만 답한다(다른 일은 하지 않는다).`));
+  }
+
+  private finishCompact(live: Live, isError: boolean) {
+    const c = live.compacting!;
+    live.compacting = undefined;
+    const id = live.info.id;
+    if (c.mode === 'cli') {
+      if (!c.done) this.publish({ type: 'session.compacted', sessionId: id, mode: 'cli', unit: 'tokens', error: isError ? '정리 명령이 실패함' : '정리되지 않음(이 CLI 버전이 대화 중 /compact 를 받지 않음)' });
+    } else if (isError || !c.text?.trim()) {
+      this.publish({ type: 'session.compacted', sessionId: id, mode: 'summary', unit: 'chars', error: '에이전트가 정리본을 쓰지 못함' });
+    } else {
+      // 정리본으로 새 대화: 지금 CLI 를 내리고 다음 지시에 정리본 + 그 뒤 대화만 붙인다(conversation 이 정리본에서 다시 센다)
+      this.publish({ type: 'session.compacted', sessionId: id, mode: 'summary', unit: 'chars', before: c.before, after: c.text.trim().length, summary: c.text.trim() });
+      live.gen = (live.gen ?? 0) + 1;
+      live.dormant = true;
+      if (live.token) this.tokens.delete(live.token);
+      live.token = undefined;
+      live.adapter.stop();
+      live.carry = undefined;
+      live.memSeen = undefined;
+      delete live.info.cliSessionId;
+      this.publish({ type: 'context.usage', sessionId: id, used: 0, window: null });
+    }
+    this.setStatus(live, 'idle');
   }
 
   /**
@@ -2198,4 +2268,12 @@ function childMap(): Map<number, number[]> | null {
 }
 function hasLiveChildren(kids: Map<number, number[]>, pid: number): boolean {
   return (kids.get(pid) ?? []).length > 0;
+}
+
+/** 사람 글이 통째로 컨텍스트 정리 부탁인지(다른 지시에 섞인 말은 아님) */
+export function isCompactRequest(text: string): boolean {
+  const t = text.trim().replace(/[.!?~。！]+$/u, '').replace(/\s+/g, ' ').toLowerCase();
+  if (/^\/(compact|compress|컨텍스트 ?정리)$/.test(t)) return true;
+  if (/^(compact|compress)( (the )?(context|conversation|chat))?( please)?$/.test(t)) return true;
+  return /^(지금까지 )?(컨텍스트|대화 ?기록|대화)(를|을)? ?(좀 )?(정리|압축|요약 ?정리)(해 ?(줘|주세요|줄래|봐)|하자|해|해라|요망|부탁(해|합니다)?)?$/.test(t);
 }

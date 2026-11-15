@@ -184,6 +184,12 @@ export class ClaudeAdapter implements AgentAdapter {
           this.claudeSessionId = ev.session_id;
           this.emit({ type: 'session.cli', cliSessionId: ev.session_id });
         }
+        // /compact(또는 CLI 가 스스로 한 정리): 앞뒤 크기
+        if (ev.subtype === 'compact_boundary' && ev.compact_metadata) {
+          const m = ev.compact_metadata;
+          this.emit({ type: 'session.compacted', mode: 'cli', unit: 'tokens', ...(num(m.pre_tokens) ? { before: num(m.pre_tokens) } : {}), ...(num(m.post_tokens) ? { after: num(m.post_tokens) } : {}) });
+          if (num(m.post_tokens)) this.lastUsed = num(m.post_tokens);
+        }
         return;
 
       case 'stream_event': {

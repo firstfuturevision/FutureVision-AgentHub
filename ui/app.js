@@ -135,6 +135,7 @@ let sug = { items: [], index: 0, start: 0, end: 0 };
 const COMMANDS = [
   { label: '/새 작업', hint: '새 작업 화면으로', run: () => $('new-task').click() },
   { label: '/멈추기', hint: '하던 일을 멈춤', run: () => viewId && send({ type: 'session.stop', sessionId: viewId }) },
+  { label: '/컨텍스트 정리', hint: '대화 기록을 정리해 가볍게(기록은 남음)', run: () => viewId && send({ type: 'session.compact', sessionId: viewId }) },
   { label: '/에이전트 만들기', hint: '메인에게 부탁', insert: '새 에이전트를 만들어 줘. 이름: , AI: , 하는 일: ' },
   { label: '/에이전트', hint: '설정 열기', run: () => { showNav('settings'); showSetTab('presets'); } },
   { label: '/프리셋', hint: '설정 열기', run: () => { showNav('settings'); showSetTab('workpresets'); } },
@@ -618,14 +619,6 @@ function renderAllSchedules() {
   if (crowded.length) {
     const warn = el('div', 'p-warn sched-crowd');
     warn.append(el('span', '', `같은 시각에 몰림: ${crowded.map(([t, v]) => `${t} ${v.length}개`).join(', ')}. 같은 AI 계정을 같이 써서 사용 한도에 걸리기 쉬워요.`));
-    const fix = el('button', 'line-btn', '10분씩 나누기');
-    fix.type = 'button';
-    fix.onclick = async () => {
-      if (!(await askDialog({ title: '예약 시각 나누기', text: '같은 시각에 걸린 예약 가운데 하나는 그대로 두고, 나머지를 비어 있는 다음 10분 자리로 옮깁니다(예: 09:00 → 09:10, 09:20). 간격 예약과 꺼진 예약은 그대로입니다.', ok: '나누기' }))) return;
-      const r = await postJson('/schedules/spread', {});
-      if (r) { flash(`예약 ${r.moved}개를 옮겼어요`); void loadAllSchedules(); }
-    };
-    warn.append(fix);
     box.append(warn);
   }
   const key = (x) => (x.repeat === 'interval' ? '00:00' : x.time ?? '99:99');
@@ -1964,6 +1957,14 @@ function onEvent(ev) {
       break;
     }
     case 'session.dirs': s.info.extraDirs = ev.dirs; break;
+    case 'session.compacting': s.items.push({ k: 'note', t: ev.queued ? '하던 일이 끝나면 컨텍스트를 정리합니다' : '컨텍스트 정리 중' }); break;
+    case 'session.compacted': {
+      if (ev.error) { s.items.push({ k: 'line err', t: `컨텍스트를 정리하지 못함: ${ev.error}` }); break; }
+      const size = (n) => (ev.unit === 'tokens' ? `${tokens(n)} 토큰` : `${n.toLocaleString()}자`);
+      const what = ev.before && ev.after ? `${size(ev.before)}에서 ${size(ev.after)}로` : '';
+      s.items.push({ k: 'note', t: `컨텍스트를 정리했습니다${what ? `, ${what}` : ''}${ev.mode === 'summary' ? ' (정리본으로 새 대화 — 다음 지시부터)' : ''}. 정리 전 대화는 여기 그대로 남아 있습니다` });
+      break;
+    }
     case 'session.configured': {
       Object.assign(s.info, ev.session);
       skillsCache.delete(s.info.id);
@@ -2394,6 +2395,7 @@ const skillsCache = new Map(); // 세션 id → 스킬 목록
 let skillsAll = false; // 스킬 모두 보기
 $('panel-btn').onclick = () => setPanel(!panelIsOpen());
 $('panel-close').onclick = () => setPanel(false);
+$('p-compact').onclick = () => viewId && send({ type: 'session.compact', sessionId: viewId });
 $('p-folder-add').onchange = async () => {
   const s = viewId && sessions.get(viewId);
   let name = $('p-folder-add').value;
@@ -2726,7 +2728,9 @@ function configForm(s) {
 /** 컨텍스트: 사용량 막대, 호스트가 넣은 것(앞 대화, 포크·분담 공유) */
 function renderContext(s) {
   const u = s.usage;
-  $('p-usage').hidden = !u;
+  $('p-usage').hidden = false; // 사용량을 모르는 AI 도 "컨텍스트 정리" 단추는 보인다
+  $('p-usage').querySelector('.p-usage-head').hidden = !u;
+  if (!u) $('p-usage-bar').parentElement.hidden = true;
   if (u) {
     const pct = u.window ? Math.min(100, (u.used / u.window) * 100) : null;
     $('p-usage-pct').textContent = pct == null ? '사용 중' : `${pct < 1 ? pct.toFixed(1) : Math.round(pct)}% 사용됨`;

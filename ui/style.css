@@ -604,3 +604,6 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .limit-line .auth-note { margin: 0; }
 .update-note { width: 100%; font-size: 12px; color: var(--ink-soft); }
 .update-note summary { cursor: pointer; }
+
+/* 작업 정보 → 컨텍스트 정리 */
+.p-compact { margin-top: 8px; font-size: 12px; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 8px; }
