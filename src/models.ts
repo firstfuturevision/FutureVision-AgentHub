@@ -48,8 +48,8 @@ export function askClaudeModels(command: string, timeoutMs = 25000, prefix: stri
     const timer = setTimeout(() => done(new Error('Claude CLI 가 답하지 않음')), timeoutMs);
     p.on('error', (e) => done(e));
     p.on('exit', () => done(new Error('Claude CLI 가 모델 목록을 알려 주지 않고 끝남')));
-    p.stdout!.on('data', (d: Buffer) => {
-      buf += d.toString('utf8');
+    p.stdout!.setEncoding('utf8').on('data', (d: string) => {
+      buf += d;
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i);

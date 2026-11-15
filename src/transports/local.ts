@@ -719,13 +719,16 @@ function events(req: IncomingMessage, res: ServerResponse, sessions: SessionMana
 async function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
   // application/json 강제 → 다른 사이트의 단순 폼 전송(CSRF)은 브라우저가 사전 확인에서 막는다.
   if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return void send(res, 415, 'JSON 만 받음');
-  let raw = '';
+  // 조각(Buffer)을 모아 한 번에 UTF-8 로 푼다 — 조각마다 풀면 한글처럼 여러 바이트 글자가 조각 경계에서 깨진다(망을 건너온 긴 글)
+  const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    raw += chunk;
-    if (raw.length > 1_000_000) return void send(res, 413, '너무 큼');
+    size += chunk.length;
+    if (size > 4_000_000) return void send(res, 413, '너무 큼');
+    chunks.push(chunk);
   }
   try {
-    return JSON.parse(raw);
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     return void send(res, 400, 'JSON 형식 오류');
   }

@@ -100,8 +100,8 @@ function run(cmd: string, args: string[], env: Record<string, string> = {}): Pro
     const p = spawn(cmd, args, { env: { ...process.env, ...env }, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (err += d));
+    p.stdout.setEncoding('utf8').on('data', (d) => (out += d)); // 조각 경계에서 한글 폴더 이름이 깨지지 않게
+    p.stderr.setEncoding('utf8').on('data', (d) => (err += d));
     p.on('error', (e) => done({ code: -1, out, err: String(e) }));
     p.on('close', (code) => done({ code, out, err }));
   });
