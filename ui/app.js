@@ -1891,6 +1891,15 @@ function onEvent(ev) {
   if (!s) return;
   const at = ev.at ?? Date.now(); // 조각 글은 시각이 없다
   if (ev.at) s.lastAt = Math.max(s.lastAt ?? 0, ev.at);
+  const before = s.items.length;
+  reduceEvent(s, ev, at);
+  // 이 소식으로 생긴 글에 일어난 시각을 붙인다(대화에 보이는 시각). 시각을 안 주는 예전 호스트면 비워 둔다
+  // (보내는 중 글을 바꾸는 등 앞 글이 빠질 수 있어 끝에서 새로 생긴 만큼 + 2 개를 본다)
+  if (ev.at) for (let i = s.items.length - 1, n = s.items.length - before + 2; i >= 0 && n > 0; i--, n--) if (s.items[i].at === undefined && !s.items[i].pending) s.items[i].at = ev.at;
+  renderSoon();
+}
+
+function reduceEvent(s, ev, at) {
   switch (ev.type) {
     case 'session.status':
       s.info.status = ev.status;
@@ -1952,7 +1961,7 @@ function onEvent(ev) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments, at }); s.turnStart = at; s.doing = null; break;
+      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -1976,6 +1985,10 @@ function onEvent(ev) {
     case 'turn.done':
       // 화면에는 걸린 시간만. 비용은 기록(data/sessions/*.jsonl)에만 남긴다.
       s.items.push({ k: 'line meta', t: `${(ev.durationMs / 1000).toFixed(1)}초` });
+      // 오래 걸린 답(1분 넘게)은 이 차례의 마지막 답 옆에 걸린 시간을 작게
+      if (ev.durationMs >= 60_000) {
+        for (let i = s.items.length - 2; i >= 0 && s.items[i].k !== 'user'; i--) if (s.items[i].k === 'agent') { s.items[i].took = ev.durationMs; break; }
+      }
       s.doing = null;
       if (s.info.role === 'main') {
         if (ev.at) s.doneAt = ev.at; // 시각을 안 주는 예전 호스트면 안 읽음 표시는 하지 않는다
@@ -2002,7 +2015,6 @@ function onEvent(ev) {
       if (replayed) notify(s, ev.message.split('\n')[0]); // 예약 실패·로그인 만료 등
       break;
   }
-  renderSoon();
 }
 
 // ── 그리기 ──────────────────────────────────
@@ -3672,13 +3684,49 @@ function olderButton(s, from) {
 }
 
 /** 대화 항목 그리기: 연달아 나온 도구 줄은 한 줄로 접고, 연달아 맡긴 작업은 체크리스트 카드 하나로 묶는다 */
-function renderItems(s, live, into, skip, from = 0) {
+/** 시각을 보이는 글: 사람 지시 · 답 · 그 밖에 대화에 끼는 글(입력 세션 · 다른 작업 · 예약 · 정리 · 오류) */
+const STAMPED = new Set(['user', 'agent', 'note', 'intake-ask', 'line err', 'image']);
+const dayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+const hm = (ms) => new Date(ms).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+/** 오늘이면 "20:04", 다른 날이면 "11/14 20:04" (보는 기기의 시간대) */
+function stampText(it) {
+  const d = new Date(it.at);
+  const t = dayKey(it.at) === dayKey(Date.now()) ? hm(it.at) : `${d.getMonth() + 1}/${d.getDate()} ${hm(it.at)}`;
+  if (!it.took) return t;
+  const m = Math.round(it.took / 60_000);
+  return `${t} · ${m >= 60 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${m}분`} 걸림`;
+}
+function dayLine(ms) {
+  const d = new Date(ms);
+  const today = dayKey(ms) === dayKey(Date.now());
+  return el('div', 'day-line', today ? '오늘' : d.toLocaleDateString('ko-KR', { year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric', month: 'long', day: 'numeric', weekday: 'short' }));
+}
+
+function renderItems(s, live, into, skip, from = 0, days = true) {
   const items = s.items;
   // 지금까지 나온 사람 지시 수 — "여기서 포크"가 몇 번째 차례까지 가져갈지(가린 앞부분도 센다)
   let users = items.slice(0, from).filter((it) => it.k === 'user').length;
+  // 날짜가 바뀌는 자리에 날짜 줄(시각이 있는 글끼리 비교)
+  let lastDay = null;
+  for (let i = from - 1; i >= 0 && lastDay === null; i--) if (items[i].at && STAMPED.has(items[i].k)) lastDay = dayKey(items[i].at);
+  const mark = (it) => {
+    if (!it.at || !STAMPED.has(it.k) || it.pending) return;
+    const day = dayKey(it.at);
+    if (day !== lastDay && days) into.append(dayLine(it.at));
+    lastDay = day;
+  };
+  const stamp = (it) => {
+    const node = into.lastElementChild;
+    if (!node || !it.at || !STAMPED.has(it.k) || it.pending) return;
+    const t = el('span', 'msg-time', stampText(it));
+    t.title = new Date(it.at).toLocaleString();
+    const fork = node.querySelector(':scope > .msg-fork');
+    if (fork) node.insertBefore(t, fork); else node.append(t);
+  };
   for (let i = from; i < items.length; ) {
     const it = items[i];
     if (it.k === 'user') users++;
+    if (it !== skip && it.k !== 'line meta' && !isToolLine(it) && it.k !== 'worker') mark(it);
     if (it === skip || it.k === 'line meta') { i++; continue; } // 걸린 시간은 카드에만
     if (isToolLine(it)) {
       let j = i;
@@ -3708,6 +3756,7 @@ function renderItems(s, live, into, skip, from = 0) {
       div.oncontextmenu = (e) => messageMenu(s, it, turn, e);
       into.append(div);
     } else into.append(item(it));
+    if (it !== skip) stamp(it);
     i++;
   }
 }
@@ -3767,7 +3816,7 @@ function tasksCard(ws) {
     card.append(row);
     if (open) {
       const body = el('div', 'tbody');
-      renderItems(w, true, body, ask);
+      renderItems(w, true, body, ask, 0, false); // 하위 작업자 카드 안에는 날짜 줄 없이 시각만
       if (w.draft) body.append(item({ k: 'agent', t: w.draft }));
       card.append(body);
     }
