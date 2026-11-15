@@ -26,17 +26,18 @@ async function send(cmd) {
   // 다른 PC 작업(이 화면에서 연 것): 그 PC 로 보낸다
   const rem = typeof cmd.sessionId === 'string' && remoteOf(cmd.sessionId);
   if (rem) {
-    const r = await fetch('/peers/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: rem.url, cmd: { ...cmd, sessionId: rem.id } }) });
+    const r = await fetch('/peers/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: rem.url, cmd: { ...cmd, sessionId: rem.id } }) }).catch((e) => ({ ok: false, text: async () => e.message }));
     if (!r.ok) flash(`${rem.pc} 에 못 보냄: ${await r.text()}`, true);
-    return;
+    return r.ok;
   }
-  const res = await fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd) });
+  const res = await fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd) }).catch((e) => ({ ok: false, status: 0, text: async () => e.message }));
   if (!res.ok) {
     const t = await res.text();
     // 화면은 새 버전인데 서버가 아직 옛 버전이면 새 명령을 모른다
     if (res.status === 400 && t === '모르는 명령') { flash('이 기능은 Agent Hub 를 다시 켜야 쓸 수 있어요(왼쪽 위 "새 코드 있음")', true); void loadAlerts(); }
     else flash(`요청 실패 (${res.status}): ${t}`, true);
   }
+  return res.ok;
 }
 // ── 작업 폴더: 새 작업마다 고른다 ──────────────
 const NEW_FOLDER = '__new__';
@@ -301,7 +302,19 @@ async function sendWithFiles(sessionId, text, files) {
     try { attachments.push(await upload(sessionId, f)); } catch (err) { flash(`첨부 실패: ${err.message}`, true); }
   }
   if (!text && !attachments.length) return;
-  send({ type: 'user.message', sessionId, text, ...(attachments.length ? { attachments } : {}) });
+  // 보낸 글은 서버 소식을 기다리지 않고 바로 그린다("보내는 중"). 서버가 받았다는 소식(user.message)이 오면 그것으로 바꾼다
+  const s = sessions.get(sessionId);
+  const mine = s && { k: 'user', t: text, files: attachments, pending: true, at: Date.now() };
+  if (mine) { s.items.push(mine); stickBottom = true; renderSoon(); }
+  const ok = await send({ type: 'user.message', sessionId, text, ...(attachments.length ? { attachments } : {}) });
+  if (!mine) return;
+  if (!ok) { mine.pending = false; mine.failed = true; return renderSoon(); }
+  // 서버는 받았는데 몇 초가 지나도 소식이 안 오면 소식 연결이 끊긴 채 멈춘 것 — 다시 붙어 기록을 새로 받는다
+  setTimeout(() => {
+    const cur = sessions.get(sessionId);
+    if (!cur?.items.includes(mine)) return;
+    if (remoteOf(sessionId)) reopenRemote(sessionId); else reconnectEvents();
+  }, 5000);
 }
 $('attach-btn').onclick = () => $('attach-input').click();
 $('attach-input').onchange = () => { addFiles([...$('attach-input').files]); $('attach-input').value = ''; };
@@ -1840,9 +1853,10 @@ pform.onsubmit = async (e) => {
 
 // ── 이벤트 받기 ──────────────────────────────
 const link = $('link');
-const es = new EventSource('/events');
+let es = null;
+let stickBottom = false; // 이 화면에서 보낸 직후에는 보던 자리와 상관없이 맨 아래로
 let bootId = null; // 서버가 켜질 때마다 바뀐다 — 바뀌었으면(업데이트·다시 켜기) 새 화면을 받으려고 새로 고친다
-es.onopen = () => {
+function onOpen() {
   fetch('/info').then((r) => r.json()).then((i) => {
     if (bootId && i.bootId && i.bootId !== bootId) location.reload();
     bootId = i.bootId ?? bootId;
@@ -1861,13 +1875,20 @@ es.onopen = () => {
   link.textContent = '';
   link.title = '이 PC 의 Agent Hub 에 연결됨';
   link.classList.remove('off');
-};
-es.onerror = () => {
-  link.textContent = '연결 끊김';
-  link.title = '다시 연결하는 중';
-  link.classList.add('off');
-};
-es.onmessage = (m) => onEvent(JSON.parse(m.data));
+}
+function connectEvents() {
+  es = new EventSource('/events');
+  es.onopen = onOpen;
+  es.onerror = () => {
+    link.textContent = '연결 끊김';
+    link.title = '다시 연결하는 중';
+    link.classList.add('off');
+  };
+  es.onmessage = (m) => onEvent(JSON.parse(m.data));
+}
+/** 소식 연결이 열린 채 멈췄을 때(잠자기·망 바뀜 뒤 등): 닫고 새로 붙는다 — 서버가 기록을 다시 보내 화면이 맞춰진다 */
+function reconnectEvents() { es?.close(); connectEvents(); }
+connectEvents();
 
 function onEvent(ev) {
   if (ev.type === 'replay.done') { replayed = true; linksAt = 0; renderArchiveCount(); void loadIntake(); void loadPeers(); if (holding) { holding = false; return render(); } return renderSoon(); } // 여기부터 오는 것만 새 소식(알림)
@@ -1961,7 +1982,10 @@ function onEvent(ev) {
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
     // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 채팅 #일반)
-    case 'user.message': s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments, at }); s.turnStart = at; s.doing = null; break;
+    case 'user.message':
+      // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
+      { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
+      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, files: ev.attachments, at }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -2352,11 +2376,22 @@ $('p-settings-toggle').onclick = () => {
   try { localStorage.setItem('hub.settingsOpen', settingsOpen ? '1' : '0'); } catch {}
   renderPanel();
 };
-let panelOpen = store.get('panel', true);
+// 작업 정보 창: 넓은 화면은 옆에 붙어 열린 채 기억한다. 좁은 화면(폰·작은 창)에서는 대화 위를 덮으므로(입력창까지 가려 글을 못 씀)
+// 기본은 닫고, 단추로 열었을 때만 그 작업을 보는 동안 연다
+const narrow = matchMedia('(max-width: 1100px)');
+let panelWide = store.get('panel', true);
+let panelNarrow = null; // 좁은 화면에서 연 작업 id
+const panelIsOpen = () => (narrow.matches ? panelNarrow !== null && panelNarrow === viewId : panelWide);
+function setPanel(open) {
+  if (narrow.matches) panelNarrow = open ? viewId : null;
+  else { panelWide = open; store.set('panel', open); }
+  renderPanel();
+}
+narrow.addEventListener('change', () => renderPanel());
 const skillsCache = new Map(); // 세션 id → 스킬 목록
 let skillsAll = false; // 스킬 모두 보기
-$('panel-btn').onclick = () => { panelOpen = !panelOpen; store.set('panel', panelOpen); renderPanel(); };
-$('panel-close').onclick = () => { panelOpen = false; store.set('panel', false); renderPanel(); };
+$('panel-btn').onclick = () => setPanel(!panelIsOpen());
+$('panel-close').onclick = () => setPanel(false);
 $('p-folder-add').onchange = async () => {
   const s = viewId && sessions.get(viewId);
   let name = $('p-folder-add').value;
@@ -2496,9 +2531,9 @@ function renderPanel() {
   const s = viewId && sessions.get(viewId);
   const show = Boolean(s) && !$('chat').hidden && !s.info.remotePc; // 다른 PC 작업의 작업 정보는 그 PC 화면에서
   $('panel-btn').hidden = !s || Boolean(s.info.remotePc);
-  $('panel').hidden = !(show && panelOpen);
-  document.querySelector('.app').classList.toggle('with-panel', show && panelOpen);
-  if (!show || !panelOpen) return;
+  $('panel').hidden = !(show && panelIsOpen());
+  document.querySelector('.app').classList.toggle('with-panel', show && panelIsOpen());
+  if (!show || !panelIsOpen()) return;
   const preset = s.info.preset ? presets.find((p) => p.id === s.info.preset.id) : undefined;
 
   renderAbout(s);
@@ -3180,7 +3215,12 @@ function remoteOf(key) {
   return { url, id, pc: pc?.name ?? url };
 }
 let remoteEs = null;
-function openRemote(pc, t) {
+let remoteOpen = null; // 지금 열린 다른 PC 작업 { pc, t } — 멈춘 연결을 다시 붙일 때
+function reopenRemote(key) {
+  if (remoteOpen && remoteKey(remoteOpen.pc.url, remoteOpen.t.id) === key) openRemote(remoteOpen.pc, remoteOpen.t, true);
+}
+function openRemote(pc, t, keepView = false) {
+  remoteOpen = { pc, t };
   const key = remoteKey(pc.url, t.id);
   if (!sessions.has(key)) sessions.set(key, { info: { id: key, role: 'main', agent: 'claude', status: 'idle', title: t.name, customTitle: t.name, createdAt: new Date().toISOString(), workdir: '', remotePc: pc.name, remoteUrl: pc.url }, items: [], draft: null });
   remoteEs?.close();
@@ -3200,6 +3240,7 @@ function openRemote(pc, t) {
     if (ev.sessionId) ev.sessionId = prefix(ev.sessionId);
     onEvent(ev);
   };
+  if (keepView) return;
   viewId = key;
   showNav('sessions');
   render();
@@ -3626,7 +3667,8 @@ function renderChat() {
   const sid = s ? s.info.id : '';
   if (realLog.dataset.sid !== sid) { realLog.replaceChildren(...log.childNodes); realLog.dataset.sid = sid; }
   else morphChildren(realLog, log);
-  if (atBottom) scroll.scrollTop = scroll.scrollHeight;
+  if (atBottom || stickBottom) scroll.scrollTop = scroll.scrollHeight;
+  stickBottom = false;
 }
 
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
@@ -3844,8 +3886,9 @@ function mergedTurns(text) {
 }
 
 function item(it) {
-  const div = el('div', it.k.startsWith('line') ? it.k : `msg ${it.k}`);
-  if (it.from && it.from !== 'local') div.append(el('span', 'from', it.from));
+  const div = el('div', it.k.startsWith('line') ? it.k : `msg ${it.k}${it.pending ? ' pending' : ''}${it.failed ? ' failed' : ''}`);
+  const from = it.failed ? '못 보냄 — 다시 보내 주세요' : it.pending ? '보내는 중' : it.from;
+  if (from && from !== 'local') div.append(el('span', 'from', from));
   if (it.t) div.append(it.k === 'agent' ? renderMarkdown(it.t) : document.createTextNode(it.t)); // 에이전트 답만 마크다운
   if (it.files?.length) {
     // 첨부: 이 브라우저에서 올린 이미지는 미리보기, 나머지는 이름

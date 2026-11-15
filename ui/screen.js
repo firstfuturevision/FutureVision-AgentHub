@@ -234,15 +234,37 @@ stage.addEventListener('keyup', (e) => {
 stage.addEventListener('blur', () => { for (const vk of held) push({ t: 'key', d: false, vk }); held.clear(); });
 
 // 폰: 글자 칸에 쓰고 보내기, 자주 쓰는 키 버튼
-$('screen-text').addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || e.isComposing) return;
+// 보내기는 폼 제출로 — 폰 한글 키보드는 Enter 를 조합 중(isComposing·keyCode 229)으로 보내 keydown 으로는 놓친다.
+// 제출은 조합을 마친 뒤에 오고, 보내기 단추로도 된다
+$('screen-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  const s = e.target.value;
-  if (s) push({ t: 'text', s });
-  e.target.value = '';
+  const field = $('screen-text');
+  const s = field.value;
+  if (!s) return;
+  if (!scr.st?.enabled) return note('화면 제어가 꺼져 있어요 — 위 스위치로 켜 주세요');
+  push({ t: 'text', s });
+  field.value = '';
 });
 for (const b of document.querySelectorAll('.screen-keys [data-vk]')) {
-  b.onclick = () => { const vk = Number(b.dataset.vk); push({ t: 'key', d: true, vk }); push({ t: 'key', d: false, vk }); };
+  b.onclick = () => {
+    if (!scr.st?.enabled) return note('화면 제어가 꺼져 있어요 — 위 스위치로 켜 주세요');
+    const vk = Number(b.dataset.vk);
+    push({ t: 'key', d: true, vk });
+    push({ t: 'key', d: false, vk });
+  };
+}
+// 폰 키보드가 올라오면 화면 제어 창을 보이는 영역에 맞춘다(iOS 는 키보드가 아래 글자 칸을 덮는다)
+if (window.visualViewport) {
+  const fit = () => {
+    const el = $('screen');
+    const vv = window.visualViewport;
+    const covered = window.innerHeight - vv.height > 80; // 키보드
+    el.style.top = covered ? `${vv.offsetTop}px` : '';
+    el.style.height = covered ? `${vv.height}px` : '';
+    el.style.bottom = covered ? 'auto' : '';
+  };
+  visualViewport.addEventListener('resize', fit);
+  visualViewport.addEventListener('scroll', fit);
 }
 
 // ── 클립보드: PC ↔ 이 기기. 브라우저는 사람이 누를 때만 클립보드를 읽고 쓰게 한다 ──

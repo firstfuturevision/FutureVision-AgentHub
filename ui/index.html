@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>Agent Hub</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -388,7 +388,7 @@
       <div id="screen-msg" class="screen-msg" hidden></div>
     </div>
     <footer class="screen-keys">
-      <input id="screen-text" placeholder="글자 보내기" autocomplete="off" enterkeyhint="send">
+      <form id="screen-form" class="screen-form"><input id="screen-text" placeholder="글자 보내기" autocomplete="off" autocapitalize="off" enterkeyhint="send"><button id="screen-send" type="submit">보내기</button></form>
       <button type="button" data-vk="13">Enter</button>
       <button type="button" data-vk="8">⌫</button>
       <button type="button" data-vk="9">Tab</button>
