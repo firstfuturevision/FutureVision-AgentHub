@@ -105,6 +105,28 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         } catch (err) { return send(res, 502, `그 PC 에 못 보냄: ${(err as Error).message}`); }
         return send(res, 202, 'ok');
       }
+      // 다른 PC 작업에 첨부: 이 화면이 올린 파일을 그 PC 의 /attach 로 넘기고, 그 PC 가 저장한 첨부 정보(작업 폴더 기준 경로)를 돌려준다
+      if (req.method === 'POST' && url.pathname === '/peers/attach' && peers) {
+        const target = peers.urls().find((u) => u === url.searchParams.get('url'));
+        const id = url.searchParams.get('sessionId') ?? '';
+        const name = req.headers['x-file-name'];
+        if (!target || !id || typeof name !== 'string' || !name) return send(res, 400, '연결된 PC · 작업 · x-file-name 을 주세요');
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const c of req) {
+          size += c.length;
+          if (size > 40 * 1024 * 1024) return send(res, 413, '다른 PC 작업에는 40MB 까지 보낼 수 있음');
+          chunks.push(c);
+        }
+        try {
+          const r = await fetch(`${target}/attach?sessionId=${encodeURIComponent(id)}`, { method: 'POST', headers: { 'content-type': String(req.headers['content-type'] ?? 'application/octet-stream'), 'x-file-name': name }, body: Buffer.concat(chunks), signal: AbortSignal.timeout(60000) });
+          const t = await r.text();
+          if (r.status === 404) return send(res, 502, '그 PC 의 Agent Hub 가 첨부를 받지 못함(업데이트 필요)');
+          if (!r.ok) return send(res, 502, `${r.status} ${t.slice(0, 200)}`);
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(t);
+        } catch (err) { return send(res, 502, `그 PC 에 못 보냄: ${(err as Error).message}`); }
+      }
       if (req.method === 'POST' && url.pathname === '/peers/parent' && peers) {
         const body = (await readJson(req, res)) as any;
         if (body === undefined) return;

@@ -267,8 +267,11 @@ function renderAttachments() {
 }
 async function upload(sessionId, f) {
   const name = f.name || `붙여넣은-이미지.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`;
-  if (f.size > 40 * 1024 * 1024) return uploadBig(sessionId, f, name);
-  const r = await fetch(`/attach?sessionId=${encodeURIComponent(sessionId)}`, {
+  // 다른 PC 작업: 이 PC 호스트가 그 PC 로 넘겨 그 PC 작업 폴더에 저장한다(40MB 까지)
+  const rem = remoteOf(sessionId);
+  if (rem && f.size > 40 * 1024 * 1024) throw new Error(`${name}: 다른 PC 작업에는 40MB 까지 보낼 수 있어요`);
+  if (!rem && f.size > 40 * 1024 * 1024) return uploadBig(sessionId, f, name);
+  const r = await fetch(rem ? `/peers/attach?url=${encodeURIComponent(rem.url)}&sessionId=${encodeURIComponent(rem.id)}` : `/attach?sessionId=${encodeURIComponent(sessionId)}`, {
     method: 'POST',
     headers: { 'content-type': f.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(name) },
     body: f,
@@ -297,7 +300,6 @@ async function uploadBig(sessionId, f, name) {
 }
 const formatBytes = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)}GB` : `${Math.round(n / 1024 ** 2)}MB`);
 async function sendWithFiles(sessionId, text, files) {
-  if (remoteOf(sessionId) && files.length) { flash('다른 PC 작업에는 아직 첨부를 보낼 수 없어요(글만 보냄). 첨부는 그 PC 화면에서', true); files = []; }
   const attachments = [];
   for (const f of files) {
     try { attachments.push(await upload(sessionId, f)); } catch (err) { flash(`첨부 실패: ${err.message}`, true); }

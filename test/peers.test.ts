@@ -119,3 +119,51 @@ test('양방향 연결: 상대가 알려 오면 요청 IP + 알려 준 원격 �
   assert.equal(peers.greeted('192.168.0.9', 4319, true), 'http://192.168.0.9:4319');
   assert.deepEqual(peers.urls(), []);
 });
+
+test('다른 PC 작업에 첨부: 이 PC 호스트가 그 PC 의 /attach 로 넘기고 그 PC 가 저장한 첨부 정보를 돌려준다', async (t) => {
+  const lanIp = Object.values(networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal && isPrivateAddress(n.address))?.address;
+  if (!lanIp) return t.skip('사설 IPv4 없음');
+  const got: { url: string; name: string; type: string; body: Buffer }[] = [];
+  const srv = createServer((req, res) => {
+    if (req.url?.startsWith('/attach') && req.method === 'POST') {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const name = decodeURIComponent(String(req.headers['x-file-name']));
+        got.push({ url: req.url!, name, type: String(req.headers['content-type']), body: Buffer.concat(chunks) });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ path: `첨부/${name}`, name, mime: req.headers['content-type'], size: Buffer.concat(chunks).length }));
+      });
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((ok) => srv.listen(0, '0.0.0.0', ok));
+  const { startLocalServer } = await import('../src/transports/local.ts');
+  const { SessionManager } = await import('../src/sessions.ts');
+  const { createServer: netServer } = await import('node:net');
+  const port = await new Promise<number>((ok) => { const s = netServer().listen(0, '127.0.0.1', () => { const p = (s.address() as any).port; s.close(() => ok(p)); }); });
+  const base = mkdtempSync(join(tmpdir(), 'peers-attach-'));
+  const peers = new Peers(join(base, 'peers.json'));
+  const url = peers.add(`${lanIp}:${(srv.address() as any).port}`);
+  const sessions = new SessionManager({ workspaceRoot: base, dataDir: join(base, 'data') });
+  const hub = await startLocalServer({ port, uiDir: join(base, 'ui'), sessions, peers, info: {} });
+  try {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const r = await fetch(`http://127.0.0.1:${port}/peers/attach?url=${encodeURIComponent(url)}&sessionId=abc-123`, { method: 'POST', headers: { 'content-type': 'image/png', 'x-file-name': encodeURIComponent('붙여넣은-이미지.png') }, body: png });
+    assert.equal(r.status, 200, await r.clone().text());
+    assert.deepEqual(await r.json(), { path: '첨부/붙여넣은-이미지.png', name: '붙여넣은-이미지.png', mime: 'image/png', size: 7 });
+    assert.equal(got[0].url, '/attach?sessionId=abc-123');
+    assert.equal(got[0].type, 'image/png');
+    assert.deepEqual(got[0].body, png);
+    // 연결하지 않은 PC 로는 넘기지 않는다
+    const bad = await fetch(`http://127.0.0.1:${port}/peers/attach?url=${encodeURIComponent('http://10.9.9.9:4319')}&sessionId=x`, { method: 'POST', headers: { 'content-type': 'image/png', 'x-file-name': 'a.png' }, body: png });
+    assert.equal(bad.status, 400);
+  } finally {
+    sessions.stopAll();
+    hub.closeAllConnections();
+    await new Promise((ok) => hub.close(() => ok(null)));
+    srv.close();
+  }
+});
