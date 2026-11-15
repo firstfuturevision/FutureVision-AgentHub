@@ -3,6 +3,7 @@
  *  - 키·토큰: 공유 레포 올리기와 같은 검사(findSecret)
  *  - 회사·고객 정보: data/public-deny.txt 에 한 줄에 하나씩 적은 말(대소문자 무시, # 은 주석). data/ 는 레포에 안 올라가므로
  *    회사 이름·고객 이름·사내 주소를 적어 두어도 바깥에 나가지 않는다.
+ *  - 바이너리 파일(화면 캡처 등): 글로 검사할 수 없어 막는다. 확인한 것은 data/public-allow.txt 에 경로를 적는다
  * 걸리면 위치를 보여 주고 1 로 끝난다. `npm run check:public`, 또는 git pre-push 훅으로 푸시 전에 자동으로.
  */
 import { execFileSync } from 'node:child_process';
@@ -36,6 +37,14 @@ function check(where: string, line: string) {
   for (const word of deny) if (low.includes(word)) hits.push(`${where}: "${word}"`);
 }
 
+// 그림·압축 파일 같은 바이너리: 화면 캡처에 회사 정보가 찍혀 있어도 글 검사로는 못 잡는다. 직접 열어 보고 괜찮으면
+// data/public-allow.txt 에 경로를 한 줄씩 적어 통과시킨다
+const allowFile = join(root, 'data', 'public-allow.txt');
+const allow = new Set(existsSync(allowFile) ? readFileSync(allowFile, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')) : []);
+function binary(where: string, file: string) {
+  if (!allow.has(file)) hits.push(`${where}: 바이너리 파일(그림 등) — 열어서 확인한 뒤 data/public-allow.txt 에 경로를 적으면 통과`);
+}
+
 // 검사 자체가 걸리지 않게: 키 모양을 일부러 적어 둔 검사 코드·시험은 키 검사에서 뺀다(금지어 검사는 한다)
 const SECRET_FIXTURES = new Set(['src/shared.ts', 'test/shared.test.ts', 'test/remote.test.ts', 'scripts/check-public.ts']);
 
@@ -43,7 +52,7 @@ for (const file of git('ls-files').split('\n').filter(Boolean)) {
   if (file === 'LICENSE') continue;
   let text: string;
   try { text = readFileSync(join(root, file), 'utf8'); } catch { continue; }
-  if (text.includes('\0')) continue; // 그림 같은 바이너리
+  if (text.includes('\0')) { binary(file, file); continue; } // 그림 같은 바이너리는 글로 못 읽으니 사람이 보게 한다
   text.split('\n').forEach((line, i) => {
     const where = `${file}:${i + 1}`;
     if (SECRET_FIXTURES.has(file)) { const low = line.toLowerCase(); for (const word of deny) if (low.includes(word)) hits.push(`${where}: "${word}"`); }
@@ -62,6 +71,11 @@ if (upstream) {
   // 아직 안 올린 커밋 하나하나가 더한 줄: 마지막 파일만 보면 중간 커밋에 들어갔다가 지운 말이 기록째 올라간다
   const seen = new Set(hits);
   for (const hash of git('rev-list', `${upstream}..HEAD`).split('\n').filter(Boolean)) {
+    // 중간 커밋에 들어갔다가 지운 바이너리도 기록째 올라간다(numstat 의 "-\t-\t경로")
+    for (const line of git('show', '--format=', '--numstat', '--no-renames', hash).split('\n')) {
+      const m = /^-\t-\t(.+)$/.exec(line);
+      if (m) binary(`커밋 ${hash.slice(0, 7)} ${m[1]}`, m[1]);
+    }
     let file = '';
     for (const line of git('show', '--format=', '--unified=0', '--no-color', hash).split('\n')) {
       if (line.startsWith('+++ b/')) { file = line.slice(6); continue; }
