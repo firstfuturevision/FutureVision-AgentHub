@@ -136,6 +136,10 @@ export class AcpAdapter implements AgentAdapter {
     if (this.busy && this.acpSessionId) this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.acpSessionId } });
   }
 
+  pid() {
+    return this.proc && this.proc.exitCode === null && this.proc.signalCode === null ? this.proc.pid : undefined;
+  }
+
   stop() {
     this.stopped = true;
     if (this.busy && this.acpSessionId) this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.acpSessionId } });

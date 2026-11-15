@@ -87,6 +87,11 @@ const sessions = new SessionManager({
     }
   },
 });
+// 쉬는 작업 내리기(메모리): 1분마다 오래 쉰 CLI 를 내린다. 다음 지시가 오면 같은 대화로 이어 띄운다
+sessions.sleepIdleMinutes = Math.max(0, Number(cfg.sleepIdleMinutes) || 0);
+sessions.maxAwake = Math.max(0, Number(cfg.maxAwakeAgents) || 0);
+setInterval(() => { try { sessions.sleepIdle(); } catch (err) { console.warn('[sleep]', (err as Error).message); } }, 60_000).unref();
+
 
 // 업데이트: 받은 뒤 스스로 다시 켠다. 실행기(npm start)로 띄웠으면 실행기가(종료 코드 75),
 // 아니면 같은 명령으로 새 Agent Hub 를 떼어 띄우고 꺼진다(새 것은 화면 포트가 비기를 기다린다)

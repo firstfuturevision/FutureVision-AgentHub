@@ -126,6 +126,10 @@ export class ClaudeAdapter implements AgentAdapter {
     if (this.proc?.stdin?.writable) this.proc.stdin.write(JSON.stringify(msg) + '\n');
   }
 
+  pid() {
+    return this.proc && this.proc.exitCode === null && this.proc.signalCode === null ? this.proc.pid : undefined;
+  }
+
   stop() {
     this.stopped = true;
     for (const id of [...this.permissions.keys()]) this.respondPermission(id, false);

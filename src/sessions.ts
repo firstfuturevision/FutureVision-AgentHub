@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute, extname, basename } from 'node:path';
 import { AGENTS, MODEL_RE, viaLabel } from './protocol.ts';
@@ -70,6 +71,7 @@ interface Live {
   gen?: number; // 몇 번째로 띄운 CLI 인지 — 설정을 바꿔 다시 띄우면 앞 CLI 의 이벤트는 버린다
   dormant?: boolean; // 호스트를 다시 켜서 CLI 가 아직 없음 — 다음 지시 때 띄운다
   resume?: string; // 다음에 띄울 CLI 가 이어 갈 Claude 대화 id(--resume)
+  idleSince?: number; // 쉬기 시작한 때 — 오래 쉬면 CLI 를 내려 메모리를 돌려준다(sleepIdle)
   remotes?: Map<string, RemoteLink>; // 연결된 원격 접속(app + label → 연결). 기록 전체에서 모은다 — 기록이 길어 앞이 잘려도 남게
 }
 
@@ -168,6 +170,9 @@ export class SessionManager {
   /** 화면 제어 — 메인 에이전트의 screen_* 도구가 쓴다(main.ts 가 붙인다) */
   screen?: ScreenControl;
   private aboutLine = false;
+  /** 쉬는 작업 내리기: 이만큼(분) 쉰 CLI 를 내린다(0 이면 안 함). 떠 있는 CLI 가 maxAwake 를 넘으면 오래 쉰 것부터 내린다(0 이면 한도 없음) */
+  sleepIdleMinutes = 0;
+  maxAwake = 0;
   limits?: LimitStore; // 연결별 사용 한도(설정 → 연동)
   intake?: IntakeStore;
   private makingIntake = false; // 입력 세션(이 PC 에 하나) — 입력 거치기를 켠 작업의 사람 지시를 먼저 정리한다
@@ -2009,9 +2014,57 @@ export class SessionManager {
     this.publish({ type: 'context.items', sessionId: live.info.id, items });
   }
 
+  /**
+   * 쉬는 작업의 CLI 를 내려 메모리를 돌려준다. 다음 지시가 오면 wake 가 --resume 으로 같은 대화에 이어 띄운다.
+   * 내리지 않는 것: 일하는 중 · 승인 대기 · 예약 차례 · 메인이 기다리는 하위 작업자 · 일하는 하위 작업자가 있는 메인 ·
+   * 그 대화로 이어 갈 수 없는 것(Claude 대화 기록이 없거나 Codex · Gemini) · CLI 아래에 살아 있는 프로세스가 있는 것(작업자가 띄운 서버 · 명령).
+   * 돌려준 값: 내린 작업 id
+   */
+  sleepIdle(now = Date.now()): string[] {
+    if (!this.sleepIdleMinutes && !this.maxAwake) return [];
+    const awake = [...this.sessions.values()].filter((l) => !l.dormant && l.adapter.pid?.() !== undefined);
+    const kids = childMap();
+    const can = (l: Live) => {
+      if (l.info.status !== 'idle' || !l.idleSince || l.schedRun) return false;
+      if (l.turn && !l.turn.done && !l.turn.ended) return false;
+      if (this.waitingPerm(l)) return false;
+      if (l.info.id === this.intake?.sessionId && this.intake.pending.size) return false;
+      if ([...this.sessions.values()].some((w) => w.info.parentId === l.info.id && (w.info.status === 'working' || w.info.status === 'starting'))) return false;
+      if (!this.resumable(l)) return false;
+      const pid = l.adapter.pid?.();
+      return pid !== undefined && kids !== null && !hasLiveChildren(kids, pid);
+    };
+    const out: Live[] = [];
+    if (this.sleepIdleMinutes) for (const l of awake) if (can(l) && now - l.idleSince! >= this.sleepIdleMinutes * 60_000) out.push(l);
+    if (this.maxAwake && awake.length - out.length > this.maxAwake) {
+      const more = awake.filter((l) => !out.includes(l) && can(l) && now - l.idleSince! >= 60_000).sort((a, b) => a.idleSince! - b.idleSince!);
+      out.push(...more.slice(0, awake.length - out.length - this.maxAwake));
+    }
+    for (const l of out) {
+      l.gen = (l.gen ?? 0) + 1; // 내린 CLI 가 늦게 보내는 소식은 버린다
+      l.dormant = true;
+      if (l.token) this.tokens.delete(l.token);
+      l.token = undefined;
+      l.adapter.stop();
+    }
+    return out.map((l) => l.info.id);
+  }
+
+  private waitingPerm(l: Live): boolean {
+    for (const a of this.asks.values()) if (a.sessionId === l.info.id) return true;
+    const open = new Set<string>();
+    for (const e of l.history) {
+      if (e.type === 'permission.request') open.add(e.requestId);
+      else if (e.type === 'permission.resolved') open.delete(e.requestId);
+    }
+    return open.size > 0;
+  }
+
   private setStatus(live: Live, status: SessionInfo['status']) {
     if (live.info.status === status || live.info.status === 'ended') return;
     live.info.status = status;
+    if (status === 'idle') live.idleSince = Date.now();
+    else delete live.idleSince;
     this.publish({ type: 'session.status', sessionId: live.info.id, status });
   }
 
@@ -2115,4 +2168,34 @@ export function viaThroughIntake(via?: { app: string; label: string }): boolean 
 /** 사람이 쓴 지시인가(다른 작업·예약·입력 세션이 보낸 것은 아님) */
 export function isHumanOrigin(user: string): boolean {
   return !(user.startsWith('작업 ') || user === '예약' || user === '입력' || user === '입력 요청');
+}
+
+/** 프로세스 번호 → 자식 번호들(리눅스 /proc, macOS ps). 알 수 없으면 null — 그때는 아무것도 내리지 않는다 */
+function childMap(): Map<number, number[]> | null {
+  const m = new Map<number, number[]>();
+  const put = (pid: number, ppid: number) => { const a = m.get(ppid); if (a) a.push(pid); else m.set(ppid, [pid]); };
+  try {
+    if (process.platform === 'linux') {
+      for (const d of readdirSync('/proc')) {
+        if (!/^\d+$/.test(d)) continue;
+        try {
+          const st = readFileSync(`/proc/${d}/stat`, 'utf8');
+          const rest = st.slice(st.lastIndexOf(')') + 2).split(' '); // 이름에 괄호 · 공백이 있어도
+          if (rest[0] === 'Z') continue; // 좀비는 살아 있는 것이 아니다
+          put(Number(d), Number(rest[1]));
+        } catch {}
+      }
+      return m;
+    }
+    if (process.platform === 'darwin') {
+      const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
+      if (r.status !== 0) return null;
+      for (const line of r.stdout.split('\n')) { const [a, b] = line.trim().split(/\s+/).map(Number); if (a && b) put(a, b); }
+      return m;
+    }
+  } catch {}
+  return null; // Windows 등: CLI 가 셸을 거쳐 떠서 아래 프로세스로 가릴 수 없다
+}
+function hasLiveChildren(kids: Map<number, number[]>, pid: number): boolean {
+  return (kids.get(pid) ?? []).length > 0;
 }

@@ -41,6 +41,8 @@ export interface AgentAdapter {
   /** 하던 차례만 멈춘다(CLI 는 그대로, 다음 지시를 받는다). 없으면 멈춤 때 CLI 를 끈다 */
   interrupt?(): void;
   stop(): void;
+  /** 떠 있는 CLI 프로세스 번호(쉬는 작업 내리기 전에 그 아래 도는 프로세스가 있는지 본다) */
+  pid?(): number | undefined;
 }
 
 /** 아직 연결 못 하는 AI — 이유를 화면에 보여 주고 끝낸다. */

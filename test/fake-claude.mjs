@@ -140,6 +140,14 @@ async function handle(text) {
   }
 
   // 멈춤 시험: 멈출 때까지 기다렸다가 실제 CLI 처럼 error_during_execution 으로 끝난다
+  // 아래에 오래 도는 프로세스 띄우기(작업자가 띄운 서버 흉내): "자식 띄움"
+  if (text === '자식 띄움') {
+    const { spawn } = await import('node:child_process');
+    globalThis.kid = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: '띄움' }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0, session_id: sid });
+    return;
+  }
   // 글을 오래 흘려보내기: "stream N" → 30ms 마다 조각 N개(화면 깜빡임·클릭 시험용)
   if (/^stream \d+/.test(text)) {
     const n = Number(text.match(/^stream (\d+)/)[1]);

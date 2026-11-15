@@ -17,6 +17,8 @@ export interface Config {
   models: Record<'claude' | 'gemini' | 'codex', { id: string; name: string }[]>;
   dashboard: DashboardOptions;
   updateRepo: string; // 업데이트 레포 기본 주소(연동에서 바꿀 수 있음)
+  sleepIdleMinutes: number; // 이만큼(분) 쉰 작업의 CLI 를 내려 메모리를 돌려준다. 다음 지시 때 같은 대화로 이어 띄운다. 0 이면 안 함
+  maxAwakeAgents: number; // 동시에 떠 있는 CLI 가 이보다 많으면 오래 쉰 것부터 내린다. 0 이면 한도 없음
   autoRestartOnCodeChange: boolean; // 켠 뒤 서버 코드가 바뀌면, 작업이 모두 10분 넘게 쉴 때 저절로 다시 켠다
   homepage: string; // 왼쪽 위 "Agent Hub" 를 누르면 여는 홈페이지. '' 이면 링크 없음
   sharedRepo: string; // 공유 레포를 정하지 않았을 때 받을 공개 모음(조직/이름). '' 이면 없음
@@ -65,6 +67,8 @@ const DEFAULTS: Config = {
   sharedRepo: 'firstfuturevision/agent-hub-shared',
   homepage: 'https://agent-hub.vision-share.com/agent-hub',
   autoRestartOnCodeChange: true,
+  sleepIdleMinutes: 30,
+  maxAwakeAgents: 8,
 };
 
 /** config.json 이 있으면 기본값 위에 덮는다. 상대 경로는 저장소 뿌리 기준. */
