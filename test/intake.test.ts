@@ -152,3 +152,70 @@ test('입력 거치기 모두 켜기: 입력 세션 자신·보관한 작업은 
     sessions.stopAll();
   }
 });
+
+test('넘기기 전에 정리: 입력 세션은 받는 작업의 컨텍스트 크기·마지막 정리를 받고, compact 면 정리가 끝난 뒤 지시가 넘어간다. 후속·일하는 중이면 정리하지 않는다', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub intake compact '));
+  const ws = join(base, 'ws');
+  mkdirSync(ws);
+  const events: HostEvent[] = [];
+  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), claudeHome: join(base, 'home'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+  sessions.intake = new IntakeStore(join(base, 'data', 'intake.json'));
+  sessions.subscribe((e) => events.push(e));
+  const pending = async () => {
+    await waitFor(events, () => events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length > 0);
+    return (events.filter((e) => e.type === 'session.intake' && e.state === 'pending').at(-1) as any).request as string;
+  };
+  try {
+    await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title: '앱' }, local);
+    const task = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+    await sessions.handle({ type: 'session.rename', sessionId: task, title: '앱' }, local);
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '첫 일' }, local);
+    await waitFor(events, (e) => e.type === 'context.usage' && e.sessionId === task);
+    await waitFor(events, () => sessions.info(task)?.status === 'idle');
+    await sessions.handle({ type: 'session.setIntake', sessionId: task, on: true }, local);
+
+    // 판단 거리: 크기(한도 대비)·마지막 정리. session_list 에도
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '새 기능 만들어 줘' }, local);
+    const intakeId = sessions.intake.sessionId!;
+    const r1 = await pending();
+    const toIntake = (await waitFor(events, (e) => e.type === 'user.message' && e.sessionId === intakeId)) as any;
+    assert.match(toIntake.text, /그 작업의 컨텍스트: \d+k \/ 200k 토큰\(\d+%\) · 정리한 적 없음/);
+    assert.match(toIntake.text, /compact: true/);
+    assert.match(sessions.taskList()[0].context, /200k 토큰/);
+
+    // compact: 정리(/compact) → 끝난 뒤 지시
+    assert.match(await sessions.intakeForwardByMain(intakeId, r1, '새 기능을 만든다', undefined, true), /정리하는 중/);
+    const fwdNote = events.find((e) => e.type === 'session.intake' && e.state === 'forwarded' && e.sessionId === task) as any;
+    assert.match(fwdNote.text, /^\(넘기기 전에 컨텍스트를 정리함\)\n새 기능을 만든다/);
+    const got = (await waitFor(events, (e) => e.type === 'user.message' && e.sessionId === task && (e as any).from === '입력')) as any;
+    const iCompacted = events.findIndex((e) => e.type === 'session.compacted' && e.sessionId === task);
+    assert.ok(iCompacted >= 0 && iCompacted < events.indexOf(got), '정리가 먼저 끝나고 지시가 넘어간다');
+    await waitFor(events, () => events.filter((e) => e.type === 'turn.done' && e.sessionId === task).length >= 3); // 첫 일 · 정리 · 새 지시
+    await waitFor(events, () => sessions.info(task)?.status === 'idle');
+    assert.ok(events.some((e) => e.type === 'user.message' && e.sessionId === task && e.text === '첫 일'), '정리 전 기록은 남는다');
+
+    // 후속: compact 없이 넘기면 정리하지 않는다. 판단 거리에는 마지막 정리 시각이 보인다
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '방금 그거 버튼 색만 고쳐 줘' }, local);
+    await waitFor(events, () => events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length >= 2);
+    const r2 = await pending();
+    const second = events.filter((e) => e.type === 'user.message' && e.sessionId === intakeId).at(-1) as any;
+    assert.match(second.text, /마지막 정리 \d/);
+    const nC = events.filter((e) => e.type === 'session.compacted').length;
+    assert.match(await sessions.intakeForwardByMain(intakeId, r2, '방금 만든 버튼 색을 고친다'), /앱 에 넘김$/);
+    await waitFor(events, () => events.filter((e) => e.type === 'user.message' && e.sessionId === task && (e as any).from === '입력').length >= 2);
+
+    // 일하는 중이면 compact 를 줘도 정리하지 않고 넘긴다
+    await waitFor(events, () => sessions.info(task)?.status === 'idle');
+    await sessions.handle({ type: 'session.setIntake', sessionId: task, on: false }, local);
+    await sessions.handle({ type: 'user.message', sessionId: task, text: 'stream 20' }, local);
+    await waitFor(events, () => sessions.info(task)?.status === 'working');
+    await sessions.handle({ type: 'session.setIntake', sessionId: task, on: true }, local);
+    await sessions.handle({ type: 'user.message', sessionId: task, text: '다른 새 일' }, local);
+    await waitFor(events, () => events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length >= 3);
+    const r3 = await pending();
+    assert.match(await sessions.intakeForwardByMain(intakeId, r3, '다른 새 일', undefined, true), /일하는 중·승인 대기라 정리하지 않음/);
+    assert.equal(events.filter((e) => e.type === 'session.compacted').length, nC);
+  } finally {
+    sessions.stopAll();
+  }
+});

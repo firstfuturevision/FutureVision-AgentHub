@@ -77,12 +77,13 @@ export class IntakeStore {
 }
 
 /** 입력 세션이 받는 요청 글 */
-export function intakePrompt(r: IntakeRequest, task: { name: string; about?: string; recent?: string; lastReport?: string }, answerTo?: IntakeRequest): string {
+export function intakePrompt(r: IntakeRequest, task: { name: string; about?: string; recent?: string; lastReport?: string; context?: string }, answerTo?: IntakeRequest): string {
   const lines = [
     `[입력 요청 ${r.id}] 작업 "${task.name}" 에 사람이 쓴 지시다. 바로 일하지 말고 정리해서 넘긴다.`,
     `작업 역할: ${task.about || '비어 있음(새 작업이면 지시만 보고 정리하고, 이미 있는 작업의 역할에 더 맞으면 intake_forward 의 session 에 그 작업 이름을 주어 그쪽으로 보낸다)'}`,
     ...(task.recent ? [`그 작업의 앞 지시: ${task.recent}`] : []),
     ...(task.lastReport ? [`그 작업의 마지막 보고(앞부분): ${task.lastReport}`] : []),
+    ...(task.context ? [`그 작업의 컨텍스트: ${task.context}`] : []),
     ...(answerTo ? [`이 글은 앞 요청 ${answerTo.id} 에서 물은 것("${answerTo.question}")에 대한 사람의 답이다. 앞 원문: ${answerTo.original}`] : []),
     '',
     '[사람 원문]',
@@ -91,6 +92,7 @@ export function intakePrompt(r: IntakeRequest, task: { name: string; about?: str
     '',
     '할 일: (1) 무엇을 하려는지, 이 작업 역할에 맞는지 본다(아니면 session_list 의 역할을 보고 맞는 작업을 고른다) (2) 앞 지시·[기억]·[공통 지침]·사내 문서와 어긋나는지 본다 (3) 범위·할 일·끝나는 조건·지킬 규칙을 채워 지시를 구체화한다.',
     `그다음 intake_forward(request: "${r.id}", instruction, session?) 로 넘긴다. 확인 기준(되돌리기 어려움·돈·바깥 공개·앞 지시와 어긋남·뜻이 둘 이상)에 걸릴 때만 intake_ask(request: "${r.id}", question) 로 묻는다. 정리본은 짧게, 원문은 함께 가니 옮겨 적지 않는다.`,
+    '넘기기 전에 정리(intake_forward 의 compact: true): 컨텍스트가 많이 찼고(대략 60% 넘음) 이번 지시가 앞 일과 이어지지 않는 새 일일 때만. 앞 일의 후속(고쳐 달라·이어서·방금 그거)이거나, 그 작업이 일하는 중·승인 대기이거나, 컨텍스트가 넉넉하거나 크기를 모르면 정리하지 않는다. 애매하면 정리하지 않는다. 다른 작업으로 보낼 때는 받는 작업 기준이다(session_list 의 context).',
   ];
   return lines.join('\n');
 }

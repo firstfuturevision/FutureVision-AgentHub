@@ -73,6 +73,7 @@ interface Live {
   resume?: string; // 다음에 띄울 CLI 가 이어 갈 Claude 대화 id(--resume)
   compactPending?: string; // 컨텍스트 정리를 부탁한 사람 — 하던 차례가 끝나면 정리한다
   compacting?: { mode: 'cli' | 'summary'; before: number; text?: string; done?: boolean }; // 정리 중인 차례
+  afterCompact?: () => void; // 정리가 끝나면 할 일(입력 세션이 "넘기기 전에 정리"로 넘긴 지시)
   idleSince?: number; // 쉬기 시작한 때 — 오래 쉬면 CLI 를 내려 메모리를 돌려준다(sleepIdle)
   remotes?: Map<string, RemoteLink>; // 연결된 원격 접속(app + label → 연결). 기록 전체에서 모은다 — 기록이 길어 앞이 잘려도 남게
 }
@@ -664,7 +665,7 @@ export class SessionManager {
     if (answerTo) this.intake.pending.delete(answerTo.id);
     const req = this.intake.add({ taskId: live.info.id, original: answerTo ? `${answerTo.original}\n\n(물음 "${answerTo.question}" 에 대한 답) ${text}` : text, ...(atts.length ? { attachments: atts } : {}) });
     const lastReport = [...live.history].reverse().find((e) => e.type === 'agent.text' && !e.partial) as { text: string } | undefined;
-    const prompt = intakePrompt(req, { name: this.nameOf(live), about: live.info.about, recent: this.recentOf(live), lastReport: lastReport?.text.replace(/\s+/g, ' ').slice(0, 300) }, answerTo);
+    const prompt = intakePrompt(req, { name: this.nameOf(live), about: live.info.about, recent: this.recentOf(live), lastReport: lastReport?.text.replace(/\s+/g, ' ').slice(0, 300), context: this.contextNote(live) }, answerTo);
     this.publish({ type: 'session.intake', sessionId: live.info.id, state: 'pending', request: req.id });
     await this.handle({ type: 'user.message', sessionId: intake.info.id, text: prompt }, { via: 'local', user: '입력 요청' });
     return true;
@@ -677,8 +678,28 @@ export class SessionManager {
     return req;
   }
 
-  /** 입력 세션 도구: 정리한 지시를 작업에 넘긴다(session 을 주면 그 작업으로 — 역할에 더 맞는 작업) */
-  async intakeForwardByMain(mainId: string, request: unknown, instruction: unknown, key?: unknown): Promise<string> {
+  /**
+   * 입력 세션이 정리할지 판단할 거리 한 줄: 지금 컨텍스트 크기(한도 대비), 마지막으로 정리한 때, 일하는 중·승인 대기.
+   * 대화 내용은 주지 않는다(크기만).
+   */
+  contextNote(live: Live): string {
+    let usage: { used: number; window: number | null } | undefined;
+    let compactedAt: number | undefined;
+    for (let i = live.history.length - 1; i >= 0 && (!usage || compactedAt === undefined); i--) {
+      const e = live.history[i];
+      if (!usage && e.type === 'context.usage') usage = e;
+      if (compactedAt === undefined && e.type === 'session.compacted' && !e.error) compactedAt = this.timeOf(e) ?? 0;
+    }
+    const k = (n: number) => `${Math.round(n / 1000)}k`;
+    const size = !usage || !usage.used ? '알 수 없음(새로 띄웠거나 아직 답이 없음)'
+      : usage.window ? `${k(usage.used)} / ${k(usage.window)} 토큰(${Math.round((usage.used / usage.window) * 100)}%)` : `${k(usage.used)} 토큰(한도 모름)`;
+    const when = compactedAt === undefined ? '정리한 적 없음' : compactedAt ? `마지막 정리 ${new Date(compactedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}` : '정리한 적 있음';
+    const st = live.compacting ? ' · 지금 정리 중' : live.info.status === 'working' || live.info.status === 'starting' ? ' · 지금 일하는 중' : this.waitingPerm(live) ? ' · 승인 대기' : '';
+    return `${size} · ${when}${st}`;
+  }
+
+  /** 입력 세션 도구: 정리한 지시를 작업에 넘긴다(session 을 주면 그 작업으로 — 역할에 더 맞는 작업). compact 면 그 작업 컨텍스트를 먼저 정리하고 넘긴다 */
+  async intakeForwardByMain(mainId: string, request: unknown, instruction: unknown, key?: unknown, compact?: unknown): Promise<string> {
     const req = this.intakeReq(mainId, request);
     const body = String(instruction ?? '').trim();
     if (!body) throw new Error('정리한 지시가 비어 있음');
@@ -688,10 +709,22 @@ export class SessionManager {
     if (target.info.id === this.intake!.sessionId) throw new Error('입력 세션에는 넘길 수 없음');
     this.intake!.pending.delete(req.id);
     if (origin && origin !== target) this.publish({ type: 'session.intake', sessionId: origin.info.id, state: 'routed', text: `${this.nameOf(target)} 작업이 더 맞아 그쪽으로 보냄`, request: req.id });
-    this.publish({ type: 'session.intake', sessionId: target.info.id, state: 'forwarded', text: body, request: req.id });
-    this.intake!.log({ state: origin && origin !== target ? 'routed' : 'forwarded', request: req.id, taskId: req.taskId, task: origin ? this.nameOf(origin) : '(지워진 작업)', target: this.nameOf(target), original: req.original, text: body });
-    await this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}) }, { via: 'local', user: '입력' });
-    return `${this.nameOf(target)} 에 넘김`;
+    // 넘기기 전에 정리: 일하는 중·승인 대기·이미 정리 중이면 정리하지 않고 그대로 넘긴다(하던 일을 끊지 않게)
+    const busy = Boolean(target.compacting || target.compactPending) || target.info.status === 'working' || target.info.status === 'starting' || this.waitingPerm(target);
+    const doCompact = compact === true && !busy;
+    const shown = doCompact ? `(넘기기 전에 컨텍스트를 정리함)\n${body}` : body;
+    this.publish({ type: 'session.intake', sessionId: target.info.id, state: 'forwarded', text: shown, request: req.id });
+    this.intake!.log({ state: origin && origin !== target ? 'routed' : 'forwarded', request: req.id, taskId: req.taskId, task: origin ? this.nameOf(origin) : '(지워진 작업)', target: this.nameOf(target), original: req.original, text: shown });
+    const deliver = () => this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}) }, { via: 'local', user: '입력' });
+    if (doCompact) {
+      await this.compact(target, '입력');
+      if (target.compacting) {
+        target.afterCompact = () => void deliver().catch((e) => this.publish({ type: 'error', sessionId: target.info.id, message: `정리 뒤 지시를 넘기지 못함: ${(e as Error).message}` }));
+        return `${this.nameOf(target)} 의 컨텍스트를 정리하는 중. 끝나면 지시가 넘어간다`;
+      }
+    }
+    await deliver();
+    return compact === true && busy ? `${this.nameOf(target)} 에 넘김(일하는 중·승인 대기라 정리하지 않음)` : `${this.nameOf(target)} 에 넘김`;
   }
 
   /** 입력 세션 도구: 그 작업 화면에 사람에게 묻는다. 사람의 답은 다시 입력 세션으로 온다 */
@@ -830,6 +863,7 @@ export class SessionManager {
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
         ...(l.info.permMode ? { permMode: l.info.permMode } : {}),
@@ -851,6 +885,7 @@ export class SessionManager {
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
       };
@@ -1939,6 +1974,7 @@ export class SessionManager {
       if (live.token) this.tokens.delete(live.token);
       live.token = undefined;
       this.closePerms(live, 'CLI 꺼짐'); // 꺼진 CLI 에서 묻던 것은 거부로 정리
+      if (live.compacting) return this.finishCompact(live, true); // 정리 중에 꺼짐: 실패로 끝내고 기다리던 지시는 넘긴다(다음 지시에 다시 띄운다)
       if (live.schedRun && ev.reason !== '사용자가 종료함') this.finishScheduled(live, `실패: ${live.schedRun.error ?? ev.reason}`);
       if (live.info.status !== 'idle') {
         live.info.status = 'idle';
@@ -2110,6 +2146,9 @@ export class SessionManager {
       this.publish({ type: 'context.usage', sessionId: id, used: 0, window: null });
     }
     this.setStatus(live, 'idle');
+    const next = live.afterCompact;
+    live.afterCompact = undefined;
+    next?.();
   }
 
   /**
