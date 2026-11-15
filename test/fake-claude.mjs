@@ -141,6 +141,17 @@ async function handle(text) {
 
   // 멈춤 시험: 멈출 때까지 기다렸다가 실제 CLI 처럼 error_during_execution 으로 끝난다
   // 대화 중 정리 명령: "/compact …" → 실제 CLI 처럼 compact_boundary(앞뒤 토큰) 와 빈 결과
+  if (text === '다음 정리는 막힘') {
+    globalThis.compactBlocked = true;
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0, session_id: sid });
+    return;
+  }
+  // 실제 CLI 는 정리하다 API 가 막으면 이 글을 답으로 내고 차례는 성공으로 끝낸다
+  if (text.startsWith('/compact') && globalThis.compactBlocked) {
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: "Error during compaction: API Error: safeguards flagged this message.\n\nTry rephrasing" }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, total_cost_usd: 0, result: '', session_id: sid });
+    return;
+  }
   if (text.startsWith('/compact')) {
     globalThis.compactArg = text.slice(8).trim();
     out({ type: 'system', subtype: 'status', status: 'compacting', session_id: sid });

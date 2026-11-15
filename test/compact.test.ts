@@ -63,6 +63,14 @@ test('컨텍스트 정리 · Claude: 보통 지시로 보내지 않고 /compact(
     await waitFor(events, () => events.filter((e) => e.type === 'session.compacted' && e.sessionId === id).length > n);
     const order = events.filter((e) => e.sessionId === id && (e.type === 'turn.done' || e.type === 'session.compacted')).slice(-3).map((e) => e.type);
     assert.deepEqual(order.slice(0, 2), ['turn.done', 'session.compacted']);
+    // CLI 가 정리하다 실패하면(API 안전장치 등) 그 까닭을 그대로 보인다
+    await waitFor(events, () => sessions.info(id)?.status === 'idle');
+    await say(id, '다음 정리는 막힘');
+    const m = events.filter((e) => e.type === 'session.compacted' && e.sessionId === id).length;
+    await sessions.handle({ type: 'session.compact', sessionId: id }, local);
+    await waitFor(events, () => events.filter((e) => e.type === 'session.compacted' && e.sessionId === id).length > m);
+    const bad = events.filter((e) => e.type === 'session.compacted' && e.sessionId === id).at(-1) as any;
+    assert.equal(bad.error, '정리하다 실패함: API Error: safeguards flagged this message.');
   } finally {
     sessions.stopAll();
   }

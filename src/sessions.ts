@@ -2129,7 +2129,9 @@ export class SessionManager {
     live.compacting = undefined;
     const id = live.info.id;
     if (c.mode === 'cli') {
-      if (!c.done) this.publish({ type: 'session.compacted', sessionId: id, mode: 'cli', unit: 'tokens', error: isError ? '정리 명령이 실패함' : '정리되지 않음(이 CLI 버전이 대화 중 /compact 를 받지 않음)' });
+      // CLI 가 정리하다 실패하면 "Error during compaction: …" 을 답 글로 내고 차례는 성공으로 끝낸다 — 그 까닭(API 안전장치·한도 등)을 그대로 보인다
+      const failed = c.text?.match(/^Error during compaction:\s*(.+)/s)?.[1].split('\n')[0].slice(0, 300);
+      if (!c.done) this.publish({ type: 'session.compacted', sessionId: id, mode: 'cli', unit: 'tokens', error: failed ? `정리하다 실패함: ${failed}` : isError ? '정리 명령이 실패함' : '정리되지 않음(이 CLI 버전이 대화 중 /compact 를 받지 않음)' });
     } else if (isError || !c.text?.trim()) {
       this.publish({ type: 'session.compacted', sessionId: id, mode: 'summary', unit: 'chars', error: '에이전트가 정리본을 쓰지 못함' });
     } else {
