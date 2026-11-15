@@ -2347,7 +2347,7 @@ function renderClaudeCode() {
 $('cc-more').onclick = () => { ccAll = true; renderClaudeCode(); };
 
 
-// ── 오른쪽 패널: 지금 작업의 지침 · 환경 · 허용 · 연결된 세션 ──
+// ── 오른쪽 패널: 지금 작업의 지침 · 환경 · 허용 · 이어진 작업 ──
 // 에이전트 설정(지침·스킬·환경·예약·허용)은 기본으로 접어 둔다. 펼친 상태는 이 브라우저에만 기억
 let settingsOpen = (() => { try { return localStorage.getItem('hub.settingsOpen') === '1'; } catch { return false; } })();
 $('p-settings-toggle').onclick = () => {
@@ -2748,15 +2748,23 @@ function renderContext(s) {
 const tokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
 const chars = (n) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k자` : `${n}자`);
 
-/** 연결된 세션(포크 관계) · 백그라운드(지금 도는 하위 에이전트) · 하위 작업(끝났거나 쉬는 하위 에이전트 일) */
+/** 위 · 하위 작업(왼쪽 목록 관계) · 일하는 작업자(지금 도는 하위 에이전트) · 맡겼던 작업자(끝났거나 쉬는 하위 에이전트 일) */
 function renderLinks(s) {
   const forks = [];
   const up = parentOfTask(s) && sessions.get(parentOfTask(s));
   if (up) forks.push({ s: up, label: '위 작업', sub: titleOf(up) });
-  // 하위 작업: 이름과 마지막 보고 앞부분(공유가 대화에 묻혀도 여기서 한눈에)
-  const lastReport = (k) => [...k.items].reverse().find((it) => it.k === 'agent')?.t;
+  // 하위 작업: 이름과 마지막 소식 한 줄 · 시각. 일하는 중이면 지금 하는 일, 아니면 끝난 차례의 마지막 답(일하는 도중에 쓴 글은 건너뜀)
   const firstLine = (t) => (t ?? '').replace(/[#*`>|_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
-  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f), report: firstLine(lastReport(f)) });
+  const when = (at) => (at ? ` (${stampText({ at })})` : '');
+  const lastNews = (k) => {
+    if ((k.info.status === 'working' || k.info.status === 'starting') && doingOf(k)) return `일하는 중 · ${doingOf(k)}`;
+    const done = k.items.findLastIndex((it) => it.k === 'line meta');
+    const rep = done > 0 ? k.items.slice(0, done).findLast((it) => it.k === 'agent') : undefined;
+    if (!rep) return '';
+    const line = firstLine(rep.t);
+    return rep.at && !line.includes(stampText({ at: rep.at })) ? `${line}${when(rep.at)}` : line; // 글에 이미 그 시각이 있으면 한 번만
+  };
+  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f), report: lastNews(f) });
   // 이 작업 아래에 둔 다른 PC 작업: 그 작업이 보내 온 마지막 공유의 마지막 보고
   for (const r of remoteTasks().under.get(s.info.id) ?? []) {
     const m = [...s.items].reverse().find((it) => it.k === 'merged' && it.fromId === `peer:${r.pc.name}:${r.t.id}`);
