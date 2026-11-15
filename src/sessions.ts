@@ -862,7 +862,7 @@ export class SessionManager {
         id: l.info.id.slice(0, 8),
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
-        status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기', // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
@@ -884,7 +884,7 @@ export class SessionManager {
         ...(l.info.remoteParent ? { remoteParent: l.info.remoteParent } : {}), // 화면 목록과 같은 순서(끌어 옮긴 자리, 없으면 맨 위는 최근 것부터)
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
-        status: l.info.status === 'working' || l.info.status === 'starting' ? '작업 중' : '대기',
+        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기', // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,

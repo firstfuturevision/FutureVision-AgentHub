@@ -66,3 +66,19 @@ test('권한 묻지 않기(모든 작업): 켜면 기다리던 요청도 허용,
   b.sessions.setAutoApproveAll(false);
   assert.equal(make().sessions.autoApproveAll, false);
 });
+
+test('다른 PC 에 알리는 작업 상태: 일하는 중 · 승인 대기 · 대기', async () => {
+  const { make } = world();
+  const a = make();
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workdir: 'proj' }, local);
+  const sid = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
+  const status = () => a.sessions.peerSummary('pc').tasks.find((t) => t.id === sid)?.status;
+  assert.equal(status(), '대기');
+  await a.sessions.handle({ type: 'user.message', sessionId: sid, text: 'perm 하나' }, local);
+  const req = await waitFor(a.events, (e) => e.type === 'permission.request') as any;
+  assert.equal(status(), '승인 대기');
+  await a.sessions.handle({ type: 'permission.respond', sessionId: sid, requestId: req.requestId, allow: true } as any, local);
+  await waitFor(a.events, (e) => e.type === 'turn.done');
+  assert.equal(status(), '대기');
+  a.sessions.stopAll();
+});

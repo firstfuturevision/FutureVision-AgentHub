@@ -374,7 +374,6 @@ async function loadPeers(fresh) {
   renderTaskLinks(true);
   renderList(); // 왼쪽 목록의 다른 PC 작업
 }
-setInterval(() => { if (!$('links-view').hidden && !document.hidden) void loadPeers(); }, 15000);
 function renderPeers(box) {
   box.append(el('h3', 'link-h', 'PC'));
   box.append(el('p', 'hint', '사무실 네트워크의 다른 PC Agent Hub 입니다. 그 PC 에서 설정 → 연동 → 원격 접속을 켜면 저절로 보입니다(안 보이면 그 PC 에 보이는 원격 접속 주소를 아래에 더합니다). 작업에서 "PC이름/작업 에 전해 줘"라고 하면 다른 PC 작업에도 보냅니다.'));
@@ -471,7 +470,7 @@ function renderTaskLinks(force) {
   box.append(el('p', 'hint', 'PC 마다 작업을 왼쪽 목록과 같은 순서로 보입니다. 하위 작업은 그 작업 아래 들여 써 있고, 하위 작업이 있는 줄의 "묶음에 보내기"는 그 작업과 그 아래 작업 전부에 보냅니다. 이 PC 작업을 누르면 그 작업으로, 다른 PC 작업을 누르면 그 PC 화면이 새 탭으로 열립니다.'));
   // 이 PC: 기록에서 바로(작업끼리 보낸 글도 묶는다)
   const mine = mains();
-  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: parentOfTask(s), kind: '하위', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
+  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: parentOfTask(s), kind: '하위', state: waitingIn(s) ? '승인 대기' : isBusy(s) ? '작업 중' : '대기', about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
   const sendLocal = async (ids, text) => { for (const id of ids) await send({ type: 'user.message', sessionId: id, text }); return ids.length; };
   const sendPeer = (p) => async (ids, text) => {
     const r = await fetch('/peers/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: p.url, ids, text }) });
@@ -499,7 +498,7 @@ function renderTaskLinks(force) {
     if (!p.ok) continue;
     const tasks = p.summary.tasks;
     const byName = new Map(tasks.map((t) => [t.name, t.id]));
-    const nodes = tasks.map((t, i) => ({ id: t.id, name: t.name, rank: t.rank ?? i, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
+    const nodes = tasks.map((t, i) => ({ id: t.id, name: t.name, rank: t.rank ?? i, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', state: peerStatus(t), about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
     pcTasks(box, p.name || p.url, nodes, sendPeer(p));
   }
 }
@@ -536,13 +535,13 @@ function pcTasks(box, pc, nodes, sendTo) {
   const add = (n, depth) => {
     const row = el('div', 'link-task');
     row.style.paddingLeft = `${depth * 16}px`;
-    row.append(el('span', `link-dot ${n.busy ? 'busy' : ''}`));
+    row.append(el('span', `link-dot${n.state === '작업 중' ? ' busy' : n.state === '승인 대기' ? ' wait' : ''}`));
     const b = el('button', 'link-name', n.name);
     b.type = 'button';
     b.onclick = n.open;
     row.append(b);
-    if (n.about) row.title = n.about;
-    if (n.busy) row.append(el('span', 'link-kind', '작업 중'));
+    row.title = [n.name, n.about].filter(Boolean).join('\n');
+    row.append(el('span', `link-kind${n.state === '대기' ? '' : ' on'}`, n.state));
     const sub = kids(n);
     if (depth === 0 && sub.length) row.append(sendButton(pc, under(n), sendTo, '묶음에 보내기', 'line-btn link-send'));
     t.append(row);
@@ -3194,7 +3193,9 @@ function renderList() {
 }
 
 // ── 다른 PC 작업을 왼쪽 목록에: 연결된 PC 의 작업(이름·상태)과 계층. 누르면 그 PC 화면, 이 PC 작업 위로 끌어 놓으면 그 아래로 ──
-setInterval(() => { if (!document.hidden) void loadPeers(); }, 30000);
+// 다른 PC 작업의 상태(작업 중·승인 대기·대기)가 몇 초 안에 따라오게 5초마다(다른 PC 가 없으면 30초마다 찾기만)
+let peerTick = 0;
+setInterval(() => { if (!document.hidden && ((peerState?.peers ?? []).some((p) => p.ok) || ++peerTick % 6 === 0)) void loadPeers(); }, 5000);
 let draggingRemote = null; // { pc, t }
 // 다른 PC 작업을 이 화면에서 열기: 이 PC 서버가 그 PC 소식을 그 작업 것만 골라 이어 주고(/peers/events), 보내는 명령은 그 PC 로(/peers/cmd).
 // 화면 안에서는 "peer:<주소>|<id>" 로 이 PC 작업과 구분한다(목록·연결·보관 등에는 안 섞임)
@@ -3264,6 +3265,13 @@ function remoteTasks() {
   }
   return { under, byPc, hosted };
 }
+/** 다른 PC 가 알려 준 작업 상태(옛 버전은 작업 중 · 대기만) */
+const peerStatus = (t) => (t.status === '작업 중' || t.status === '승인 대기' ? t.status : '대기');
+/** 하위 작업 줄(아래 글줄이 없음)의 상태: 일하는 중이면 점, 승인 대기면 글 — 이 PC · 다른 PC 같게 */
+function stateMark(head, busy, wait) {
+  if (wait) head.append(el('span', 'task-state wait', '승인 대기'));
+  else if (busy) { const d = el('span', 'task-busy'); d.setAttribute('aria-label', '작업 중'); head.append(d); }
+}
 function remoteGroup(n, depth, tagged) {
   const g = el('div', 'task-group');
   g.dataset.key = `g:${n.pc.url}|${n.t.id}`;
@@ -3273,9 +3281,11 @@ function remoteGroup(n, depth, tagged) {
   const head = el('span', 'task-head');
   if (tagged) head.append(el('span', 'task-tag', n.pc.name));
   head.append(el('span', 'task-title', n.t.name));
+  const st = peerStatus(n.t);
+  if (depth) stateMark(head, st === '작업 중', st === '승인 대기');
   b.append(head);
-  if (!depth) b.append(el('span', `task-sub${n.t.status === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${n.t.status === '작업 중' ? '작업 중' : '대기'}`));
-  b.title = [n.t.about, `${n.pc.name} 의 작업 — 누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)`].filter(Boolean).join('\n');
+  if (!depth) b.append(el('span', `task-sub${st === '승인 대기' ? ' wait' : st === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${st}`));
+  b.title = [`${n.t.name} · ${n.pc.name} · ${st}`, n.t.about, '누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)'].filter(Boolean).join('\n');
   b.onclick = () => openRemote(n.pc, n.t); // 이 화면 가운데에서 그 작업 대화
   b.oncontextmenu = (e) => { e.preventDefault(); openRemoteMenu(n, e.clientX, e.clientY); }; // 우클릭: 작업 메뉴(그 PC 에서 실행)
   b.draggable = true;
@@ -3559,6 +3569,7 @@ function taskRow(s, depth, open) {
   const time = new Date(s.info.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const head = el('span', `task-head${depth && wait ? ' wait' : ''}`);
   head.append(el('span', `task-title${fresh ? ' fresh' : ''}`, titleOf(s)));
+  if (depth) stateMark(head, busy, wait);
   if (ask) {
     const dot = el('span', 'task-ask');
     dot.setAttribute('aria-label', '확인 필요');
@@ -3590,7 +3601,8 @@ function taskRow(s, depth, open) {
     const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '웹 · ' : ''}${time}`);
     sub.title = sub.textContent;
     b.append(sub);
-  } else b.title = `${state} · ${time}`;
+    b.title = titleOf(s); // 잘린 이름 전체
+  } else b.title = `${titleOf(s)} · ${state} · ${time}`;
   b.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
   dragTask(b, s);
   b.oncontextmenu = (e) => { e.preventDefault(); openTaskMenu(s, e.clientX, e.clientY); };

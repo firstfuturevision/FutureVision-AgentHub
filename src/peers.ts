@@ -119,10 +119,10 @@ export class Peers {
     renameSync(`${this.file}.tmp`, this.file);
   }
 
-  /** 상대 하나의 요약(10초 동안은 다시 묻지 않음) */
+  /** 상대 하나의 요약(3초 동안은 다시 묻지 않음 — 화면이 5초마다 읽어 그 PC 작업의 상태가 몇 초 안에 따라오게) */
   async view(url: string, fresh = false): Promise<PeerView> {
     const hit = this.cache.get(url);
-    if (!fresh && hit && Date.now() - hit.at < 10_000) return hit.view;
+    if (!fresh && hit && Date.now() - hit.at < 3_000) return hit.view;
     const base = { url, manual: this.manual.includes(url), seenAt: this.found.get(url)?.seenAt, name: this.found.get(url)?.name };
     let view: PeerView;
     try {
