@@ -11,6 +11,9 @@ type Run = (cmd: string, args: string[], input?: string) => Promise<string>;
 
 export class Clipboard {
   private serving: ChildProcess | null = null;
+  /** 지금 올린 글을 다른 프로그램에 넘겨준 횟수(리눅스 serve 가 "served" 를 쓸 때마다) */
+  private served = 0;
+  private servedWaiters: (() => void)[] = [];
   private script: string;
   private platform: NodeJS.Platform;
 
@@ -50,6 +53,19 @@ export class Clipboard {
     p.stdin.end(input ?? '');
   });
 
+  /** 넘겨준 횟수가 after 보다 커질 때까지(붙여 넣는 프로그램이 글을 다 가져갈 때까지) 기다린다. 넘겨줬으면 true. 리눅스만 — 다른 OS 는 바로 true */
+  async waitServed(after: number, ms: number): Promise<boolean> {
+    if (this.platform !== 'linux') return true;
+    const end = Date.now() + ms;
+    while (this.served <= after) {
+      const left = end - Date.now();
+      if (left <= 0) return false;
+      await new Promise<void>((ok) => { const t = setTimeout(ok, left); this.servedWaiters.push(() => { clearTimeout(t); ok(); }); });
+    }
+    return true;
+  }
+  get servedCount() { return this.served; }
+
   /** 이 PC 클립보드의 글 */
   async get(): Promise<string> {
     let text: string;
@@ -76,6 +92,11 @@ export class Clipboard {
     this.serving?.kill();
     const p = spawn('python3', [this.script, 'serve'], { env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] });
     this.serving = p;
+    this.served = 0;
+    p.stdout.setEncoding('utf8').on('data', (d: string) => {
+      const n = d.split('served').length - 1;
+      if (n && this.serving === p) { this.served += n; for (const w of this.servedWaiters.splice(0)) w(); }
+    });
     await new Promise<void>((resolve, reject) => {
       let err = '';
       const timer = setTimeout(() => { p.kill(); reject(new Error('클립보드가 답하지 않음')); }, 8000);

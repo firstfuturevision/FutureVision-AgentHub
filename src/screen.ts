@@ -92,7 +92,7 @@ export class ScreenControl {
   private unlockTried = 0;
   readonly supported: boolean;
   /** 원격으로 보는 사람과 이 PC 사이 클립보드 글 주고받기 */
-  readonly clipboard: Pick<Clipboard, 'get' | 'set'>;
+  readonly clipboard: Pick<Clipboard, 'get' | 'set'> & Partial<Pick<Clipboard, 'waitServed' | 'servedCount'>>;
   error: string | null = null;
   /** 붙여 넣기로 글자를 넣을지(리눅스: 키를 하나씩 치면 ASCII 밖 글자는 Ctrl+Shift+U 16진 입력에 기대는데, Chrome 처럼 입력기가 그 조합을 받지 않는 앱에선 코드가 그대로 들어간다) */
   private pasteText: boolean;
@@ -101,7 +101,7 @@ export class ScreenControl {
    * source: screen-helper.cs, x11Source: screen-helper-x11.py(기본 = 같은 폴더).
    * 시험용: helperCommand = 이 명령을 도우미로 띄운다, loginctl = 잠금 풀기·잠그기 명령 대신
    */
-  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[]; loginctl?: (args: string[]) => Promise<string>; clipboard?: Pick<Clipboard, 'get' | 'set'>; pasteText?: boolean }) {
+  constructor(opts: { file: string; binDir: string; source: string; x11Source?: string; helperCommand?: string[]; loginctl?: (args: string[]) => Promise<string>; clipboard?: Pick<Clipboard, 'get' | 'set'> & Partial<Pick<Clipboard, 'waitServed' | 'servedCount'>>; pasteText?: boolean }) {
     this.loginctl = opts.loginctl ?? (async (args) => String((await execAsync('loginctl', args, { timeout: 8000 })).stdout));
     this.file = opts.file;
     this.exe = join(opts.binDir, 'screen-helper.exe');
@@ -258,7 +258,10 @@ export class ScreenControl {
   private async paste(m: number, text: string, restore = true): Promise<void> {
     const prev = restore ? await this.clipboard.get().catch(() => null) : null;
     await this.clipboard.set(text.replace(/\r\n?/g, '\n'));
+    const before = this.clipboard.servedCount ?? 0;
     this.combo(m, 162, 86); // Ctrl+V
+    // 붙여 넣는 프로그램이 글을 다 가져갈 때까지 클립보드를 바꾸지 않는다(바꾸면 넘겨주던 도우미가 꺼져 빈 글이 붙는다)
+    if (this.clipboard.waitServed) await this.clipboard.waitServed(before, 3000);
     await sleep(400);
     if (prev !== null && prev !== text) await this.clipboard.set(prev).catch(() => {});
   }
@@ -284,7 +287,7 @@ export class ScreenControl {
     this.combo(m, 162, 65); // Ctrl+A
     await sleep(150);
     this.combo(m, 162, 67); // Ctrl+C
-    await sleep(500);
+    await sleep(700);
     const got = await this.clipboard.get().catch(() => '');
     this.keys(m, [[39, true], [39, false]]); // →
     if (prev !== null) await this.clipboard.set(prev).catch(() => {});

@@ -128,6 +128,9 @@ def serve(text):
         reply.xselection.time = r.time
         X.XSendEvent(dpy, r.requestor, 0, 0, byref(reply))
         X.XFlush(dpy)
+        if prop and r.target != TARGETS:
+            sys.stdout.write('served\n')  # 글을 넘겨줌 — 부르는 쪽이 붙여 넣기가 끝났는지 안다
+            sys.stdout.flush()
 
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
 if mode == 'get':
