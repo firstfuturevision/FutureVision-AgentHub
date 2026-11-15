@@ -164,7 +164,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           try {
             if (body?.action === 'add') memory.add(body.text, '사람', body.scope);
             else if (body?.action === 'scope') memory.setScope(body.id, body.scope);
-            else if (body?.action === 'replaceShared') memory.replaceShared(body.guide, body.items, String(body.by ?? '맞추기').slice(0, 60));
+            else if (body?.action === 'replaceShared') memory.replaceShared(body.guide, body.items, String(body.by ?? '맞추기').slice(0, 60), body.dates);
             else if (body?.action === 'edit') memory.edit(body.id, body.text);
             else if (body?.action === 'remove') memory.remove(body.id);
             else if (body?.action === 'guide') memory.setGuide(body.text);

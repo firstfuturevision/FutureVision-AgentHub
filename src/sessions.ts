@@ -935,11 +935,17 @@ export class SessionManager {
     if (!this.memory || !this.peers) throw new Error('기억 기능이 없음');
     const list = Array.isArray(items) ? items.map(String) : [];
     const me = this.peers.summary().name;
-    this.memory.replaceShared(guide, list, `맞추기 · ${me}`);
+    const views = (await this.peers.all(true)).filter((x) => x.ok && x.memory);
+    // 같은 글이 이미 어느 PC 에 있으면 그 날짜(가장 이른 것)를 지킨다 — 맞출 때마다 오늘 날짜가 되지 않게
+    const dates: Record<string, string> = {};
+    const note = (x: { text: string; at: string }) => { const t = x.text.replace(/\s+/g, ' ').trim(); if (!dates[t] || x.at < dates[t]) dates[t] = x.at; };
+    this.memory.shared().items.forEach(note);
+    for (const v of views) (await this.peers.shared(v.url))?.items.forEach(note);
+    this.memory.replaceShared(guide, list, `맞추기 · ${me}`, dates);
     const done = [me];
     const failed: string[] = [];
-    for (const v of (await this.peers.all(true)).filter((x) => x.ok && x.memory)) {
-      try { await this.peers.post(v.url, '/memory', { action: 'replaceShared', guide, items: list, by: `맞추기 · ${me}` }); done.push(v.name || v.url); } catch (err) { failed.push(`${v.name || v.url}(${(err as Error).message})`); }
+    for (const v of views) {
+      try { await this.peers.post(v.url, '/memory', { action: 'replaceShared', guide, items: list, dates, by: `맞추기 · ${me}` }); done.push(v.name || v.url); } catch (err) { failed.push(`${v.name || v.url}(${(err as Error).message})`); }
     }
     return `적용: ${done.join(', ')}${failed.length ? ` · 못 함: ${failed.join(', ')}` : ''} · 공통 지침 ${String(guide ?? '').trim() ? '있음' : '없음'}, 회사 기억 ${list.length}개`;
   }
@@ -962,7 +968,7 @@ export class SessionManager {
     if (op === 'delete') { this.memory.remove(a.id); return '지움'; }
     const item = this.memory.add(a.text, this.nameOf(me), a.scope);
     me.memSeen = this.memory.noteFor(me.memSeen).seen; // 자기가 남긴 것은 다시 받지 않는다
-    return `기억함(${item.id}${item.scope === 'company' ? ', 회사' : ', 개인'}): ${item.text}`;
+    return `기억함(${item.id}${item.scope === 'company' ? ', 회사' : ', 개인'}): ${item.text}${this.memory.fullness()}`;
   }
 
   /** 역할 설명 쓰기(메인 도구): key 가 없으면 이 작업 */
