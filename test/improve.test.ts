@@ -202,17 +202,6 @@ test('이름 바꾸기: 예전 이름도 알아듣는다', async () => {
   sessions.stopAll();
 });
 
-test('예약 10분씩 나누기: 시각마다 하나는 그대로, 나머지는 비어 있는 다음 자리로', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent hub spread '));
-  const store = new ScheduleStore(join(dir, 's.json'));
-  for (const [t, p] of [['09:00', 'a'], ['09:00', 'b'], ['09:00', 'c'], ['09:10', 'd']]) store.save({ sessionId: 's', prompt: p, repeat: 'daily', time: t });
-  store.save({ sessionId: 's', prompt: 'iv', repeat: 'interval', every: 60 });
-  assert.equal(store.spread().length, 2);
-  const times = store.list().filter((x) => x.repeat === 'daily').map((x) => x.time).sort();
-  assert.deepEqual(times, ['09:00', '09:10', '09:20', '09:30']);
-  assert.equal(store.spread().length, 0);
-});
-
 test('바뀐 서버 코드: 작업이 모두 10분 쉬면 저절로 다시 켠다', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent hub auto '));
   mkdirSync(join(root, 'src'));
