@@ -208,6 +208,7 @@ export class SessionManager {
   private workPresets?: WorkPresetStore;
   private profileDir?: (agent: AgentKind) => string;
   private schedules?: ScheduleStore;
+  private opsAlert?: OpsAlert;
   private shared?: SharedRepo; // 공유 레포 — 메인이 대화로 올릴 때(사람 승인 후)
   private scheduleRunning = new Set<string>(); // 실행 중인 예약(같은 예약이 겹쳐 돌지 않게)
   private asks = new Map<string, { sessionId: string; resolve: (allow: boolean) => void }>(); // 호스트가 사람에게 묻는 중인 것
@@ -241,6 +242,7 @@ export class SessionManager {
     profilesDir?: string; // 에이전트 세션의 전용 프로필 뿌리(data/profiles)
     workPresets?: WorkPresetStore; // 설정의 "프리셋" — 작업 환경(폴더·지침)
     schedules?: ScheduleStore; // 작업 정보의 "예약"
+    opsAlert?: OpsAlert; // 예약이 실패하면 바깥 운영 알림으로(풀리면 resolved)
     claudeHome?: string; // Claude Code 설정 폴더(시험용). 기본 CLAUDE_CONFIG_DIR 또는 ~/.claude
     aboutLine?: boolean; // 메인 지시 앞에 [이 작업 역할: …] 한 줄(Agent Hub 는 켬, 시험은 기본 꺼짐)
   }) {
@@ -248,6 +250,7 @@ export class SessionManager {
     this.claudeHome = opts.claudeHome ?? claudeHome();
     this.claudeCode = new ClaudeHistory(this.claudeHome);
     this.schedules = opts.schedules;
+    this.opsAlert = opts.opsAlert;
     this.workPresets = opts.workPresets;
     this.auth = opts.auth;
     this.gitEnv = opts.gitEnv;
@@ -1472,9 +1475,13 @@ export class SessionManager {
         // 보내는 사이에 그 차례가 벌써 끝났으면 끝난 결과를 남긴다
         const done = this.schedDone.get(s.id);
         this.schedDone.delete(s.id);
+        const prev = this.lastResultOf(s.id);
         this.schedules.markRun(s.id, now, done ?? r.result, r.sessionId);
+        this.alertSchedule(s.id, prev, done ?? r.result);
       } catch (err) {
+        const prev = this.lastResultOf(s.id);
         this.schedules.markRun(s.id, now, `실패: ${(err as Error).message}`);
+        this.alertSchedule(s.id, prev, `실패: ${(err as Error).message}`);
       } finally {
         this.scheduleRunning.delete(s.id);
       }
@@ -1490,9 +1497,30 @@ export class SessionManager {
     if (!run || !this.schedules) return;
     result = `${run.note} → ${result}`;
     if (this.scheduleRunning.has(run.id)) this.schedDone.set(run.id, result); // 아직 보내는 중: 보낸 뒤 남긴다
-    else this.schedules.markResult(run.id, result);
+    else {
+      const prev = this.lastResultOf(run.id);
+      this.schedules.markResult(run.id, result);
+      this.alertSchedule(run.id, prev, result);
+    }
     this.schedulesChanged();
     if (result.startsWith('실패')) this.publish({ type: 'error', sessionId: live.info.id, message: `예약 실행 ${result}` });
+  }
+
+  private lastResultOf(id: string): string | undefined {
+    return this.schedules?.list().find((x) => x.id === id)?.lastResult;
+  }
+
+  /** 예약 결과 → 운영 알림: 실패로 끝나면 알리고, 앞이 실패였는데 이번에 끝까지 되면 풀림. 보내는 중 · 건너뜀은 아무것도 */
+  private alertSchedule(id: string, prev: string | undefined, result: string) {
+    if (!this.opsAlert) return;
+    const key = `schedule-${id}`;
+    if (scheduleFailed(result)) {
+      const s = this.schedules?.list().find((x) => x.id === id);
+      const t = s && this.sessions.get(s.sessionId);
+      const first = (s?.prompt ?? '').split('\n').find((l) => l.trim())?.trim().slice(0, 80) ?? '';
+      const why = result.slice(result.indexOf('실패') >= 0 ? result.indexOf('실패') : 0).replace(/^실패:?\s*/, '').split('\n')[0].slice(0, 160) || result.slice(0, 160);
+      this.opsAlert({ key, problem: `${t ? this.nameOf(t) : '(지워진 작업)'} 예약 '${first}' 이 실패: ${why}`, since: new Date().toISOString(), action: '' });
+    } else if (/끝남/.test(result) && prev && scheduleFailed(prev)) this.opsAlert({ key, resolved: true });
   }
 
   /** 같은 작업에 보낸다. 끝났거나 호스트를 다시 켜서 쉬는 작업이면 다시 띄워 앞 대화를 붙여 이어 간다. */
@@ -2276,4 +2304,11 @@ export function isCompactRequest(text: string): boolean {
   if (/^\/(compact|compress|컨텍스트 ?정리)$/.test(t)) return true;
   if (/^(compact|compress)( (the )?(context|conversation|chat))?( please)?$/.test(t)) return true;
   return /^(지금까지 )?(컨텍스트|대화 ?기록|대화)(를|을)? ?(좀 )?(정리|압축|요약 ?정리)(해 ?(줘|주세요|줄래|봐)|하자|해|해라|요망|부탁(해|합니다)?)?$/.test(t);
+}
+
+/** 바깥 운영 알림(설정의 opsAlert). 같은 key 는 풀릴 때까지 받는 쪽이 한 번만 알린다 */
+export type OpsAlert = (a: { key: string; problem?: string; since?: string; action?: string; resolved?: boolean }) => void;
+/** 예약 결과 글이 실패인지(보낸 뒤 실패로 끝남 · 다시 띄우지 못함 · 작업이 없음) */
+export function scheduleFailed(result: string): boolean {
+  return /(^|→ )실패|다시 띄우지 못함|작업이 없어/.test(result);
 }

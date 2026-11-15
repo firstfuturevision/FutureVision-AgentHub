@@ -2,7 +2,7 @@ import { mkdirSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.ts';
 import { SessionManager } from './sessions.ts';
@@ -52,10 +52,19 @@ const hubSkills = new HubSkillStore(join(cfg.dataDir, 'skills'));
 const workPresets = new WorkPresetStore(join(cfg.dataDir, 'work-presets.json'));
 const schedules = new ScheduleStore(join(cfg.dataDir, 'schedules.json'));
 
+// 예약 실패 운영 알림(설정 opsAlert): 토큰은 보낼 때마다 파일에서 읽고, 없으면 건너뛴다
+const opsAlert = cfg.opsAlert?.url ? (a: Record<string, unknown>) => {
+  let token = '';
+  try { if (cfg.opsAlert.tokenFile) token = readFileSync(cfg.opsAlert.tokenFile.replace(/^~(?=\/)/, homedir()), 'utf8').trim(); } catch {}
+  if (cfg.opsAlert.tokenFile && !token) return;
+  void fetch(cfg.opsAlert.url, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Token ${token}` } : {}) }, body: JSON.stringify(a), signal: AbortSignal.timeout(10_000) })
+    .then((r) => { if (!r.ok) console.warn(`[ops-alert] ${r.status}`); }).catch((err) => console.warn('[ops-alert]', (err as Error).message));
+} : undefined;
 const sessions = new SessionManager({
   aboutLine: true, // 메인 지시 앞에 이 작업 역할 한 줄 — 맡는 일이 바뀌면 에이전트가 session_about 으로 고친다
   workspaceRoot: cfg.workspaceRoot,
   dataDir: cfg.dataDir,
+  opsAlert,
   presets,
   tools,
   auth,

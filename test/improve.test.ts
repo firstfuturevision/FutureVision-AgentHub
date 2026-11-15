@@ -228,3 +228,28 @@ test('바뀐 서버 코드: 작업이 모두 10분 쉬면 저절로 다시 켠�
   await u.tick(new Date(t0.getTime() + 23 * 60_000));
   assert.equal(restarted, 1);
 });
+
+test('예약 실패 운영 알림: 실패 글만 실패로, 실패 뒤 끝까지 되면 풀림', async () => {
+  const { scheduleFailed } = await import('../src/sessions.ts');
+  assert.ok(scheduleFailed('보냄 → 실패: 응답 없음'));
+  assert.ok(scheduleFailed('실패: 없는 세션'));
+  assert.ok(scheduleFailed('작업을 다시 띄우지 못함'));
+  assert.ok(scheduleFailed('작업이 없어 건너뜀'));
+  assert.equal(scheduleFailed('보냄 → 끝남 · 30초'), false);
+  assert.equal(scheduleFailed('작업 중이라 건너뜀'), false);
+  assert.equal(scheduleFailed('보냄'), false);
+});
+
+test('예약 실패 운영 알림: key · 작업 이름 · 첫 줄 · 이유, 다음에 끝나면 resolved', () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub opsalert '));
+  const sent: any[] = [];
+  const schedules = new ScheduleStore(join(base, 's.json'));
+  const sessions = new SessionManager({ workspaceRoot: base, dataDir: join(base, 'data'), schedules, opsAlert: (a) => sent.push(a), makeAdapter: () => { throw new Error('안 띄움'); } } as any);
+  const s = schedules.save({ sessionId: 'nope', prompt: '[예약] 매일 보고\n둘째 줄', repeat: 'daily', time: '09:00' });
+  (sessions as any).alertSchedule(s.id, undefined, '보냄 → 실패: 로그인 만료');
+  assert.deepEqual(sent[0], { key: `schedule-${s.id}`, problem: "(지워진 작업) 예약 '[예약] 매일 보고' 이 실패: 로그인 만료", since: sent[0].since, action: '' });
+  (sessions as any).alertSchedule(s.id, '보냄 → 끝남 · 3초', '보냄 → 끝남 · 4초');
+  assert.equal(sent.length, 1, '앞이 실패가 아니면 풀림도 안 보냄');
+  (sessions as any).alertSchedule(s.id, '보냄 → 실패: 로그인 만료', '보냄 → 끝남 · 4초');
+  assert.deepEqual(sent[1], { key: `schedule-${s.id}`, resolved: true });
+});

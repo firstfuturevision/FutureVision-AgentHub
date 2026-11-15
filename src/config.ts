@@ -17,6 +17,7 @@ export interface Config {
   models: Record<'claude' | 'gemini' | 'codex', { id: string; name: string }[]>;
   dashboard: DashboardOptions;
   updateRepo: string; // 업데이트 레포 기본 주소(연동에서 바꿀 수 있음)
+  opsAlert: { url: string; tokenFile: string }; // 예약이 실패하면 이 주소로 알림(POST JSON {key, problem, since, action} · 풀리면 {key, resolved}). tokenFile 이 있으면 Authorization: Token <파일 내용>. url 이 비면 안 보냄
   sleepIdleMinutes: number; // 이만큼(분) 쉰 작업의 CLI 를 내려 메모리를 돌려준다. 다음 지시 때 같은 대화로 이어 띄운다. 0 이면 안 함
   maxAwakeAgents: number; // 동시에 떠 있는 CLI 가 이보다 많으면 오래 쉰 것부터 내린다. 0 이면 한도 없음
   autoRestartOnCodeChange: boolean; // 켠 뒤 서버 코드가 바뀌면, 작업이 모두 10분 넘게 쉴 때 저절로 다시 켠다
@@ -67,6 +68,7 @@ const DEFAULTS: Config = {
   sharedRepo: 'firstfuturevision/agent-hub-shared',
   homepage: 'https://agent-hub.vision-share.com/agent-hub',
   autoRestartOnCodeChange: true,
+  opsAlert: { url: '', tokenFile: '' },
   sleepIdleMinutes: 30,
   maxAwakeAgents: 8,
 };
