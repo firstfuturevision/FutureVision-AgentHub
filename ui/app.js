@@ -455,33 +455,9 @@ function renderPeers(box) {
     renderTaskLinks(true);
   };
   box.append(list, add);
-  box.append(el('h3', 'link-h', '작업 묶음'));
+  box.append(el('h3', 'link-h', '작업'));
 }
 
-function taskLinks() {
-  const tasks = [...sessions.values()].filter((s) => s.info.role !== 'worker' && !s.info.archived && !s.info.remotePc && s.info.id !== intakeState?.sessionId);
-  const sends = new Map(); // "보낸id>받은id" → { from, to, n, at, t }
-  for (const s of tasks) {
-    for (const it of s.items) {
-      if (it.k !== 'user' || !it.from?.startsWith('작업 ')) continue;
-      const from = taskByName(it.from.slice(3));
-      const key = `${from?.info.id ?? it.from}>${s.info.id}`;
-      const e = sends.get(key) ?? { from, fromName: it.from.slice(3), to: s, n: 0, at: 0, t: '' };
-      e.n++;
-      if ((it.at ?? 0) >= e.at) { e.at = it.at ?? 0; e.t = it.t; }
-      sends.set(key, e);
-    }
-  }
-  // 묶음: 분담·포크로 이어졌거나 서로 글을 보낸 작업끼리
-  const up = new Map(tasks.map((s) => [s.info.id, s.info.id]));
-  const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
-  const join = (a, b) => { if (up.has(a) && up.has(b)) up.set(find(a), find(b)); };
-  for (const s of tasks) { const p = s.info.splitFrom ?? s.info.forkedFrom; if (p) join(s.info.id, p); }
-  for (const e of sends.values()) if (e.from) join(e.from.info.id, e.to.info.id);
-  const groups = new Map();
-  for (const s of tasks) { const g = find(s.info.id); (groups.get(g) ?? groups.set(g, []).get(g)).push(s); }
-  return { groups: [...groups.values()].filter((g) => g.length > 1) };
-}
 let linksAt = 0;
 function renderTaskLinks(force) {
   // 탭이 열려 있을 때만. 답이 조각조각 올 때 모든 기록을 매번 훑지 않게(누르려던 단추가 그사이 바뀌지 않게도) 2초에 한 번
@@ -490,12 +466,10 @@ function renderTaskLinks(force) {
   const box = $('links-all');
   box.replaceChildren();
   renderPeers(box);
-  box.append(el('p', 'hint', 'PC 마다 서로 이어진 작업(분담·포크로 갈라졌거나 서로 글을 보낸 작업)을 묶어 보입니다. 이 PC 작업을 누르면 그 작업으로, 다른 PC 작업을 누르면 그 PC 화면이 새 탭으로 열립니다.'));
+  box.append(el('p', 'hint', 'PC 마다 작업을 왼쪽 목록과 같은 순서로 보입니다. 하위 작업은 그 작업 아래 들여 써 있고, 하위 작업이 있는 줄의 "묶음에 보내기"는 그 작업과 그 아래 작업 전부에 보냅니다. 이 PC 작업을 누르면 그 작업으로, 다른 PC 작업을 누르면 그 PC 화면이 새 탭으로 열립니다.'));
   // 이 PC: 기록에서 바로(작업끼리 보낸 글도 묶는다)
-  const { groups } = taskLinks();
   const mine = mains();
-  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: s.info.splitFrom ?? s.info.forkedFrom, kind: '하위', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
-  const grouped = new Set(groups.flat().map((s) => s.info.id));
+  const node = (s) => ({ id: s.info.id, name: titleOf(s), parent: parentOfTask(s), kind: '하위', busy: isBusy(s), about: s.info.about, open: () => { viewId = s.info.id; showNav('sessions'); render(); }, s });
   const sendLocal = async (ids, text) => { for (const id of ids) await send({ type: 'user.message', sessionId: id, text }); return ids.length; };
   const sendPeer = (p) => async (ids, text) => {
     const r = await fetch('/peers/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: p.url, ids, text }) });
@@ -517,77 +491,67 @@ function renderTaskLinks(force) {
   const top = el('div', 'link-foot');
   top.append(everyone);
   box.append(top);
-  const rootRank = (g) => Math.min(...g.filter((s) => !g.includes(sessions.get(parentOfTask(s) ?? ''))).map(rankOf));
-  pcGroups(box, peerState?.me ?? '이 PC', groups.sort((a, b) => rootRank(a) - rootRank(b)).map((g) => g.map(node)), mine.filter((s) => !grouped.has(s.info.id)).sort(byRank).map(node), sendLocal);
+  pcTasks(box, peerState?.me ?? '이 PC', mine.map(node), sendLocal);
   // 다른 PC: 그 PC 가 알려 준 작업 목록의 분담·포크(원본 이름)로
   for (const p of peerState?.peers ?? []) {
     if (!p.ok) continue;
     const tasks = p.summary.tasks;
     const byName = new Map(tasks.map((t) => [t.name, t.id]));
     const nodes = tasks.map((t, i) => ({ id: t.id, name: t.name, rank: t.rank ?? i, parent: byName.get(t.splitFrom ?? t.forkedFrom ?? ''), kind: '하위', busy: t.status === '작업 중', about: t.about, open: () => window.open(`${p.url}/`, '_blank', 'noopener') }));
-    const up = new Map(nodes.map((n) => [n.id, n.id]));
-    const find = (id) => { while (up.get(id) !== id) id = up.get(id); return id; };
-    for (const n of nodes) if (n.parent && up.has(n.parent)) up.set(find(n.id), find(n.parent));
-    const gs = new Map();
-    for (const n of nodes) { const g = find(n.id); (gs.get(g) ?? gs.set(g, []).get(g)).push(n); }
-    const all = [...gs.values()];
-    pcGroups(box, p.name || p.url, all.filter((g) => g.length > 1), all.filter((g) => g.length === 1).flat(), sendPeer(p));
+    pcTasks(box, p.name || p.url, nodes, sendPeer(p));
   }
 }
 
-/** 묶음(또는 따로 있는 작업) 전체에 보내기 단추: 사람이 보낸 글로 그 작업들에 들어간다 */
-function sendFoot(pc, nodes, sendTo, label = '묶음 전체에 보내기') {
-  const b = el('button', 'line-btn', label);
+/** 보내기: 글을 물어 그 작업들에 사람이 보낸 글로 넣는다 */
+function sendButton(pc, nodes, sendTo, label, cls = 'line-btn') {
+  const b = el('button', cls, label);
   b.type = 'button';
   b.onclick = async () => {
     const text = await askDialog({ title: `${label} · ${pc} · 작업 ${nodes.length}개`, text: nodes.map((n) => n.name).join(', '), input: '', placeholder: '보낼 글', ok: '보내기' });
     if (!text) return;
     flash(`작업 ${await sendTo(nodes.map((n) => n.id), text)}개에 보냈어요`);
   };
-  const foot = el('div', 'link-foot');
-  foot.append(b);
-  return foot;
+  return b;
 }
 
 /** 연결 탭 나무 순서: 왼쪽 작업 목록과 같게(이 PC 는 끌어 옮긴 자리, 다른 PC 는 그 PC 가 알려 준 자리) */
 const byNode = (a, b) => (a.s && b.s ? byRank(a.s, b.s) : (a.rank ?? 0) - (b.rank ?? 0));
 
-/** PC 하나의 작업 묶음: 묶음마다 분담·포크 나무, 그리고 따로 있는 작업 */
-function pcGroups(box, pc, groups, singles, sendTo) {
+/**
+ * PC 하나의 작업: 상자 하나에 왼쪽 목록과 같은 순서 · 같은 들여쓰기(하위 작업은 그 아래).
+ * 하위 작업이 있는 줄에는 "묶음에 보내기"(그 작업과 그 아래 전부), 맨 아래 "모두에게 보내기"(이 PC 작업 전부)
+ */
+function pcTasks(box, pc, nodes, sendTo) {
   box.append(el('div', 'link-pc', pc));
   const list = el('div', 'sched-list');
-  const tree = (g) => {
-    const ids = new Set(g.map((n) => n.id));
-    const t = el('div', 'link-tree');
-    const add = (n, depth) => {
-      const row = el('div', 'link-task');
-      row.style.paddingLeft = `${depth * 16}px`;
-      row.append(el('span', `link-dot ${n.busy ? 'busy' : ''}`));
-      const b = el('button', 'link-name', n.name);
-      b.type = 'button';
-      b.onclick = n.open;
-      row.append(b);
-      if (n.about) row.title = n.about;
-      if (n.busy) row.append(el('span', 'link-kind', '작업 중'));
-      t.append(row);
-      for (const k of g.filter((x) => x.parent === n.id).sort(byNode)) add(k, depth + 1);
-    };
-    for (const r of g.filter((n) => !ids.has(n.parent ?? '')).sort(byNode)) add(r, 0);
-    return t;
+  if (!nodes.length) { list.append(el('p', 'hint', '작업이 없어요.')); box.append(list); return; }
+  const ids = new Set(nodes.map((n) => n.id));
+  const kids = (n) => nodes.filter((x) => x.parent === n.id).sort(byNode);
+  const under = (n) => [n, ...kids(n).flatMap(under)];
+  const card = el('div', 'sched-row link-group');
+  card.append(el('div', 'link-sub', `작업 ${nodes.length}개`));
+  const t = el('div', 'link-tree');
+  const add = (n, depth) => {
+    const row = el('div', 'link-task');
+    row.style.paddingLeft = `${depth * 16}px`;
+    row.append(el('span', `link-dot ${n.busy ? 'busy' : ''}`));
+    const b = el('button', 'link-name', n.name);
+    b.type = 'button';
+    b.onclick = n.open;
+    row.append(b);
+    if (n.about) row.title = n.about;
+    if (n.busy) row.append(el('span', 'link-kind', '작업 중'));
+    const sub = kids(n);
+    if (depth === 0 && sub.length) row.append(sendButton(pc, under(n), sendTo, '묶음에 보내기', 'line-btn link-send'));
+    t.append(row);
+    for (const k of sub) add(k, depth + 1);
   };
-  for (const g of groups) {
-    const card = el('div', 'sched-row link-group');
-    card.append(el('div', 'link-sub', `작업 ${g.length}개`), tree(g));
-    card.append(sendFoot(pc, g, sendTo));
-    list.append(card);
-  }
-  if (singles.length) {
-    const card = el('div', 'sched-row link-group');
-    card.append(el('div', 'link-sub', `따로 있는 작업 ${singles.length}개`), tree(singles.map((n) => ({ ...n, parent: undefined }))));
-    card.append(sendFoot(pc, singles, sendTo, '모두에게 보내기'));
-    list.append(card);
-  }
-  if (!groups.length && !singles.length) list.append(el('p', 'hint', '작업이 없어요.'));
+  for (const r of nodes.filter((n) => !ids.has(n.parent ?? '')).sort(byNode)) add(r, 0);
+  card.append(t);
+  const foot = el('div', 'link-foot');
+  foot.append(sendButton(pc, nodes, sendTo, `모두에게 보내기 (${nodes.length}개)`));
+  card.append(foot);
+  list.append(card);
   box.append(list);
 }
 

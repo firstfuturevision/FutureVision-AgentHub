@@ -607,3 +607,6 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 
 /* 작업 정보 → 컨텍스트 정리 */
 .p-compact { margin-top: 8px; font-size: 12px; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 8px; }
+
+/* 연결 탭: 하위 작업이 있는 줄의 "묶음에 보내기" */
+.link-task .link-send { margin-left: auto; font-size: 12px; padding: 2px 8px; }
