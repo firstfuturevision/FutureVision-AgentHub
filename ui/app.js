@@ -373,6 +373,12 @@ async function loadPeers(fresh) {
   if (r) { peerState = { myUrls: peerState?.myUrls, ...r }; store.set('peerState', peerState); }
   renderTaskLinks(true);
   renderList(); // 왼쪽 목록의 다른 PC 작업
+  refreshLinks(); // 오른쪽 이어진 작업의 다른 PC 하위 작업 상태
+}
+/** 오른쪽 작업 정보가 열려 있으면 이어진 작업만 다시 그린다(지금 하는 일 · 몇 분째) */
+function refreshLinks() {
+  const s = viewId && sessions.get(viewId);
+  if (s && !s.info.remotePc && !$('panel').hidden) renderLinks(s);
 }
 function renderPeers(box) {
   box.append(el('h3', 'link-h', 'PC'));
@@ -2095,7 +2101,13 @@ function syncTitle() {
 addEventListener('focus', () => renderSoon());
 document.addEventListener('visibilitychange', () => renderSoon());
 // 작업 줄의 "3분째"를 맞춘다
-setInterval(() => { if (mains().some(isBusy)) renderList(); }, 15000);
+// 일하는 작업이 있으면 "몇 분째"가 따라가게(왼쪽 목록 · 오른쪽 이어진 작업)
+setInterval(() => {
+  const remoteBusy = (peerState?.peers ?? []).some((p) => p.ok && p.summary.tasks.some((t) => t.status === '작업 중'));
+  if (!mains().some(isBusy) && !remoteBusy) return;
+  renderList();
+  refreshLinks();
+}, 15000);
 const titleOf = (s) => {
   const first = s.items.find((it) => it.k === 'user');
   return s.info.customTitle || first?.t || (first?.files?.length ? first.files[0].name : '') || (s.info.forkedFrom ? '포크한 작업' : s.info.splitFrom ? '분담한 작업' : s.info.copiedFrom ? '복사한 작업' : '새 작업');
@@ -2758,7 +2770,7 @@ function renderLinks(s) {
   const firstLine = (t) => (t ?? '').replace(/[#*`>|_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
   const when = (at) => (at ? ` (${stampText({ at })})` : '');
   const lastNews = (k) => {
-    if ((k.info.status === 'working' || k.info.status === 'starting') && doingOf(k)) return `일하는 중 · ${doingOf(k)}`;
+    if (k.info.status === 'working' || k.info.status === 'starting') return `지금: ${doingOf(k) || '작업 중'} · ${sinceText(k.turnStart ?? Date.now())}`;
     const done = k.items.findLastIndex((it) => it.k === 'line meta');
     const rep = done > 0 ? k.items.slice(0, done).findLast((it) => it.k === 'agent') : undefined;
     if (!rep) return '';
@@ -2770,12 +2782,14 @@ function renderLinks(s) {
   for (const r of remoteTasks().under.get(s.info.id) ?? []) {
     const m = [...s.items].reverse().find((it) => it.k === 'merged' && it.fromId === `peer:${r.pc.name}:${r.t.id}`);
     const rep = m && m.text.split('\n').reverse().find((l) => l.startsWith('에이전트:'));
-    forks.push({ remote: r, label: `하위 작업 · ${r.pc.name}`, sub: r.t.name, report: rep ? firstLine(rep.slice(5)) : '아직 공유 없음' });
+    const busyNow = r.t.status === '작업 중' ? `지금: ${r.t.doing || '작업 중'}${r.t.since ? ` · ${sinceText(r.t.since)}` : ''}` : '';
+    forks.push({ remote: r, label: `하위 작업 · ${r.pc.name}`, sub: r.t.name, report: busyNow || (rep ? firstLine(rep.slice(5)) : '아직 공유 없음') });
   }
   const running = [];
   const rest = [];
   for (const w of workersOf(s)) {
-    const l = { s: w, label: `${w.info.preset ? `${w.info.preset.name} · ` : ''}${NAMES[w.info.agent]}`, sub: w.items.find((it) => it.k === 'user')?.t ?? '', worker: true };
+    const working = w.info.status === 'working' || w.info.status === 'starting';
+    const l = { s: w, label: `${w.info.preset ? `${w.info.preset.name} · ` : ''}${NAMES[w.info.agent]}`, sub: w.items.find((it) => it.k === 'user')?.t ?? '', worker: true, report: working && !pendingPerm(w) ? `지금: ${w.doing || '작업 중'} · ${sinceText(w.turnStart ?? Date.now())}` : '' };
     (pendingPerm(w) || w.info.status === 'working' || w.info.status === 'starting' ? running : rest).push(l);
   }
   fillLinks($('p-sessions'), forks);
@@ -2836,7 +2850,7 @@ function fillLinks(box, links) {
     if (l.remote) {
       const text = el('span', 'p-name wrap');
       text.append(el('b', '', l.label), document.createTextNode(` ${l.sub}`));
-      b.append(text, el('span', 'p-meta', l.remote.t.status === '작업 중' ? '작업 중' : '대기'));
+      b.append(text, el('span', `p-meta${peerStatus(l.remote.t) === '승인 대기' ? ' wait' : ''}`, peerStatus(l.remote.t)));
       b.onclick = () => openRemote(l.remote.pc, l.remote.t);
       const wrap = el('div', 'p-linkwrap');
       wrap.append(b, el('div', 'p-report', l.report));
@@ -3284,7 +3298,9 @@ function remoteGroup(n, depth, tagged) {
   const st = peerStatus(n.t);
   if (depth) stateMark(head, st === '작업 중', st === '승인 대기');
   b.append(head);
-  if (!depth) b.append(el('span', `task-sub${st === '승인 대기' ? ' wait' : st === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${st}`));
+  const now = st === '작업 중' ? `${n.t.doing || '작업 중'}${n.t.since ? ` · ${sinceText(n.t.since)}` : ''}` : st;
+  if (!depth) b.append(el('span', `task-sub${st === '승인 대기' ? ' wait' : st === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${now}`));
+  else if (st === '작업 중') b.append(el('span', 'task-sub busy', now));
   b.title = [`${n.t.name} · ${n.pc.name} · ${st}`, n.t.about, '누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)'].filter(Boolean).join('\n');
   b.onclick = () => openRemote(n.pc, n.t); // 이 화면 가운데에서 그 작업 대화
   b.oncontextmenu = (e) => { e.preventDefault(); openRemoteMenu(n, e.clientX, e.clientY); }; // 우클릭: 작업 메뉴(그 PC 에서 실행)
@@ -3602,7 +3618,10 @@ function taskRow(s, depth, open) {
     sub.title = sub.textContent;
     b.append(sub);
     b.title = titleOf(s); // 잘린 이름 전체
-  } else b.title = `${titleOf(s)} · ${state} · ${time}`;
+  } else {
+    b.title = `${titleOf(s)} · ${state} · ${time}`;
+    if (busy && !wait) b.append(el('span', 'task-sub busy', state)); // 하위 작업도 일하는 중이면 지금 하는 일 한 줄
+  }
   b.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
   dragTask(b, s);
   b.oncontextmenu = (e) => { e.preventDefault(); openTaskMenu(s, e.clientX, e.clientY); };

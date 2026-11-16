@@ -862,7 +862,8 @@ export class SessionManager {
         id: l.info.id.slice(0, 8),
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
-        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기', // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
+        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기',
+        ...this.activityOf(l), // 일하는 중이면 지금 하는 일 · 시작 시각(다른 PC 화면에 같은 모양으로) // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
@@ -884,13 +885,38 @@ export class SessionManager {
         ...(l.info.remoteParent ? { remoteParent: l.info.remoteParent } : {}), // 화면 목록과 같은 순서(끌어 옮긴 자리, 없으면 맨 위는 최근 것부터)
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
-        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기', // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
+        status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기',
+        ...this.activityOf(l), // 일하는 중이면 지금 하는 일 · 시작 시각(다른 PC 화면에 같은 모양으로) // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
         schedules: this.schedules?.forSession(l.info.id).length ?? 0,
       };
     });
     return { name, version, tasks };
+  }
+
+  /** 일하는 중인 작업의 지금 하는 일(메인과 그 하위 에이전트 가운데 가장 최근 도구)과 이번 차례 시작 시각 */
+  private activityOf(l: Live): { doing?: string; since?: number } {
+    if (l.info.status !== 'working' && l.info.status !== 'starting') return {};
+    const last = (x: Live) => {
+      for (let i = x.history.length - 1; i >= 0; i--) {
+        const e = x.history[i];
+        if (e.type === 'user.message') return { at: this.timeOf(e) ?? 0, start: true } as const;
+        if (e.type === 'agent.tool') {
+          const input = e.input && typeof e.input === 'object' ? (e.input as Record<string, unknown>) : {};
+          const v = input.file_path ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.description;
+          const arg = typeof v === 'string' ? (v.length > 80 ? `${v.slice(0, 80)}…` : v) : '';
+          const name = /clink/.test(e.name) ? '하위 에이전트에게 맡김' : e.name.replace(/^mcp__(.+?)__/, '$1 · ');
+          return { at: this.timeOf(e) ?? 0, doing: `${name} ${/clink/.test(e.name) ? '' : arg}`.trim() };
+        }
+      }
+      return { at: 0 };
+    };
+    let since: number | undefined;
+    for (let i = l.history.length - 1; i >= 0; i--) if (l.history[i].type === 'user.message') { since = this.timeOf(l.history[i]); break; }
+    const busy = [l, ...[...this.sessions.values()].filter((w) => w.info.role === 'worker' && w.info.parentId === l.info.id && (w.info.status === 'working' || w.info.status === 'starting'))];
+    const best = busy.map(last).filter((x) => 'doing' in x && x.doing).sort((a, b) => b.at - a.at)[0] as { doing?: string } | undefined;
+    return { ...(best?.doing ? { doing: best.doing.slice(0, 160) } : {}), ...(since ? { since } : {}) };
   }
 
   private tryFindTask(key: string): Live | null {

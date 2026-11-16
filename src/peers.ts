@@ -16,7 +16,7 @@ const ANNOUNCE_MS = 30_000;
 const FORGET_MS = 120_000; // 이만큼 안 들리면 찾은 목록에서 뺀다(손으로 더한 것은 남음)
 const TIMEOUT_MS = 3000;
 
-export interface PeerTask { name: string; id: string; status: string; rank?: number; remoteParent?: { url: string; id: string; pc: string }; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number }
+export interface PeerTask { name: string; id: string; status: string; rank?: number; remoteParent?: { url: string; id: string; pc: string }; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number; doing?: string; since?: number }
 export interface PeerSummary { name: string; url?: string; version?: string; tasks: PeerTask[] }
 export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary; intake?: { model: string } | null; memory?: { items: number; guide: boolean } | null }
 
@@ -135,6 +135,7 @@ export class Peers {
         ...(Number.isFinite(Number(t.rank)) ? { rank: Number(t.rank) } : {}), ...(t.remoteParent && peerUrl(t.remoteParent.url) ? { remoteParent: { url: peerUrl(t.remoteParent.url)!, id: String(t.remoteParent.id).slice(0, 60), pc: String(t.remoteParent.pc ?? '').slice(0, 60) } } : {}), ...(t.about ? { about: String(t.about).slice(0, 500) } : {}), ...(t.recent ? { recent: String(t.recent).slice(0, 120) } : {}),
         ...(t.splitFrom ? { splitFrom: String(t.splitFrom).slice(0, 120) } : {}), ...(t.forkedFrom ? { forkedFrom: String(t.forkedFrom).slice(0, 120) } : {}),
         schedules: Number(t.schedules) || 0,
+        ...(t.doing ? { doing: String(t.doing).slice(0, 160) } : {}), ...(Number.isFinite(Number(t.since)) && Number(t.since) > 0 ? { since: Number(t.since) } : {}),
       }));
       // 그 PC 의 입력 세션·기억(옛 버전이면 없음)
       const extra = async (path: string) => { try { const x = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(TIMEOUT_MS) }); return x.ok ? await x.json() : null; } catch { return null; } };

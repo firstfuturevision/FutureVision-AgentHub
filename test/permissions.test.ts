@@ -77,8 +77,10 @@ test('다른 PC 에 알리는 작업 상태: 일하는 중 · 승인 대기 · �
   await a.sessions.handle({ type: 'user.message', sessionId: sid, text: 'perm 하나' }, local);
   const req = await waitFor(a.events, (e) => e.type === 'permission.request') as any;
   assert.equal(status(), '승인 대기');
+  assert.ok((a.sessions.peerSummary('pc').tasks.find((t) => t.id === sid) as any).since > 0, '이번 차례 시작 시각');
   await a.sessions.handle({ type: 'permission.respond', sessionId: sid, requestId: req.requestId, allow: true } as any, local);
   await waitFor(a.events, (e) => e.type === 'turn.done');
   assert.equal(status(), '대기');
+  assert.equal((a.sessions.peerSummary('pc').tasks.find((t) => t.id === sid) as any).since, undefined, '쉬면 지금 하는 일 없음');
   a.sessions.stopAll();
 });
