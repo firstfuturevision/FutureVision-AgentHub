@@ -2841,6 +2841,14 @@ function workerState(w) {
   return w.items.some((it) => it.k === 'line meta') ? '끝남' : STATUS[w.info.status];
 }
 
+/** 이어진 작업의 소식 한 줄: 두 줄까지, 마우스를 올리면 전체, 누르면 펼치기/접기 */
+const reportOpen = new Set(); // 펼친 소식(다시 그려도 펼친 채로)
+function reportLine(text) {
+  const d = el('div', `p-report${reportOpen.has(text) ? ' open' : ''}`, text);
+  d.title = text;
+  d.onclick = () => { if (!reportOpen.delete(text)) reportOpen.add(text); d.classList.toggle('open', reportOpen.has(text)); };
+  return d;
+}
 function fillLinks(box, links) {
   box.replaceChildren();
   box.closest('.psec').hidden = !links.length; // 빈 칸은 숨긴다
@@ -2853,7 +2861,7 @@ function fillLinks(box, links) {
       b.append(text, el('span', `p-meta${peerStatus(l.remote.t) === '승인 대기' ? ' wait' : ''}`, peerStatus(l.remote.t)));
       b.onclick = () => openRemote(l.remote.pc, l.remote.t);
       const wrap = el('div', 'p-linkwrap');
-      wrap.append(b, el('div', 'p-report', l.report));
+      wrap.append(b, reportLine(l.report));
       box.append(wrap);
       continue;
     }
@@ -2865,7 +2873,7 @@ function fillLinks(box, links) {
       if (l.worker) { opened.add(l.s.info.id); render(); document.querySelector('.tasks')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
       else { viewId = l.s.info.id; render(); }
     };
-    if (l.report) { const wrap = el('div', 'p-linkwrap'); wrap.append(b, el('div', 'p-report', l.report)); box.append(wrap); }
+    if (l.report) { const wrap = el('div', 'p-linkwrap'); wrap.append(b, reportLine(l.report)); box.append(wrap); }
     else box.append(b);
   }
 }

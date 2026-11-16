@@ -610,7 +610,9 @@ a.line-btn { color: var(--ink); text-decoration: none; border-radius: 10px; font
 .intake-log { border-top: 1px solid var(--rule); padding: 8px 0; }
 .intake-log summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .intake-log .p-text { margin-bottom: 6px; }
-.p-report { font-size: 12px; color: var(--ink-faint); padding: 0 8px 6px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* 마지막 소식: 두 줄에서 "…"(아래 여백을 글 상자 안에 두면 셋째 줄 윗부분이 여백으로 비쳐 보여 margin 으로), 누르면 전체 */
+.p-report { font-size: 12px; color: var(--ink-faint); margin: 0 8px 6px; line-height: 1.45; max-height: calc(1.45em * 2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; cursor: pointer; }
+.p-report.open { display: block; max-height: none; -webkit-line-clamp: unset; }
 .ctx-note { font-size: 11.5px; color: var(--ink-faint); padding: 4px 10px 6px; }
 .auth-limits { width: 100%; display: flex; flex-direction: column; gap: 2px; }
 .limit-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
