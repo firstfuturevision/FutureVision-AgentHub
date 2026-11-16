@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
@@ -519,6 +519,17 @@ export class SessionManager {
   /** since 뒤에 그 작업 채팅에 뜬 그림. relay: undefined = 모두, true = 아래에서 올라온 것만, false = 그 작업이 띄운 것만. skip = 그 작업에서 받은 것은 빼고 */
   private shotsIn(from: Live, since: number, relay?: boolean, skip?: string): { url: string; name: string; caption?: string; from?: string }[] {
     return from.history.flatMap((e) => (e.type === 'agent.image' && (this.order.get(e) ?? 0) > since && (relay === undefined || relay === Boolean(e.from)) && !(skip && e.url.startsWith(`/images/${skip}/`)) ? [e] : []));
+  }
+
+  /** 그림 내용의 지문(같은 그림을 다른 파일로 두 번 띄워도 같게). 파일이 없으면 주소 */
+  private shotHash(url: string): string {
+    const m = url.match(/^\/images\/([^/]+)\/([^/]+)$/);
+    const f = m && this.imagePath(m[1], m[2]);
+    try { return f ? createHash('sha1').update(readFileSync(f.path)).digest('hex') : url; } catch { return url; }
+  }
+  /** 그 작업 채팅에 이미 뜬 그림들의 지문 */
+  private shotHashes(l: Live): Set<string> {
+    return new Set(l.history.flatMap((e) => (e.type === 'agent.image' ? [this.shotHash(e.url)] : [])));
   }
 
   /** 사람이 올린 첨부 그림(채팅에서 눌러 크게 보기) → 실제 경로. 그 작업 폴더 첨부/ 안의 그림만 */
@@ -2079,12 +2090,16 @@ export class SessionManager {
     const t = `${fromPc.slice(0, 60)}/${title.slice(0, 80)}`;
     const body = text.slice(0, 20000);
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: `peer:${fromPc.slice(0, 60)}:${fromId.slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
-    // 함께 온 그림: 이 PC 에 두고 위 작업 채팅에 띄운다
+    // 함께 온 그림: 이 PC 에 두고 위 작업 채팅에 띄운다(같은 내용이 이미 있으면 빼고)
+    const had = this.shotHashes(target);
     for (const g of (Array.isArray(images) ? images : []).slice(0, 4)) {
       const ext = String(g?.ext ?? '').toLowerCase().replace('.jpeg', '.jpg');
       if (!IMAGE_TYPES[ext] || typeof g?.data !== 'string') continue;
       const data = Buffer.from(g.data, 'base64');
       if (!data.length || data.length > 4_000_000) continue;
+      const h = createHash('sha1').update(data).digest('hex');
+      if (had.has(h)) continue;
+      had.add(h);
       const dir = join(this.logDir, '..', 'images', target.info.id);
       mkdirSync(dir, { recursive: true });
       const file = `${randomUUID()}${ext}`;
@@ -2143,7 +2158,13 @@ export class SessionManager {
     const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : '하위 작업');
     const text = tail(fresh.join('\n'));
     // 그사이 하위 작업이 띄운 그림도 위 작업 채팅에(같은 그림 파일을 가리킨다). 공유 글보다 먼저 — 위로 이어 넘길 때 다음 공유의 시작점(공유 글) 앞에 있어 다시 가지 않게
-    for (const g of shots) this.publish({ type: 'agent.image', sessionId: target.info.id, url: g.url, name: g.name, ...(g.caption ? { caption: g.caption } : {}), from: g.from ?? title });
+    const had = this.shotHashes(target);
+    for (const g of shots) {
+      const h = this.shotHash(g.url);
+      if (had.has(h)) continue; // 같은 그림(같은 내용)이 이미 그 작업 채팅에 있으면 다시 띄우지 않는다
+      had.add(h);
+      this.publish({ type: 'agent.image', sessionId: target.info.id, url: g.url, name: g.name, ...(g.caption ? { caption: g.caption } : {}), from: g.from ?? title });
+    }
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}), ...(what === 'relay' ? { relay: true } : {}) });
     const head = `[하위 작업 공유: ${title} — 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`;
     (target.merges ??= []).push({ label: `하위 작업 공유 · ${title}`, text: `${head}\n${text}` });

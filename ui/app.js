@@ -3812,6 +3812,16 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
     else if (it.k === 'line halt') into.append(el('div', 'halt-line', it.t));
     else if (it.k === 'note') into.append(el('div', 'note', it.t));
     else if (it.k === 'intake-ask') { const d = el('div', 'msg agent intake-ask'); d.append(el('div', 'intake-label', '입력 세션 물음 · 여기에 답하면 입력 세션이 받아요'), renderMarkdown(it.t)); into.append(d); }
+    else if (it.k === 'image' && it.from) {
+      // 하위 작업이 띄운 그림: 크게 펼치지 않고 바로 뒤 "하위 작업 공유" 카드 안에 작은 그림으로(누르면 크게)
+      let j = i;
+      while (j < items.length && items[j].k === 'image' && items[j].from) j++;
+      const next = items[j];
+      if (next?.k === 'merged') { into.append(mergedItem(next, items.slice(i, j))); if (next !== skip) stamp(next); i = j + 1; continue; }
+      into.append(thumbRow(items.slice(i, j)));
+      i = j;
+      continue;
+    }
     else if (it.k === 'image') into.append(imageItem(it));
     else if (it.k === 'merged') into.append(mergedItem(it));
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
@@ -3963,7 +3973,20 @@ function agentItem(s, it, upTo) {
 }
 
 /** 하위 작업에서 공유받은 대화: 접힌 카드, 누르면 그 대화 */
-function mergedItem(it) {
+/** 하위 작업 그림 작은 줄: 누르면 크게 */
+function thumbRow(imgs) {
+  const row = el('div', 'thumbs');
+  for (const g of imgs) {
+    if (!g.url) continue;
+    const img = el('img');
+    img.src = g.url; img.alt = g.caption || g.name || ''; img.loading = 'lazy';
+    img.title = [g.from ? `${g.from} 에서` : '', g.caption].filter(Boolean).join(' · ') + ' — 누르면 크게';
+    img.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openImage(g.url, [g.from, g.caption].filter(Boolean).join(' · ')); };
+    row.append(img);
+  }
+  return row;
+}
+function mergedItem(it, imgs = []) {
   const box = el('details', 'merged');
   const head = el('summary', '', `하위 작업 공유 · ${it.t}`);
   const body = el('div', 'merged-body');
@@ -3979,6 +4002,7 @@ function mergedItem(it) {
   box.ontoggle = () => { it.open = box.open; };
   body.onscroll = () => { it.scroll = body.scrollTop; };
   if (it.open && it.scroll) requestAnimationFrame(() => { body.scrollTop = it.scroll; });
+  if (imgs.length) head.append(thumbRow(imgs)); // 접혀 있어도 보이게 제목 줄 안에(누르면 크게 — 카드는 펼치지 않음)
   return box;
 }
 

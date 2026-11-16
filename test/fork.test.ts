@@ -301,8 +301,11 @@ test('하위 작업이 띄운 그림(show_image)은 공유와 함께 위 작업�
   assert.equal(shots(orig.id)[0].url, shots(leaf.id)[0].url, '같은 그림 파일');
   assert.equal(shots(orig.id)[0].caption, '고친 화면');
   assert.ok(shots(orig.id)[0].from && shots(orig.id)[0].from === shots(mid.id)[0].from, '처음 띄운 작업 이름');
-  // 다음 공유에 같은 그림이 다시 가지 않는다
+  // 다음 공유에 같은 그림이 다시 가지 않는다 — 같은 그림을 다시 띄워도(다른 파일, 같은 내용) 위에는 한 번만
+  await sessions.showImage(leaf.id, { path: 'shot.png', caption: '다시' });
   await say(sessions, events, leaf.id, '이어서');
+  assert.equal(shots(leaf.id).length, 2, '지시받은 작업 채팅에는 그대로');
+  assert.equal(shots(mid.id).length, 1);
   assert.equal(shots(orig.id).length, 1);
   sessions.stopAll();
 });
