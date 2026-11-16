@@ -67,7 +67,7 @@ export function dataBashAllows(command: string, allow: string[], readOnly = fals
   if (/(^|[^&])&($|[^&])/.test(bare)) return { ok: false, why: '뒤에서 돌리기(&)는 안 됨' };
   const segs = bare.split(/\|\||&&|;|\||\n/);
   const realSegs = cmd.split(/\|\||&&|;|\||\n/); // 따옴표 안을 지키며 나누기 위해 같은 자리에서
-  if (segs.length !== realSegs.length) return { ok: false, why: '명령을 나눌 수 없음' };
+  if (segs.length !== realSegs.length) return { ok: false, why: '따옴표 안에 줄바꿈·| ; 가 있어 명령을 나눌 수 없음(python 같은 스크립트는 안 됨 — 결과 고르기는 jq · head 로)' };
   for (const raw of realSegs) {
     const w = words(raw.trim());
     while (w.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) w.shift(); // 앞의 VAR=값
