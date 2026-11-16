@@ -196,7 +196,7 @@ export class Peers {
   myUrl(): string | undefined { return this.remote?.enabled ? this.remote.urls()[0] : undefined; }
 
   /** 다른 PC 의 위 작업으로 하위 작업 공유 보내기 */
-  async shareUp(rp: { url: string; id: string }, body: { fromPc: string; fromId: string; title: string; text: string }) {
+  async shareUp(rp: { url: string; id: string }, body: { fromPc: string; fromId: string; title: string; text: string; images?: unknown[] }) {
     await this.post(rp.url, '/peer/share', { to: rp.id, ...body });
   }
 

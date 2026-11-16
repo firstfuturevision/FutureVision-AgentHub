@@ -91,7 +91,7 @@ export const SCREEN_TOOLS = [
 export const SHOW_IMAGE_TOOL = {
   name: 'show_image',
   title: '채팅에 그림 띄우기',
-  description: '사람에게 그림을 채팅에 띄워 보여 준다. path 를 주면 그 그림 파일(png·jpg·gif·webp, 작업 폴더 기준 또는 절대 경로), 없으면 지금 이 PC 화면을 찍어서(화면 제어가 켜져 있어야 함). 사람이 "찍어서 보여줘·공유해줘"라고 하면 쓴다.',
+  description: '사람에게 그림을 채팅에 띄워 보여 준다. path 를 주면 그 그림 파일(png·jpg·gif·webp, 작업 폴더 기준 또는 절대 경로 — 작업자 AI 가 만든 파일도 이 경로로), 없으면 지금 이 PC 화면을 찍어서(화면 제어가 켜져 있어야 함). 사람이 "찍어서 보여줘·공유해줘"라고 하거나, 보고에 "위 그림"·"화면 그림"·"스크린샷"처럼 그림을 가리키려면 보고를 쓰기 전에 반드시 이것으로 띄운다 — 파일 경로만 적거나 그림을 말만 하면 사람에게는 안 보인다. 띄운 그림은 위 작업 채팅에도 함께 올라간다.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -104,7 +104,7 @@ export const SHOW_IMAGE_TOOL = {
 };
 
 export const SCREEN_INSTRUCTION =
-  '사람이 화면이나 결과 그림을 보여 달라고 하면 show_image 로 채팅에 띄운다(그림 파일이면 path, 아니면 지금 화면). screen_view 로 본 것은 너만 보고 사람에게는 안 보인다. ' +
+  '사람이 화면이나 결과 그림을 보여 달라고 하면 show_image 로 채팅에 띄운다(그림 파일이면 path, 아니면 지금 화면). 보고에서 그림을 가리킬 때("위 그림" 등)도 먼저 show_image 로 띄운다. screen_view 로 본 것과 파일 경로는 너만 보고 사람에게는 안 보인다. ' +
   '사람이 이 PC 의 프로그램을 직접 다뤄 달라고 하면(화면에서 누르기·입력) screen_view 로 먼저 보고 screen_click·screen_type·screen_key 로 다룬다. 한 번 할 때마다 돌려받은 화면으로 결과를 확인한다. 화면 제어가 꺼져 있으면 사람에게 Agent Hub 왼쪽 위 화면 제어에서 켜 달라고 한다.';
 
 /** 키 이름 → 윈도우 가상 키 코드(화면 제어 도우미가 받는 형식) */

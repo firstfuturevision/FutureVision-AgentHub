@@ -516,6 +516,19 @@ export class SessionManager {
     return `채팅에 띄움: ${name}${caption ? ` — ${caption}` : ''}`;
   }
 
+  /** since 뒤에 그 작업 채팅에 뜬 그림. relay: undefined = 모두, true = 아래에서 올라온 것만, false = 그 작업이 띄운 것만. skip = 그 작업에서 받은 것은 빼고 */
+  private shotsIn(from: Live, since: number, relay?: boolean, skip?: string): { url: string; name: string; caption?: string; from?: string }[] {
+    return from.history.flatMap((e) => (e.type === 'agent.image' && (this.order.get(e) ?? 0) > since && (relay === undefined || relay === Boolean(e.from)) && !(skip && e.url.startsWith(`/images/${skip}/`)) ? [e] : []));
+  }
+
+  /** 사람이 올린 첨부 그림(채팅에서 눌러 크게 보기) → 실제 경로. 그 작업 폴더 첨부/ 안의 그림만 */
+  attachmentImage(sessionId: string, rel: string): { path: string; type: string } | null {
+    const live = this.sessions.get(sessionId);
+    const ext = extname(rel).toLowerCase().replace('.jpeg', '.jpg');
+    const abs = live && IMAGE_TYPES[ext] ? this.attachmentPath(live, rel) : null;
+    return abs ? { path: abs, type: IMAGE_TYPES[ext] } : null;
+  }
+
   /** /images/<작업>/<파일> → 실제 경로(이름 모양이 맞고 실제로 있을 때만) */
   imagePath(sessionId: string, file: string): { path: string; type: string } | null {
     if (!/^[\w-]+$/.test(sessionId) || !/^[\w-]+\.(png|jpg|gif|webp)$/.test(file)) return null;
@@ -2048,17 +2061,37 @@ export class SessionManager {
     const fresh = digest(events);
     if (!fresh.length || !this.peers) return;
     const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
-    await this.peers.shareUp(rp, { fromPc: this.peers.summary().name, fromId: from.info.id, title: this.nameOf(from), text: tail(fresh.join('\n')) });
+    // 그림은 파일째(그 PC 는 이 PC 의 /images 를 못 연다). 4장 · 장마다 4MB 까지
+    const images = this.shotsIn(from, since, what === 'relay').slice(-4).flatMap((g) => {
+      const m = g.url.match(/^\/images\/([^/]+)\/([^/]+)$/);
+      const f = m && this.imagePath(m[1], m[2]);
+      if (!f || statSync(f.path).size > 4_000_000) return [];
+      return [{ name: g.name, ext: extname(f.path), data: readFileSync(f.path).toString('base64'), ...(g.caption ? { caption: g.caption } : {}), ...(g.from ? { from: g.from } : {}) }];
+    });
+    await this.peers.shareUp(rp, { fromPc: this.peers.summary().name, fromId: from.info.id, title: this.nameOf(from), text: tail(fresh.join('\n')), ...(images.length ? { images } : {}) });
     this.publish({ type: 'session.remoteShared', sessionId: from.info.id, until, ...(what === 'relay' ? { relay: true } : {}) });
   }
 
   /** 다른 PC 에서 온 하위 작업 공유를 받는다 */
-  receiveRemoteShare(targetId: string, fromPc: string, fromId: string, title: string, text: string) {
+  receiveRemoteShare(targetId: string, fromPc: string, fromId: string, title: string, text: string, images: unknown = []) {
     const target = this.sessions.get(targetId);
     if (!target || target.info.role !== 'main') throw new Error('없는 작업');
     const t = `${fromPc.slice(0, 60)}/${title.slice(0, 80)}`;
     const body = text.slice(0, 20000);
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: `peer:${fromPc.slice(0, 60)}:${fromId.slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
+    // 함께 온 그림: 이 PC 에 두고 위 작업 채팅에 띄운다
+    for (const g of (Array.isArray(images) ? images : []).slice(0, 4)) {
+      const ext = String(g?.ext ?? '').toLowerCase().replace('.jpeg', '.jpg');
+      if (!IMAGE_TYPES[ext] || typeof g?.data !== 'string') continue;
+      const data = Buffer.from(g.data, 'base64');
+      if (!data.length || data.length > 4_000_000) continue;
+      const dir = join(this.logDir, '..', 'images', target.info.id);
+      mkdirSync(dir, { recursive: true });
+      const file = `${randomUUID()}${ext}`;
+      writeFileSync(join(dir, file), data);
+      const caption = typeof g.caption === 'string' && g.caption.trim() ? g.caption.trim().slice(0, 300) : undefined;
+      this.publish({ type: 'agent.image', sessionId: target.info.id, url: `/images/${target.info.id}/${file}`, name: String(g.name ?? '그림').slice(0, 120), ...(caption ? { caption } : {}), from: `${fromPc.slice(0, 60)}/${String(g.from ?? title).slice(0, 80)}` });
+    }
     (target.merges ??= []).push({ label: `하위 작업 공유 · ${t}`, text: `[하위 작업 공유: ${t} — 다른 PC 의 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]\n${body}` });
     this.publishContext(target);
   }
@@ -2105,9 +2138,12 @@ export class SessionManager {
     const fresh = digest(events);
     if (!fresh.length) return;
     const until = Math.max(...events.map((e) => this.order.get(e) ?? 0));
+    const shots = this.shotsIn(from, since, what === 'all' ? undefined : what === 'relay', target.info.id);
     const firstUser = from.history.find((e) => e.type === 'user.message');
     const title = from.info.customTitle ?? (firstUser && firstUser.type === 'user.message' ? firstUser.text.slice(0, 40) : '하위 작업');
     const text = tail(fresh.join('\n'));
+    // 그사이 하위 작업이 띄운 그림도 위 작업 채팅에(같은 그림 파일을 가리킨다). 공유 글보다 먼저 — 위로 이어 넘길 때 다음 공유의 시작점(공유 글) 앞에 있어 다시 가지 않게
+    for (const g of shots) this.publish({ type: 'agent.image', sessionId: target.info.id, url: g.url, name: g.name, ...(g.caption ? { caption: g.caption } : {}), from: g.from ?? title });
     this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: from.info.id, title, text, lines: 0, until, ...(kind === 'split' ? { kind } : {}), ...(what === 'relay' ? { relay: true } : {}) });
     const head = `[하위 작업 공유: ${title} — 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`;
     (target.merges ??= []).push({ label: `하위 작업 공유 · ${title}`, text: `${head}\n${text}` });

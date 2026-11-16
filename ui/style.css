@@ -271,6 +271,17 @@ select:disabled { opacity: .45; cursor: default; }
 .attach-btn { width: 28px; height: 28px; padding: 0; border-radius: 8px; font-size: 18px; line-height: 26px; color: var(--ink-soft); margin-right: 2px; }
 .msg-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg-files .chip { background: transparent; }
+.msg-files .chip.pic { cursor: zoom-in; }
+.msg-files .chip.pic img { width: 120px; height: 80px; }
+/* 그림 크게 보기 */
+.lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.82); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; gap: 10px; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: calc(100% - 48px); object-fit: contain; border-radius: 6px; cursor: zoom-in; background: #fff1; }
+.lightbox.zoom { justify-content: flex-start; align-items: flex-start; overflow: auto; }
+.lightbox.zoom img { max-width: none; max-height: none; cursor: zoom-out; }
+.lightbox-bar { display: flex; align-items: center; gap: 8px; color: #eee; font-size: 13px; cursor: default; }
+.lightbox.zoom .lightbox-bar { position: fixed; bottom: 16px; right: 16px; background: rgba(0,0,0,.7); padding: 6px 10px; border-radius: 8px; }
+.lightbox-cap { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lightbox .line-btn { color: #eee; border-color: #fff4; text-decoration: none; }
 .composer textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; color: var(--ink); font: 15px/1.6 var(--sans); max-height: 220px; }
 .composer textarea::placeholder { color: var(--ink-faint); }
 .composer-bar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 8px; }

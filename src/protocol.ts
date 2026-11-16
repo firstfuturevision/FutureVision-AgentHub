@@ -83,7 +83,7 @@ export type HostEvent =
   | { type: 'agent.tool'; sessionId: string; toolId: string; name: string; input: unknown }
   | { type: 'agent.tool_result'; sessionId: string; toolId: string; ok: boolean; summary: string }
   // 에이전트가 채팅에 띄운 그림(show_image). url = 이 Agent Hub 의 /images/...
-  | { type: 'agent.image'; sessionId: string; url: string; name: string; caption?: string }
+  | { type: 'agent.image'; sessionId: string; url: string; name: string; caption?: string; from?: string } // from: 하위 작업이 띄운 그림을 위 작업에 올린 것(그 작업 이름, 다른 PC 면 "PC/작업")
   | { type: 'permission.request'; sessionId: string; requestId: string; tool: string; detail: string; auto?: boolean; toolName?: string; command?: string } // toolName·command: 데이터만 판정용(Bash 명령, WebFetch 주소) // auto = 권한 묻지 않기로 바로 허용할 것(화면에 카드 없이)
   | { type: 'permission.resolved'; sessionId: string; requestId: string; allow: boolean; by: string }
   | { type: 'turn.done'; sessionId: string; durationMs: number; costUsd: number | null; isError: boolean }

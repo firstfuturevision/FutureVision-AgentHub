@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -278,5 +278,59 @@ test('컨텍스트: 사용량과, 앞 대화·공유가 다음 지시에 붙을 
   await sessions.handle({ type: 'session.configure', sessionId: orig.id, model: 'sonnet' }, local);
   await waitFor(events, (e) => e.type === 'context.usage' && e.sessionId === orig.id && e.used === 0);
   assert.deepEqual(lastItems(orig.id).map((i: any) => [i.label, i.pending]), [['앞 대화', true]]);
+  sessions.stopAll();
+});
+
+test('하위 작업이 띄운 그림(show_image)은 공유와 함께 위 작업들 채팅에도 뜬다(어느 작업에서 왔는지와)', async () => {
+  const { sessions, events } = setup();
+  const orig = await newMain(sessions, events);
+  await sessions.handle({ type: 'session.split', sessionId: orig.id }, local);
+  const mid = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === orig.id)).session;
+  await waitFor(events, () => sessions.info(mid.id)?.status === 'idle');
+  await sessions.handle({ type: 'session.split', sessionId: mid.id }, local);
+  const leaf = (await waitFor(events, (e) => e.type === 'session.created' && e.session.splitFrom === mid.id)).session;
+  await waitFor(events, () => sessions.info(leaf.id)?.status === 'idle');
+  const png = join(sessions.info(leaf.id)!.workdir, 'shot.png');
+  writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
+  await sessions.showImage(leaf.id, { path: 'shot.png', caption: '고친 화면' });
+  await say(sessions, events, leaf.id, '화면 고치기');
+  const shots = (id: string) => events.filter((e) => e.type === 'agent.image' && e.sessionId === id) as any[];
+  assert.equal(shots(leaf.id).length, 1);
+  assert.equal(shots(mid.id).length, 1);
+  assert.equal(shots(orig.id).length, 1, '아래의 아래 그림도 맨 위까지');
+  assert.equal(shots(orig.id)[0].url, shots(leaf.id)[0].url, '같은 그림 파일');
+  assert.equal(shots(orig.id)[0].caption, '고친 화면');
+  assert.ok(shots(orig.id)[0].from && shots(orig.id)[0].from === shots(mid.id)[0].from, '처음 띄운 작업 이름');
+  // 다음 공유에 같은 그림이 다시 가지 않는다
+  await say(sessions, events, leaf.id, '이어서');
+  assert.equal(shots(orig.id).length, 1);
+  sessions.stopAll();
+});
+
+test('다른 PC 에서 온 하위 작업 공유의 그림: 이 PC 에 두고 위 작업 채팅에', async () => {
+  const { sessions, events } = setup();
+  const orig = await newMain(sessions, events);
+  const data = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  sessions.receiveRemoteShare(orig.id, 'pc2', 'abc', '영상', '에이전트: 다 했음', [{ name: 'a.png', ext: '.png', data, caption: '결과' }, { name: 'x.exe', ext: '.exe', data }]);
+  const g = events.filter((e) => e.type === 'agent.image' && e.sessionId === orig.id) as any[];
+  assert.equal(g.length, 1, '그림 파일만');
+  assert.equal(g[0].from, 'pc2/영상');
+  const m = g[0].url.match(/^\/images\/([^/]+)\/([^/]+)$/);
+  assert.ok(m && sessions.imagePath(m[1], m[2]));
+  sessions.stopAll();
+});
+
+test('사람이 올린 첨부 그림을 채팅에서 크게 보기: 그 작업 첨부/ 안의 그림만 내준다', async () => {
+  const { sessions, events } = setup();
+  const t = await newMain(sessions, events);
+  const dir = join(sessions.info(t.id)!.workdir, '첨부');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'a.png'), 'x');
+  writeFileSync(join(dir, 'b.txt'), 'x');
+  writeFileSync(join(sessions.info(t.id)!.workdir, 'c.png'), 'x');
+  assert.equal(sessions.attachmentImage(t.id, '첨부/a.png')?.type, 'image/png');
+  assert.equal(sessions.attachmentImage(t.id, '첨부/b.txt'), null, '그림만');
+  assert.equal(sessions.attachmentImage(t.id, '첨부/../c.png'), null, '첨부/ 밖은 안 됨');
+  assert.equal(sessions.attachmentImage('없는작업', '첨부/a.png'), null);
   sessions.stopAll();
 });

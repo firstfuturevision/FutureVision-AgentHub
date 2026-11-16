@@ -1968,7 +1968,7 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments }); s.turnStart = at; s.doing = null; break;
+      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -2002,7 +2002,7 @@ function reduceEvent(s, ev, at) {
         if (replayed) notify(s, `끝남 · ${s.items.filter((it) => it.k === 'agent').at(-1)?.t ?? ''}`);
       }
       break;
-    case 'agent.image': s.items.push({ k: 'image', url: ev.url, name: ev.name, caption: ev.caption }); break;
+    case 'agent.image': s.items.push({ k: 'image', url: peerFile(s, ev.url), name: ev.name, caption: ev.caption, from: ev.from }); break;
     case 'permission.request':
       if (ev.auto) break; // 자동 허용할 요청: 화면에는 아예 올리지 않는다(바로 뒤 허용과 사이에 "승인 대기"가 깜빡이지 않게)
       s.items.push({ k: 'perm', requestId: ev.requestId, t: ev.tool, detail: ev.detail, resolved: null });
@@ -3827,19 +3827,48 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
 }
 
 /** 에이전트가 띄운 그림: 누르면 새 탭에서 원래 크기로 */
+/** 그림 크게 보기: 화면에 맞춰 띄우고, 그림을 누르면 원래 크기(넘치면 끌어 보기), 바깥 · Esc · 닫기로 닫는다 */
+function openImage(url, caption) {
+  const back = el('div', 'lightbox');
+  const img = el('img');
+  img.src = url;
+  img.alt = caption || '';
+  img.onclick = (e) => { e.stopPropagation(); back.classList.toggle('zoom'); };
+  const bar = el('div', 'lightbox-bar');
+  if (caption) bar.append(el('span', 'lightbox-cap', caption));
+  const orig = el('a', 'line-btn', '새 탭');
+  orig.href = url; orig.target = '_blank'; orig.rel = 'noopener';
+  orig.onclick = (e) => e.stopPropagation();
+  const x = el('button', 'line-btn', '닫기');
+  x.type = 'button';
+  bar.append(orig, x);
+  back.append(img, bar);
+  const close = () => { back.remove(); document.removeEventListener('keydown', key, true); };
+  const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  back.onclick = close;
+  x.onclick = close;
+  bar.onclick = (e) => { if (e.target === bar) e.stopPropagation(); };
+  document.addEventListener('keydown', key, true);
+  document.body.append(back);
+}
+/** 그 작업의 그림 주소: 다른 PC 작업이면 이 PC 서버를 거쳐 그 PC 에서 */
+function peerFile(s, path) {
+  return s?.info.remoteUrl ? `/peers/file?url=${encodeURIComponent(s.info.remoteUrl)}&path=${encodeURIComponent(path)}` : path;
+}
 function imageItem(it) {
   const fig = el('figure', 'shot');
   const a = el('a');
   a.href = it.url;
   a.target = '_blank';
   a.rel = 'noopener';
+  a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.button === 1) return; e.preventDefault(); openImage(it.url, [it.from, it.caption].filter(Boolean).join(' · ')); };
   const img = el('img');
   img.src = it.url;
   img.alt = it.caption || it.name || '';
   img.loading = 'lazy';
   a.append(img);
   fig.append(a);
-  if (it.caption) fig.append(el('figcaption', '', it.caption));
+  if (it.caption || it.from) fig.append(el('figcaption', '', [it.from ? `${it.from} 에서` : '', it.caption].filter(Boolean).join(' · ')));
   return fig;
 }
 
@@ -3981,8 +4010,18 @@ function item(it) {
     for (const f of it.files) {
       const chip = el('span', 'chip');
       chip.title = f.path;
-      const url = thumbs.get(f.path);
-      if (url) { const img = el('img'); img.src = url; img.alt = ''; chip.append(img); }
+      // 그림: 이 브라우저에서 올린 것은 미리보기, 아니면 서버에서(다른 브라우저 · 다시 켠 뒤에도). 누르면 크게
+      const pic = /^image\/(png|jpe?g|gif|webp)$/.test(f.mime ?? '') || /\.(png|jpe?g|gif|webp)$/i.test(f.path ?? '');
+      const own = it.sid && remoteOf(it.sid);
+      const url = thumbs.get(f.path) ?? (pic && it.sid ? peerFile(sessions.get(it.sid), `/attachment?sessionId=${encodeURIComponent(own ? own.id : it.sid)}&path=${encodeURIComponent(f.path)}`) : null);
+      if (url) {
+        const img = el('img'); img.src = url; img.alt = ''; img.loading = 'lazy';
+        img.onerror = () => img.remove(); // 지워진 첨부
+        chip.append(img);
+        chip.classList.add('pic');
+        chip.title = `${f.name} — 누르면 크게`;
+        chip.onclick = () => openImage(url, f.name);
+      }
       chip.append(el('span', 'chip-name', f.name));
       box.append(chip);
     }

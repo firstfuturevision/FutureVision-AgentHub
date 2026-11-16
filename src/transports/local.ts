@@ -61,9 +61,9 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       // 다른 PC 의 Agent Hub(왼쪽 "연결"): 이 PC 요약은 다른 PC 가 원격 접속으로 가져간다
       // 다른 PC 작업을 이 PC 작업 아래에: 그 PC 가 하위 작업 공유를 보낸다 / 이 PC 작업을 다른 PC 작업 아래로 둔다
       if (req.method === 'POST' && url.pathname === '/peer/share') {
-        const body = (await readJson(req, res)) as any;
+        const body = (await readJson(req, res, 24_000_000)) as any; // 그림이 함께 올 수 있어(4장 · 장마다 4MB, base64)
         if (body === undefined) return;
-        try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? '')); } catch (err) { return send(res, 400, (err as Error).message); }
+        try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? ''), body?.images); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, { ok: true });
       }
       // 다른 PC 가 이 PC 를 연결 목록에 더하거나 뺐다고 알려 옴 → 이 PC 목록에도(양방향). 원격 접속으로만 들어온다
@@ -106,6 +106,19 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         return send(res, 202, 'ok');
       }
       // 다른 PC 작업에 첨부: 이 화면이 올린 파일을 그 PC 의 /attach 로 넘기고, 그 PC 가 저장한 첨부 정보(작업 폴더 기준 경로)를 돌려준다
+      // 다른 PC 작업 채팅의 그림(띄운 그림 · 첨부 그림)을 이 PC 화면에 — 그 PC 의 /images · /attachment 만
+      if (req.method === 'GET' && url.pathname === '/peers/file' && peers) {
+        const target = peers.urls().find((u) => u === url.searchParams.get('url'));
+        const path = url.searchParams.get('path') ?? '';
+        if (!target || !(/^\/images\/[\w-]+\/[\w-]+\.(png|jpg|gif|webp)$/.test(path) || path.startsWith('/attachment?'))) return send(res, 400, '연결된 PC 의 그림 주소가 아님');
+        try {
+          const r = await fetch(`${target}${path}`, { signal: AbortSignal.timeout(20000) });
+          const type = r.headers.get('content-type') ?? '';
+          if (!r.ok || !/^image\/(png|jpeg|gif|webp)$/.test(type)) return send(res, 404, '없음');
+          res.writeHead(200, { 'content-type': type, 'cache-control': 'private, max-age=86400' });
+          return res.end(Buffer.from(await r.arrayBuffer()));
+        } catch { return send(res, 502, '그 PC 에서 못 가져옴'); }
+      }
       if (req.method === 'POST' && url.pathname === '/peers/attach' && peers) {
         const target = peers.urls().find((u) => u === url.searchParams.get('url'));
         const id = url.searchParams.get('sessionId') ?? '';
@@ -559,6 +572,13 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           return json(res, 200, presets.list());
         }
       }
+      // 사람이 올린 첨부 그림(채팅에서 눌러 크게 보기)
+      if (req.method === 'GET' && url.pathname === '/attachment') {
+        const found = sessions.attachmentImage(url.searchParams.get('sessionId') ?? '', url.searchParams.get('path') ?? '');
+        if (!found) return send(res, 404, '없음');
+        res.writeHead(200, { 'content-type': found.type, 'cache-control': 'private, max-age=86400' });
+        return res.end(await readFile(found.path));
+      }
       // 에이전트가 채팅에 띄운 그림(show_image)
       const img = req.method === 'GET' && url.pathname.match(/^\/images\/([^/]+)\/([^/]+)$/);
       if (img) {
@@ -738,7 +758,7 @@ function events(req: IncomingMessage, res: ServerResponse, sessions: SessionMana
 }
 
 /** application/json 본문 읽기. 실패하면 응답을 보내고 undefined. */
-async function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
+async function readJson(req: IncomingMessage, res: ServerResponse, limit = 4_000_000): Promise<unknown> {
   // application/json 강제 → 다른 사이트의 단순 폼 전송(CSRF)은 브라우저가 사전 확인에서 막는다.
   if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return void send(res, 415, 'JSON 만 받음');
   // 조각(Buffer)을 모아 한 번에 UTF-8 로 푼다 — 조각마다 풀면 한글처럼 여러 바이트 글자가 조각 경계에서 깨진다(망을 건너온 긴 글)
@@ -746,7 +766,7 @@ async function readJson(req: IncomingMessage, res: ServerResponse): Promise<unkn
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 4_000_000) return void send(res, 413, '너무 큼');
+    if (size > limit) return void send(res, 413, '너무 큼');
     chunks.push(chunk);
   }
   try {
