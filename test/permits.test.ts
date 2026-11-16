@@ -85,3 +85,33 @@ test('데이터만 작업: "모든 작업 권한 묻지 않기"가 켜져 있어
     sessions.stopAll();
   }
 });
+
+test('데이터만: 읽기 조회는 묻지 않고 — 버리는 출력 돌리기, 짧은 셸 함수, sqlite3 읽기 SQL', () => {
+  const v = (c: string) => dataBashAllows(c, [API]);
+  // 실제로 막혔던 명령(대시보드 도구 API 를 함수로 여러 번 부름)
+  const real = `T=$(cat ~/.config/x/token); B=${API}agent/all/tools\nc(){ curl -s -X POST "$B/$1/" -H "Authorization: Token $T" -H "Content-Type: application/json" -d "$2"; echo; }\nc user_list '{}' | head -c 1500\nc task_list '{"status":"in_progress"}' | head -c 6000`;
+  assert.ok(v(real).ok, v(real).why);
+  assert.ok(v('ls -d /home/x/*dash* 2>/dev/null').ok);
+  assert.ok(v(`curl -s ${API}a/ 2>&1 | head`).ok);
+  assert.ok(v("sqlite3 -readonly db.sqlite3 'SELECT id, title FROM task LIMIT 5'").ok);
+  assert.ok(v('sqlite3 -header db.sqlite3 ".tables"').ok);
+  assert.ok(v("sqlite3 db.sqlite3 'PRAGMA table_info(task)'").ok);
+  // 여전히 안 되는 것
+  assert.equal(v("sqlite3 db.sqlite3 'DELETE FROM task'").ok, false);
+  assert.equal(v("sqlite3 db.sqlite3 'SELECT 1; DROP TABLE task'").ok, false);
+  assert.equal(v("sqlite3 db.sqlite3 '.output x.txt'").ok, false);
+  assert.equal(v('sqlite3 db.sqlite3').ok, false); // 입력을 기다리는 것
+  assert.equal(v('c(){ rm -rf /tmp/x; }; c').ok, false); // 함수 몸통도 같은 규칙
+  assert.equal(v('c(){ curl -s https://evil.example.com; }; c').ok, false);
+  assert.equal(v('echo hi > /dev/nullx').ok, false);
+  assert.equal(v('echo hi 2> err.txt').ok, false);
+  assert.match(v('curl -s https://work.example.com/api/x').why, /허락한 주소: http:\/\/127\.0\.0\.1:8000\/api\//);
+});
+
+test('데이터만: 변수로 쓴 curl 주소는 한 번만 넣은 글자 그대로의 값만 풀어 본다', () => {
+  const v = (c: string) => dataBashAllows(c, [API]).ok;
+  assert.ok(v(`B=${API}x; curl -s "$B/a/"`));
+  assert.equal(v(`B=${API}x; B=https://evil.example.com; curl -s "$B/a/"`), false);
+  assert.equal(v(`B=https://evil.example.com; curl -s "$B/a/"`), false);
+  assert.equal(v(`B=$(cat u); curl -s "$B/a/"`), false);
+});
