@@ -936,8 +936,13 @@ export class SessionManager {
       }
       return { at: 0 };
     };
+    // 이번 차례의 시작: 끝난 차례(turn.done) 뒤의 지시나 컨텍스트 정리 시작. 그 사이에 끝난 차례가 있으면 모름(옛 차례부터 세지 않게)
     let since: number | undefined;
-    for (let i = l.history.length - 1; i >= 0; i--) if (l.history[i].type === 'user.message') { since = this.timeOf(l.history[i]); break; }
+    for (let i = l.history.length - 1; i >= 0; i--) {
+      const e = l.history[i];
+      if (e.type === 'turn.done') break;
+      if (e.type === 'user.message' || (e.type === 'session.compacting' && !e.queued)) { since = this.timeOf(e); break; }
+    }
     const busy = [l, ...[...this.sessions.values()].filter((w) => w.info.role === 'worker' && w.info.parentId === l.info.id && (w.info.status === 'working' || w.info.status === 'starting'))];
     const best = busy.map(last).filter((x) => 'doing' in x && x.doing).sort((a, b) => b.at - a.at)[0] as { doing?: string } | undefined;
     return { ...(best?.doing ? { doing: best.doing.slice(0, 160) } : {}), ...(since ? { since } : {}) };

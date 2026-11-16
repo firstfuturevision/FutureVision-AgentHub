@@ -1909,8 +1909,11 @@ function onEvent(ev) {
 function reduceEvent(s, ev, at) {
   switch (ev.type) {
     case 'session.status':
+      // 일을 시작했는데 센 시작 시각이 이미 끝난 차례의 것이면(지시 없이 시작 — 컨텍스트 정리 · 예약 등) 지금부터 센다
+      if ((ev.status === 'working' || ev.status === 'starting') && (!s.turnStart || (s.doneAt && s.turnStart <= s.doneAt))) s.turnStart = at;
       s.info.status = ev.status;
       if (ev.status !== 'working') s.doing = null;
+      if (ev.status === 'idle' || ev.status === 'ended') s.compactAt = null;
       // 쉬거나 끝나면 답 없이 남은 승인 카드는 닫는다(예전 버전 기록·놓친 소식에도 "승인 대기"로 남지 않게)
       if (ev.status === 'idle' || ev.status === 'ended') for (const it of s.items) if (it.k === 'perm' && !it.resolved) it.resolved = { allow: false, by: '차례 끝남' };
       break;
@@ -1937,8 +1940,9 @@ function reduceEvent(s, ev, at) {
       break;
     }
     case 'session.dirs': s.info.extraDirs = ev.dirs; break;
-    case 'session.compacting': s.items.push({ k: 'note', t: ev.queued ? '하던 일이 끝나면 컨텍스트를 정리합니다' : '컨텍스트 정리 중' }); break;
+    case 'session.compacting': s.items.push({ k: 'note', t: ev.queued ? '하던 일이 끝나면 컨텍스트를 정리합니다' : '컨텍스트 정리 중' }); if (!ev.queued) { s.compactAt = at; setDoing(s, '컨텍스트 정리 중', at); } break;
     case 'session.compacted': {
+      s.compactAt = null;
       if (ev.error) { s.items.push({ k: 'line err', t: `컨텍스트를 정리하지 못함: ${ev.error}` }); break; }
       const size = (n) => (ev.unit === 'tokens' ? `${tokens(n)} 토큰` : `${n.toLocaleString()}자`);
       const what = ev.before && ev.after ? `${size(ev.before)}에서 ${size(ev.after)}로` : '';
@@ -2770,7 +2774,7 @@ function renderLinks(s) {
   const firstLine = (t) => (t ?? '').replace(/[#*`>|_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
   const when = (at) => (at ? ` (${stampText({ at })})` : '');
   const lastNews = (k) => {
-    if (k.info.status === 'working' || k.info.status === 'starting') return `지금: ${doingOf(k) || '작업 중'} · ${sinceText(k.turnStart ?? Date.now())}`;
+    if (k.info.status === 'working' || k.info.status === 'starting') return `지금: ${doingOf(k) || '작업 중'} · ${sinceText(k.compactAt ?? k.turnStart ?? Date.now())}`;
     const done = k.items.findLastIndex((it) => it.k === 'line meta');
     const rep = done > 0 ? k.items.slice(0, done).findLast((it) => it.k === 'agent') : undefined;
     if (!rep) return '';
@@ -3620,7 +3624,7 @@ function taskRow(s, depth, open) {
   }
   b.append(head);
   // 일하는 중이면 지금 하는 일과 경과 시간, 아니면 AI · 상태 · 만든 시각
-  const state = wait ? '승인 대기' : busy ? `${doingOf(s) || '작업 중'} · ${sinceText(s.turnStart ?? Date.now())}` : ask ? '확인 필요' : fresh ? '새 답' : STATUS[s.info.status];
+  const state = wait ? '승인 대기' : busy ? `${doingOf(s) || '작업 중'} · ${sinceText(s.compactAt ?? s.turnStart ?? Date.now())}` : ask ? '확인 필요' : fresh ? '새 답' : STATUS[s.info.status];
   if (!depth) {
     const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '웹 · ' : ''}${time}`);
     sub.title = sub.textContent;
@@ -3938,8 +3942,9 @@ function workingLine(s) {
   return line;
 }
 function elapsedText(s) {
-  const sec = s.turnStart ? Math.floor((Date.now() - s.turnStart) / 1000) : 0;
-  return `작업 중 · ${sec < 60 ? `${sec}초` : `${Math.floor(sec / 60)}분 ${sec % 60}초`}`;
+  const from = s.compactAt ?? s.turnStart; // 정리 중이면 정리를 시작한 때부터
+  const sec = from ? Math.max(0, Math.floor((Date.now() - from) / 1000)) : 0;
+  return `${s.compactAt ? '정리 중' : '작업 중'} · ${sec < 60 ? `${sec}초` : `${Math.floor(sec / 60)}분 ${sec % 60}초`}`;
 }
 setInterval(() => {
   const line = document.querySelector('.working');
