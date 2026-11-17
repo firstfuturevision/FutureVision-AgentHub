@@ -3795,7 +3795,7 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
   let lastDay = null;
   for (let i = from - 1; i >= 0 && lastDay === null; i--) if (items[i].at && STAMPED.has(items[i].k)) lastDay = dayKey(items[i].at);
   const mark = (it) => {
-    if (!it.at || !STAMPED.has(it.k) || it.pending) return;
+    if (!it.at || !(STAMPED.has(it.k) || it.k === 'merged') || it.pending) return;
     const day = dayKey(it.at);
     if (day !== lastDay && days) into.append(dayLine(it.at));
     lastDay = day;
@@ -3810,7 +3810,13 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
     if (it.k === 'user') {
       const who = whoOf(it);
       if (who) {
-        const w = el('span', `msg-who${lastWho !== null && who !== lastWho ? ' changed' : ''}`, who);
+        const w = el('span', `msg-who${lastWho !== null && who !== lastWho ? ' changed' : ''}`);
+        // 다른 작업이 보낸 글(session_send): 누르면 그 작업으로. 예약: 예약 이름(지시 첫 줄)
+        const task = /^작업 (.+)$/.exec(who);
+        const src = task && taskByName(task[1]);
+        if (task) w.append('작업 ', senderLink(task[1], src ? () => { viewId = src.info.id; showNav('sessions'); render(); } : null));
+        else if (who === '예약') w.append(`예약 · ${String(it.t ?? '').split('\n')[0].replace(/^\[예약[^\]]*\]\s*/, '').slice(0, 40)}`);
+        else w.append(who);
         t.prepend(w, ' · ');
       }
       lastWho = who;
@@ -4018,9 +4024,29 @@ function thumbRow(imgs) {
   }
   return row;
 }
+/** 공유 · 넘김을 보낸 작업으로 가는 이름 단추(이 PC 작업 또는 연결된 PC 작업). 못 찾으면 글자만 */
+function senderLink(name, go) {
+  const b = el(go ? 'button' : 'span', 'msg-sender', name);
+  if (go) { b.type = 'button'; b.title = `${name} 로 가기`; b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); go(); }; }
+  return b;
+}
+/** 공유 카드를 보낸 작업: fromId 가 이 PC 작업 id 이거나 "peer:PC이름:작업id" */
+function mergedSender(it) {
+  const peer = /^peer:([^:]+):(.+)$/.exec(it.fromId ?? '');
+  if (peer) {
+    const pc = (peerState?.peers ?? []).find((p) => p.ok && (p.name === peer[1] || p.summary?.name === peer[1]));
+    const t = pc?.summary.tasks.find((x) => x.id === peer[2]);
+    return { name: t ? `${peer[1]}/${t.name}` : it.t, go: pc && t ? () => openRemote(pc, t) : null };
+  }
+  const from = it.fromId && sessions.get(it.fromId);
+  return { name: from ? titleOf(from).split('\n')[0].slice(0, 60) : it.t, go: from ? () => { viewId = from.info.id; showNav('sessions'); render(); } : null };
+}
 function mergedItem(it, imgs = []) {
   const box = el('details', 'merged');
-  const head = el('summary', '', `하위 작업 공유 · ${it.t}`);
+  const head = el('summary', 'merged-head');
+  const who = mergedSender(it);
+  head.append(el('span', 'merged-kind', '하위 작업 공유'), senderLink(who.name, who.go));
+  if (it.at) { const t = el('span', 'merged-time', stampText(it)); t.title = new Date(it.at).toLocaleString(); head.append(t); }
   const body = el('div', 'merged-body');
   for (const turn of mergedTurns(it.text)) {
     const div = el('div', 'merged-turn');
