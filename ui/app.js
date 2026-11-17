@@ -2564,6 +2564,7 @@ function renderPanel() {
   }
   if (s.info.permMode) role.append(el('div', 'p-meta', s.info.permMode === 'readonly' ? '읽기만 · 파일·명령 등 바꾸는 도구는 거절(모든 작업 설정보다 우선)' : s.info.permMode === 'data' ? `데이터만 · 파일 수정 금지, 읽기 명령과 허락한 주소 호출만(모든 작업 설정보다 우선)${s.info.permAllow?.length ? ` · ${s.info.permAllow.join(', ')}` : ' · 허락 주소 없음'}` : '늘 묻기 · 도구마다 허용을 물음(모든 작업 설정보다 우선)'));
   else if (s.info.autoApprove || permState?.autoApproveAll) role.append(el('div', 'p-warn', `권한 묻지 않음${s.info.autoApprove ? '' : '(모든 작업)'} · 도구를 허용 없이 바로 실행`));
+  if (s.info.role !== 'worker') role.append(effortRow(s));
   if (s.info.role !== 'worker') {
     const acts = el('div', 'p-acts');
     const change = el('button', 'p-mini', confEdit === s.info.id ? '닫기' : '바꾸기');
@@ -2641,6 +2642,22 @@ function renderPanel() {
     al.append(row);
   }
 
+}
+
+/** 생각 깊이(effort): 작업마다, 다음 차례부터(일하는 중이면 끝난 뒤). Claude 만 받는다 */
+const EFFORT_NAMES = { low: '낮게 (low)', medium: '보통 (medium)', high: '높게 (high)', xhigh: '아주 높게 (xhigh)', max: '최대 (max)' };
+function effortRow(s) {
+  const box = el('div', 'p-effort');
+  const l = el('label', 'p-conf-row');
+  const sel = el('select');
+  sel.append(new Option('기본 (CLI 설정 그대로)', ''), ...Object.entries(EFFORT_NAMES).map(([v, n]) => new Option(n, v)));
+  sel.value = s.info.effort ?? '';
+  const ok = s.info.agent === 'claude';
+  sel.disabled = !ok;
+  sel.onchange = () => send({ type: 'session.effort', sessionId: s.info.id, effort: sel.value || null });
+  l.append(el('span', 'p-meta', '생각 깊이'), sel);
+  box.append(l, el('div', 'p-meta', ok ? `높을수록 더 깊게 생각하고 토큰이 더 듭니다. ${s.info.status === 'working' || s.info.status === 'starting' ? '지금 차례가 끝난 뒤' : '다음 지시'}부터 같은 대화로 이어서 씁니다.` : `${NAMES[s.info.agent]} 는 이 설정을 받지 않아요(Claude 만)`));
+  return box;
 }
 
 /** 에이전트 설정 바꾸기 — 프리셋(지침)·에이전트·AI·모델. 적용하면 메인을 새 설정으로 다시 띄운다 */

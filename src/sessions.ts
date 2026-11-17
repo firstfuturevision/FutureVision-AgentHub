@@ -57,6 +57,7 @@ interface Turn {
 
 interface Live {
   info: SessionInfo;
+  relaunch?: boolean; // 이번 차례가 끝나면 CLI 를 내려 바뀐 설정(생각 깊이)으로 다시 띄운다
   schedRun?: { id: string; skip: number; started: number; note: string; error?: string }; // 예약으로 보낸 지시의 차례 — 끝나면 예약 결과를 고친다
   adapter: AgentAdapter;
   history: HostEvent[]; // 나중에 붙은 화면이 이어서 볼 수 있게
@@ -318,7 +319,7 @@ export class SessionManager {
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
-        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow });
+        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow, effort: e.session.effort });
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
       const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
@@ -1266,6 +1267,18 @@ export class SessionManager {
         live.info.archived = true;
         this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
         this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함)` });
+        return;
+      }
+      case 'session.effort': {
+        // 생각 깊이: CLI 를 띄울 때 정하는 값이라, 쉬는 중이면 지금 내려 두고(다음 지시에 같은 대화로 다시 뜸) 일하는 중이면 끝난 뒤 내린다
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main') return;
+        if ((live.info.effort ?? null) === cmd.effort) return;
+        if (cmd.effort) live.info.effort = cmd.effort;
+        else delete live.info.effort;
+        this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } });
+        if (live.info.status === 'working' || live.info.status === 'starting') live.relaunch = true;
+        else this.sleep(live);
         return;
       }
       case 'session.mergeIntoPeer': {
@@ -2371,9 +2384,20 @@ export class SessionManager {
     return open.size > 0;
   }
 
+  /** CLI 를 내려 둔다 — 다음 지시에 같은 대화로 다시 뜬다(설정을 바꾼 값으로) */
+  private sleep(l: Live) {
+    if (l.dormant) return;
+    l.gen = (l.gen ?? 0) + 1;
+    l.dormant = true;
+    if (l.token) this.tokens.delete(l.token);
+    l.token = undefined;
+    l.adapter.stop();
+  }
+
   private setStatus(live: Live, status: SessionInfo['status']) {
     if (live.info.status === status || live.info.status === 'ended') return;
     live.info.status = status;
+    if (status === 'idle' && live.relaunch) { live.relaunch = false; queueMicrotask(() => { if (live.info.status === 'idle') this.sleep(live); }); }
     if (status === 'idle') live.idleSince = Date.now();
     else delete live.idleSince;
     this.publish({ type: 'session.status', sessionId: live.info.id, status });

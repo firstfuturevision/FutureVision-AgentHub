@@ -461,6 +461,8 @@ body.resizing iframe { pointer-events: none; }
 .p-mini { font-size: 12px; color: var(--ink-soft); padding: 3px 8px; border: 1px solid var(--rule); border-radius: 7px; }
 .p-mini:hover { background: var(--hover); color: var(--ink); }
 .p-conf { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.p-effort { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.p-effort select:disabled { opacity: .5; }
 .p-conf-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 8px; }
 .p-conf-row[hidden] { display: none; }
 .p-conf-row select { width: 100%; min-width: 0; }

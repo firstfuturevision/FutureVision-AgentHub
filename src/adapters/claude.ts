@@ -58,6 +58,7 @@ export class ClaudeAdapter implements AgentAdapter {
     if (ctx.resume) args.push('--resume', ctx.resume); // 같은 대화에 이어 간다. 대화 id 는 그대로(2.1.283 확인)
     const model = session.model ?? this.opts.model;
     if (model) args.push('--model', model);
+    if (session.effort) args.push('--effort', session.effort); // 생각 깊이(없으면 CLI 기본)
     if (ctx.configDir) {
       // MCP 는 Agent Hub 가 정한 것만: 메인이면 hub(clink·프리셋) + 설정의 툴. 계정의 MCP 설정은 읽지 않는다(--strict-mcp-config).
       // 붙인 서버의 도구는 묻지 않고 쓰게 한다 — -p 모드에는 대화형 승인이 없고, 툴은 사람이 설정에서 직접 넣은 것이라서.

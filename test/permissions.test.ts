@@ -84,3 +84,26 @@ test('다른 PC 에 알리는 작업 상태: 일하는 중 · 승인 대기 · �
   assert.equal((a.sessions.peerSummary('pc').tasks.find((t) => t.id === sid) as any).since, undefined, '쉬면 지금 하는 일 없음');
   a.sessions.stopAll();
 });
+
+test('생각 깊이(effort): 작업마다 정하면 다음 차례에 같은 대화로 다시 떠서 --effort 로 받고, 기본으로 되돌리면 빠진다', async () => {
+  const { make } = world();
+  const a = make();
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workdir: 'proj' }, local);
+  const sid = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
+  const ask = async () => {
+    const n = a.events.length;
+    await a.sessions.handle({ type: 'user.message', sessionId: sid, text: 'argv?' }, local);
+    const t = await waitFor(a.events, (e) => a.events.indexOf(e) >= n && e.type === 'agent.text' && !(e as any).partial && /argv:/.test((e as any).text)) as any;
+    await waitFor(a.events, (e) => a.events.indexOf(e) >= n && e.type === 'turn.done');
+    return t.text as string;
+  };
+  assert.doesNotMatch(await ask(), /--effort/);
+  await a.sessions.handle({ type: 'session.effort', sessionId: sid, effort: 'high' } as any, local);
+  assert.equal(a.sessions.info(sid)!.effort, 'high');
+  const second = await ask();
+  assert.match(second, /--effort high/);
+  // (실제로는 Claude 대화 기록이 있어 --resume 으로 같은 대화에 이어 간다 — 시험용 CLI 는 기록이 없어 앞 대화를 글로 붙인다)
+  await a.sessions.handle({ type: 'session.effort', sessionId: sid, effort: null } as any, local);
+  assert.doesNotMatch(await ask(), /--effort/);
+  a.sessions.stopAll();
+});

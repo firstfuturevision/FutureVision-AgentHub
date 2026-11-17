@@ -133,7 +133,7 @@ async function handle(text) {
     return;
   }
   // 받은 실행 인자를 그대로 돌려준다(시험에서 플래그 확인용)
-  if (text === 'argv?') {
+  if (text === 'argv?' || text.endsWith('\n[이어서 할 일]\nargv?')) { // 다시 띄운 뒤(앞 대화가 붙은) 지시도
     out({ type: 'assistant', message: { content: [{ type: 'text', text: `argv: ${argv.slice(2).join(' ')}` }] }, parent_tool_use_id: null, session_id: sid });
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, total_cost_usd: 0, session_id: sid });
     return;

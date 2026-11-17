@@ -29,12 +29,16 @@ export interface RemoteLink extends RemoteVia {
   blocked: boolean; // 막음 — 이 연결로 오는 글은 받지 않는다
 }
 
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 export interface SessionInfo {
   id: string;
   agent: AgentKind;
   role: SessionRole;
   parentId?: string; // worker 만: 맡긴 메인 세션
   model?: string; // 지정한 모델(없으면 CLI 기본)
+  effort?: Effort; // 생각 깊이(Claude 만, 없으면 CLI 기본)
   defaultWorker?: DefaultWorker; // main 만: 사람이 고른 기본 작업자 (clink 에 AI 지정이 없을 때 씀). 없으면 메인이 고른다
   preset?: { id: string; name: string }; // 쓴 에이전트(worker: 맡길 때, main: 메인으로 고른 것)
   workPreset?: { id: string; name: string }; // 작업 환경 프리셋(폴더 구조·작업 방식 지침)
@@ -135,7 +139,8 @@ export type ClientCommand =
   | { type: 'session.setIntake'; sessionId: string; on: boolean }
   | { type: 'session.reparent'; sessionId: string; parentId: string | null }
   | { type: 'session.mergeInto'; sessionId: string; targetId: string }
-  | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string } // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
+  | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string }
+  | { type: 'session.effort'; sessionId: string; effort: Effort | null } // 생각 깊이(null = CLI 기본). 다음 차례부터 // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
   | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
@@ -274,6 +279,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
     case 'session.mergeInto':
       if (!str(c.sessionId) || !str(c.targetId)) return null;
       return { type: 'session.mergeInto', sessionId: c.sessionId as string, targetId: c.targetId as string };
+    case 'session.effort':
+      if (!str(c.sessionId) || !(c.effort === null || EFFORTS.includes(c.effort as Effort))) return null;
+      return { type: 'session.effort', sessionId: c.sessionId as string, effort: c.effort as Effort | null };
     case 'session.mergeIntoPeer':
       if (!str(c.sessionId) || !str(c.url) || !str(c.targetId)) return null;
       return { type: 'session.mergeIntoPeer', sessionId: c.sessionId as string, url: c.url as string, targetId: c.targetId as string };
