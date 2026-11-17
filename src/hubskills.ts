@@ -9,7 +9,7 @@ import { SHARED_READONLY } from './presets.ts';
  *  - Codex : 전용 프로필(CODEX_HOME)/skills 에 넣는다
  * SKILL.md 형식은 Claude·Codex 공통(Agent Skills).
  */
-export interface HubSkill { name: string; description: string; body: string; shared?: true }
+export interface HubSkill { name: string; description: string; body: string; shared?: true; enabled?: boolean }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/; // 스킬 이름 규칙(소문자·숫자·-)
 
@@ -24,7 +24,19 @@ export class HubSkillStore {
   list(): HubSkill[] {
     const shared = this.sharedDir ? readSkills(this.sharedDir).map((s) => ({ ...s, shared: true as const })) : [];
     const local = readSkills(this.dir).filter((s) => !shared.some((x) => x.name === s.name));
-    return [...shared, ...local].sort((a, b) => a.name.localeCompare(b.name));
+    const off = this.disabled();
+    return [...shared, ...local].map((s) => ({ ...s, enabled: !off.has(s.name) })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** 꺼 둔 스킬 이름(프리셋 세션에 넣지 않는다). 공유받은 것도 이 PC 에서만 끌 수 있다 */
+  private get offFile() { return join(this.dir, '..', 'skills-disabled.json'); }
+  private disabled(): Set<string> { try { return new Set(JSON.parse(readFileSync(this.offFile, 'utf8'))); } catch { return new Set(); } }
+  setEnabled(name: string, enabled: unknown) {
+    if (enabled !== true && enabled !== false) throw new Error('enabled 는 true 나 false');
+    if (!this.list().some((s) => s.name === name)) throw new Error('없는 스킬');
+    const off = this.disabled();
+    if (enabled) off.delete(name); else off.add(name);
+    writeFileSync(this.offFile, JSON.stringify([...off].sort()));
   }
 
   /** 공유 레포의 skills 폴더를 붙이거나(null 이면) 뗀다 */
@@ -75,7 +87,7 @@ export class HubSkillStore {
 
   /** 고른 스킬만(없으면 전부) — 이름 목록 */
   pick(names?: string[]): string[] {
-    const all = this.list().map((s) => s.name);
+    const all = this.list().filter((s) => s.enabled !== false).map((s) => s.name); // 꺼 둔 것은 빼고
     return names ? all.filter((n) => names.includes(n)) : all;
   }
 

@@ -12,6 +12,7 @@ import type { GitHub } from '../github.ts';
 import { installCommand } from '../install.ts';
 import type { Updater } from '../update.ts';
 import type { HubSkillStore } from '../hubskills.ts';
+import { ClaudeSkills } from '../claudeskills.ts';
 import type { WorkPresetStore } from '../workpresets.ts';
 import type { ScheduleStore } from '../schedules.ts';
 import { SHARED_KINDS, type SharedRepo, type SharedKind } from '../shared.ts';
@@ -383,6 +384,37 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           try { workPresets.remove(url.searchParams.get('id') ?? ''); } catch (err) { return send(res, 400, (err as Error).message); }
           return json(res, 200, workPresets.list());
         }
+      }
+      // Agent Hub 스킬 켜기 · 끄기(꺼 두면 프리셋 세션에 넣지 않음)
+      if (url.pathname === '/hub-skills/enabled' && hubSkills && req.method === 'POST') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try { hubSkills.setEnabled(String(body?.name ?? ''), body?.enabled); } catch (err) { return send(res, 400, (err as Error).message); }
+        return json(res, 200, hubSkills.list());
+      }
+      // 이 PC 의 Claude Code 스킬 전체(개인 · 작업 폴더 · 플러그인) — 사람이 보고 고치는 화면용
+      if (url.pathname === '/claude-skills' || url.pathname === '/claude-skills/file' || url.pathname === '/claude-skills/enabled') {
+        const cs = new ClaudeSkills(undefined, () => sessions.list().map((s) => s.workdir));
+        try {
+          if (url.pathname === '/claude-skills' && req.method === 'GET') return json(res, 200, cs.list());
+          if (url.pathname === '/claude-skills/file' && req.method === 'GET') {
+            const q = url.searchParams;
+            return json(res, 200, cs.read({ name: q.get('name') ?? '', where: (q.get('where') ?? 'personal') as any, plugin: q.get('plugin') ?? undefined, project: q.get('project') ?? undefined }));
+          }
+          if (url.pathname === '/claude-skills' && req.method === 'POST') {
+            const body = await readJson(req, res);
+            if (body === undefined) return;
+            cs.save(body);
+            return json(res, 200, cs.list());
+          }
+          if (url.pathname === '/claude-skills' && req.method === 'DELETE') { cs.remove(url.searchParams.get('name') ?? ''); return json(res, 200, cs.list()); }
+          if (url.pathname === '/claude-skills/enabled' && req.method === 'POST') {
+            const body = (await readJson(req, res)) as any;
+            if (body === undefined) return;
+            cs.setEnabled(body ?? {});
+            return json(res, 200, cs.list());
+          }
+        } catch (err) { return send(res, 400, (err as Error).message); }
       }
       // Agent Hub 스킬 — 에이전트 세션이 쓰는 회사 스킬
       if (url.pathname === '/hub-skills' && hubSkills) {
