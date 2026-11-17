@@ -201,7 +201,13 @@ test('다른 PC 작업에 합치기: 한 일 · 그림을 그 PC 작업에 보�
   (a.sessions as any).peers = {
     summary: () => ({ name: 'pcA', tasks: [] }),
     all: async () => [{ url: URL, ok: true, name: 'pcB', summary: { name: 'pcB', tasks: [{ id: dst, name: '해양VR', status: '대기' }] } }],
-    post: async (_u: string, path: string, body: any) => { assert.equal(path, '/peer/share'); b.sessions.receiveRemoteShare(body.to, body.fromPc, body.fromId, body.title, body.text, body.images, body.merge); return { ok: true }; },
+    myUrl: () => 'http://192.168.0.5:4319',
+    post: async (_u: string, path: string, body: any) => {
+      if (path === '/peer/image') { b.sessions.receiveRemoteImage(body.to, body.fromPc, body.title, body); return { ok: true }; }
+      assert.equal(path, '/peer/share');
+      assert.equal(body.images, undefined, '그림은 따로 한 장씩');
+      b.sessions.receiveRemoteShare(body.to, body.fromPc, body.fromId, body.title, body.text, body.images, body.merge); return { ok: true };
+    },
   };
   await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src, url: URL, targetId: dst } as any, local);
   const merged = b.events.find((e: any) => e.type === 'session.merged' && e.sessionId === dst);
@@ -210,6 +216,29 @@ test('다른 PC 작업에 합치기: 한 일 · 그림을 그 PC 작업에 보�
   assert.ok(b.events.some((e: any) => e.type === 'notice' && e.sessionId === dst && /합침/.test(e.message)), '받는 쪽에 알림');
   assert.equal(a.sessions.info(src)!.archived, true, '이 작업은 보관(지우지 않음)');
   assert.deepEqual(a.sessions.info(kid)!.remoteParent, { url: URL, id: dst, pc: 'pcB' }, '아래 작업은 그 PC 작업 아래로');
+  // 받는 PC 가 옛 버전(그림 받는 길이 없음)이면 그림은 이 PC 주소로 적어 보내고 합치기는 끝낸다
+  const src3 = await create(a);
+  await a.sessions.showImage(src3, { path: '../proj/scene.png' }).catch(() => {});
+  writeFileSync(join(a.sessions.info(src3)!.workdir, 'scene2.png'), Buffer.from('89504e470d0a1a0b', 'hex'));
+  await a.sessions.showImage(src3, { path: 'scene2.png' });
+  await a.sessions.handle({ type: 'user.message', sessionId: src3, text: '두 번째 작업' }, local);
+  await new Promise<void>((r) => { const t = setInterval(() => { if (a.events.some((e: any) => e.type === 'turn.done' && e.sessionId === src3)) { clearInterval(t); r(); } }, 50); });
+  const realPost = (a.sessions as any).peers.post;
+  (a.sessions as any).peers.post = async (u: string, path: string, body: any) => { if (path === '/peer/image') throw new Error('그 PC 의 Agent Hub 가 옛 버전(업데이트 필요)'); return realPost(u, path, body); };
+  await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src3, url: URL, targetId: dst } as any, local);
+  const m3 = b.events.filter((e: any) => e.type === 'session.merged' && e.sessionId === dst).at(-1);
+  assert.match(m3.text, /그림 \d+장 — 이 PC 가 옛 버전이라 함께 못 보냄/);
+  assert.match(m3.text, /http:\/\/192\.168\.0\.5:4319\/images\//);
+  assert.equal(a.sessions.info(src3)!.archived, true);
+  // 그림을 보내다 끊기면 이 작업은 그대로(보관 안 함)
+  const src4 = await create(a);
+  writeFileSync(join(a.sessions.info(src4)!.workdir, 'scene4.png'), Buffer.from('89504e470d0a1a0c', 'hex'));
+  await a.sessions.showImage(src4, { path: 'scene4.png' });
+  (a.sessions as any).peers.post = async (u: string, path: string, body: any) => { if (path === '/peer/image') throw new Error('fetch failed'); return realPost(u, path, body); };
+  await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src4, url: URL, targetId: dst } as any, local);
+  assert.ok(!a.sessions.info(src4)!.archived);
+  assert.ok(a.events.some((e: any) => e.type === 'error' && e.sessionId === src4 && /끊김/.test(e.message)));
+  (a.sessions as any).peers.post = realPost;
   // 연결이 끊긴 PC 면 아무것도 바꾸지 않고 알린다
   const src2 = await create(a);
   (a.sessions as any).peers.all = async () => [{ url: URL, ok: false, error: '응답 없음' }];
