@@ -2131,7 +2131,9 @@ export class SessionManager {
     const target = view.summary?.tasks.find((t) => t.id === targetId);
     if (!target) throw new Error('그 PC 에 그 작업이 없음');
     const events = live.history;
-    const text = tail(digest(events).join('\n'));
+    // 받는 PC 는 2만 자까지 받는다 — 그림 주소 자리를 남기고 최근 것부터 18000자
+    const all = digest(events).join('\n');
+    const text = all.length > 18000 ? '…' + all.slice(-18000) : all;
     // 그림: 채팅에 띄운 그림과 사람이 올린 첨부 그림(최근 6장, 장마다 4MB 까지)
     const files: string[] = [];
     for (const e of events) {
@@ -2164,7 +2166,7 @@ export class SessionManager {
       const rel = relative(live.info.workdir, p);
       return `${myUrl}/attachment?sessionId=${encodeURIComponent(live.info.id)}&path=${encodeURIComponent(rel)}`;
     };
-    const more = left.length && myUrl ? `\n\n[그림 ${left.length}장 — ${old ? '이 PC 가 옛 버전이라 ' : ''}함께 못 보냄. ${me} PC 에서 열기]\n${left.map((p) => `- ${link(p)}`).join('\n')}` : '';
+    const more = left.length && myUrl ? `\n\n[그림 ${left.length}장 — ${old ? '받는 PC 가 옛 버전이라 ' : '4MB 넘어 '}함께 못 보냄. ${me} PC 에서 열기]\n${left.map((p) => `- ${link(p)}`).join('\n')}` : '';
     say('합치는 중 · 한 일 보내는 중');
     await peers.post(view.url, '/peer/share', { to: targetId, fromPc: me, fromId: live.info.id, title, text: text + more, merge: true });
     // 아래 작업은 그 PC 작업 아래로(그 PC 목록에서 그 작업 아래에 보이고, 한 일이 그쪽으로 공유된다)

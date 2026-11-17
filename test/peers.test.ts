@@ -227,7 +227,7 @@ test('다른 PC 작업에 합치기: 한 일 · 그림을 그 PC 작업에 보�
   (a.sessions as any).peers.post = async (u: string, path: string, body: any) => { if (path === '/peer/image') throw new Error('그 PC 의 Agent Hub 가 옛 버전(업데이트 필요)'); return realPost(u, path, body); };
   await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src3, url: URL, targetId: dst } as any, local);
   const m3 = b.events.filter((e: any) => e.type === 'session.merged' && e.sessionId === dst).at(-1);
-  assert.match(m3.text, /그림 \d+장 — 이 PC 가 옛 버전이라 함께 못 보냄/);
+  assert.match(m3.text, /그림 \d+장 — 받는 PC 가 옛 버전이라 함께 못 보냄/);
   assert.match(m3.text, /http:\/\/192\.168\.0\.5:4319\/images\//);
   assert.equal(a.sessions.info(src3)!.archived, true);
   // 그림을 보내다 끊기면 이 작업은 그대로(보관 안 함)
