@@ -461,6 +461,11 @@ body.resizing iframe { pointer-events: none; }
 .p-mini { font-size: 12px; color: var(--ink-soft); padding: 3px 8px; border: 1px solid var(--rule); border-radius: 7px; }
 .p-mini:hover { background: var(--hover); color: var(--ink); }
 .p-conf { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.move-dlg { max-width: 520px; }
+.move-info { font-size: 13px; color: var(--ink-soft); max-height: 46vh; overflow-y: auto; margin-top: 6px; }
+.move-info ul { margin: 2px 0 8px; padding-left: 18px; }
+.move-h { font-weight: 600; color: var(--ink); margin-top: 8px; }
+.move-secret { display: block; font-size: 12.5px; font-family: var(--mono); }
 .p-effort { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .p-effort select:disabled { opacity: .5; }
 .p-conf-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 8px; }

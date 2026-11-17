@@ -1,9 +1,10 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { appendFileSync, mkdirSync, existsSync, statSync, readFileSync, writeFileSync, readdirSync, renameSync, rmSync, openSync, readSync, closeSync } from 'node:fs';
+import { spawnSync, spawn, execFileSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
-import { dirname, join, resolve, relative, isAbsolute, extname, basename } from 'node:path';
-import { AGENTS, MODEL_RE, viaLabel } from './protocol.ts';
+import { dirname, join, resolve, relative, isAbsolute, extname, basename, sep } from 'node:path';
+import { AGENTS, EFFORTS, MODEL_RE, viaLabel } from './protocol.ts';
+import { scanFolder, setupCommands, cannotMove, packFolder, unpackTo, type MovePlan } from './move.ts';
 import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, RemoteLink, RemoteVia, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
@@ -319,7 +320,7 @@ export class SessionManager {
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
-        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow, effort: e.session.effort });
+        if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow, effort: e.session.effort, movedTo: e.session.movedTo });
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
       const history = events.length > HISTORY_CAP ? [created, ...events.slice(-(HISTORY_CAP - 1)).filter((e) => e !== created)] : events;
@@ -1269,6 +1270,16 @@ export class SessionManager {
         this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함)` });
         return;
       }
+      case 'session.moveToPeer': {
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main') return;
+        try {
+          await this.moveToPeer(live, cmd.url, cmd.folder, cmd.secrets ?? []);
+        } catch (err) {
+          this.publish({ type: 'error', sessionId: live.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` });
+        }
+        return;
+      }
       case 'session.effort': {
         // 생각 깊이: CLI 를 띄울 때 정하는 값이라, 쉬는 중이면 지금 내려 두고(다음 지시에 같은 대화로 다시 뜸) 일하는 중이면 끝난 뒤 내린다
         const live = this.get(cmd.sessionId);
@@ -2133,6 +2144,155 @@ export class SessionManager {
     writeFileSync(join(dir, file), data);
     const caption = typeof g.caption === 'string' && g.caption.trim() ? g.caption.trim().slice(0, 300) : undefined;
     this.publish({ type: 'agent.image', sessionId: target.info.id, url: `/images/${target.info.id}/${file}`, name: String(g.name ?? '그림').slice(0, 120), ...(caption ? { caption } : {}), from: `${fromPc.slice(0, 60)}/${String(g.from ?? title).slice(0, 80)}` });
+  }
+
+  // ── 작업 옮기기: 대화 · 역할 · 예약 · 작업 폴더를 다른 PC 로. 받는 PC 에서 새 작업으로 만들고 설치 명령을 다시 돌린다 ──
+  private get moveDir() { const d = join(this.logDir, '..', 'moves'); mkdirSync(d, { recursive: true }); return d; }
+
+  /** 옮기기 전에 보여 줄 것(파일 수 · 크기 · 빼는 것 · 비밀 파일 · 옮길 수 없는 것 · 예약) */
+  movePlan(sessionId: string): MovePlan & { schedules: number; busy: boolean } {
+    const live = this.sessions.get(sessionId);
+    if (!live || live.info.role !== 'main') throw new Error('없는 작업');
+    const folder = live.info.workdir;
+    const others = [...this.sessions.values()].filter((l) => l !== live && l.info.role === 'main' && !l.info.archived);
+    const shared = others.find((l) => l.info.workdir === folder || l.info.workdir.startsWith(folder + sep));
+    const own = folder !== resolve(this.workspaceRoot) && !shared;
+    const scan = own ? scanFolder(folder) : { files: 0, bytes: 0, skipped: [], secrets: [], git: false };
+    const text = conversation(live.history).join('\n') + (live.info.about ?? '');
+    return {
+      folder, own, ...(own ? {} : { why: folder === resolve(this.workspaceRoot) ? '작업 폴더가 모든 작업이 함께 쓰는 맨 위 폴더라, 폴더는 두고 대화 · 첨부만 옮김' : `작업 폴더를 "${this.nameOf(shared!)}" 작업도 써서, 폴더는 두고 대화 · 첨부만 옮김` }),
+      ...scan, setup: own ? setupCommands(folder) : [], cannot: cannotMove(folder, text),
+      schedules: this.schedules?.forSession(live.info.id).length ?? 0,
+      busy: live.info.status === 'working' || live.info.status === 'starting',
+    };
+  }
+
+  private async moveToPeer(live: Live, rawUrl: string, folderName: string | undefined, secrets: string[]) {
+    const peers = this.peers;
+    if (!peers) throw new Error('연결 기능이 꺼져 있음');
+    if (live.info.status === 'working' || live.info.status === 'starting') throw new Error('일하는 중 — 끝난 뒤에 옮긴다');
+    const view = (await peers.all()).find((v) => v.url === rawUrl);
+    if (!view?.ok) throw new Error(view ? `그 PC 와 연결이 끊김(${view.error ?? ''})` : '연결된 PC 가 아님');
+    const plan = this.movePlan(live.info.id);
+    const say = (message: string) => this.publish({ type: 'notice', sessionId: live.info.id, message });
+    // 1) 묶기: 이 작업만 쓰는 폴더면 폴더 전체(뺄 것 · 고르지 않은 비밀 파일 빼고), 아니면 이 작업 첨부만
+    const id = `${live.info.id.slice(0, 8)}-${createHash('sha1').update(rawUrl).digest('hex').slice(0, 8)}`;
+    const tgz = join(this.moveDir, `out-${id}.tgz`);
+    say('옮기는 중 · 파일 묶는 중');
+    if (plan.own) packFolder(plan.folder, tgz, plan.secrets.filter((f) => !secrets.includes(f)));
+    else {
+      const atts = [...new Set(live.history.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []).map((a) => a.path) : [])))].filter((p) => this.attachmentPath(live, p));
+      if (atts.length) execFileSync('tar', ['-czf', tgz, '-C', plan.folder, ...atts], { stdio: ['ignore', 'ignore', 'pipe'] });
+      else rmSync(tgz, { force: true });
+    }
+    const size = existsSync(tgz) ? statSync(tgz).size : 0;
+    const sha1 = size ? createHash('sha1').update(readFileSync(tgz)).digest('hex') : '';
+    // 2) 보내기: 4MB 조각, 받는 PC 가 이미 받은 만큼은 건너뛴다(끊겼다 다시 하면 이어서, 내용이 바뀌었으면 처음부터)
+    if (size) {
+      const start = (await peers.post(view.url, '/peer/move/start', { id, size, sha1 })) as { have: number };
+      let have = start.have ?? 0;
+      const fd = openSync(tgz, 'r');
+      try {
+        const CHUNK = 4 * 1024 * 1024;
+        while (have < size) {
+          const n = Math.min(CHUNK, size - have);
+          const buf = Buffer.alloc(n);
+          readSync(fd, buf, 0, n, have);
+          const r = await peers.postRaw(view.url, `/peer/move/chunk?id=${encodeURIComponent(id)}&offset=${have}`, buf);
+          have = r.have;
+          say(`옮기는 중 · 보내는 중 ${Math.round(have / 1048576)}/${Math.max(1, Math.round(size / 1048576))}MB`);
+        }
+      } finally { closeSync(fd); }
+    }
+    // 3) 받는 PC 에서 새 작업으로: 대화 요약 · 역할 · 설정 · 예약 · 설치 명령 · 할 일
+    say('옮기는 중 · 받는 PC 에서 푸는 중');
+    const all = digest(live.history).join('\n');
+    const meta = {
+      title: this.nameOf(live), about: live.info.about ?? '', agent: live.info.agent, model: live.info.model, effort: live.info.effort,
+      conversation: all.length > 60000 ? '…' + all.slice(-60000) : all,
+      schedules: (this.schedules?.forSession(live.info.id) ?? []).map(({ prompt, repeat, time, date, weekday, every, enabled }) => ({ prompt, repeat, time, date, weekday, every, enabled })),
+      folder: (folderName || basename(plan.folder) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
+      own: plan.own, git: plan.git, setup: plan.setup, cannot: plan.cannot, fromPc: peers.summary().name, fromId: live.info.id, secrets: secrets.length,
+    };
+    const done = (await peers.post(view.url, '/peer/move/finish', { id, sha1: size ? sha1 : '', meta })) as { sessionId: string; workdir: string };
+    rmSync(tgz, { force: true });
+    // 4) 이 PC: 예약은 끄고(두 번 돌지 않게) 작업은 "옮김"으로 보관 — 지우지 않아 되돌릴 수 있다
+    for (const s of this.schedules?.forSession(live.info.id) ?? []) if (s.enabled) { try { this.schedules!.save({ ...s, enabled: false }); } catch {} }
+    this.schedulesChanged();
+    live.info.movedTo = { url: view.url, id: done.sessionId, pc: view.name ?? '' };
+    this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } });
+    live.info.archived = true;
+    this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
+    this.notice(`${this.nameOf(live)} 를 ${view.name}(${done.workdir}) 로 옮김 — 이 PC 에서는 보관하고 예약은 껐음. 되돌리려면 그 PC 작업에서 다시 이 PC 로 옮긴다`);
+  }
+
+  /** 받는 PC: 옮겨 오는 묶음 받기 시작(이미 받은 만큼을 알려 이어 받는다) */
+  moveStart(b: { id?: unknown; size?: unknown; sha1?: unknown }): { have: number } {
+    const id = String(b.id ?? '');
+    if (!/^[\w-]{4,40}$/.test(id)) throw new Error('잘못된 옮기기 id');
+    const file = join(this.moveDir, `in-${id}.tgz`), metaFile = `${file}.json`;
+    let prev: any = null;
+    try { prev = JSON.parse(readFileSync(metaFile, 'utf8')); } catch {}
+    if (!prev || prev.sha1 !== b.sha1 || prev.size !== b.size) { rmSync(file, { force: true }); writeFileSync(metaFile, JSON.stringify({ sha1: b.sha1, size: b.size })); }
+    return { have: existsSync(file) ? statSync(file).size : 0 };
+  }
+
+  moveChunk(id: string, offset: number, buf: Buffer): { have: number } {
+    if (!/^[\w-]{4,40}$/.test(id)) throw new Error('잘못된 옮기기 id');
+    const file = join(this.moveDir, `in-${id}.tgz`);
+    const have = existsSync(file) ? statSync(file).size : 0;
+    if (offset === have) appendFileSync(file, buf);
+    return { have: existsSync(file) ? statSync(file).size : 0 };
+  }
+
+  /** 받는 PC: 다 받았으면 풀고 새 작업을 만든다 */
+  async moveFinish(b: { id?: unknown; sha1?: unknown; meta?: any }): Promise<{ sessionId: string; workdir: string }> {
+    const id = String(b.id ?? '');
+    const m = b.meta ?? {};
+    const file = join(this.moveDir, `in-${id}.tgz`);
+    if (b.sha1) {
+      if (!existsSync(file) || createHash('sha1').update(readFileSync(file)).digest('hex') !== b.sha1) throw new Error('받은 파일이 다 오지 않았거나 깨짐 — 다시 옮기면 이어서 받는다');
+    }
+    // 받을 폴더: 이 PC 작업 뿌리 아래 새 폴더(있으면 -2, -3 …)
+    const base = String(m.folder ?? 'moved').replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '').slice(0, 80) || 'moved';
+    let dest = join(this.workspaceRoot, base);
+    for (let i = 2; existsSync(dest) && readdirSync(dest).length; i++) dest = join(this.workspaceRoot, `${base}-${i}`);
+    mkdirSync(dest, { recursive: true });
+    if (b.sha1) unpackTo(file, dest);
+    rmSync(file, { force: true });
+    rmSync(`${file}.json`, { force: true });
+    const agent = AGENTS.includes(m.agent) ? m.agent : 'claude';
+    const live = await this.create({ agent, role: 'main', workdir: dest, origin: { via: 'local', user: `Agent Hub ${String(m.fromPc ?? '').slice(0, 40)}` }, ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}), title: String(m.title ?? '옮겨 온 작업').slice(0, 120), customTitle: String(m.title ?? '옮겨 온 작업').slice(0, 120) });
+    if (typeof m.about === 'string' && m.about) this.setAbout(live, m.about);
+    if (EFFORTS.includes(m.effort)) { live.info.effort = m.effort; this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } }); }
+    const t = `${String(m.fromPc ?? '').slice(0, 60)}/${String(m.title ?? '').slice(0, 80)}`;
+    const body = String(m.conversation ?? '').slice(0, 60000);
+    this.publish({ type: 'session.merged', sessionId: live.info.id, fromId: `peer:${String(m.fromPc ?? '').slice(0, 60)}:${String(m.fromId ?? '').slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
+    (live.merges ??= []).push({ label: `옮겨 온 작업 · ${t}`, text: `[옮겨 온 작업: ${t} — 다른 PC 에서 이 PC 로 옮긴 작업의 지금까지 한 일(사람 지시와 마지막 보고). 작업 폴더는 ${dest} 로 옮겨 왔다(그 PC 의 절대 경로가 글에 있으면 이 폴더로 바꿔 읽는다). 이어서 맡는다]\n${body}` });
+    this.publishContext(live);
+    for (const s of Array.isArray(m.schedules) ? m.schedules.slice(0, 30) : []) { try { this.schedules?.save({ ...s, sessionId: live.info.id }); } catch {} }
+    this.schedulesChanged();
+    const todo = (Array.isArray(m.cannot) ? m.cannot : []).map(String).slice(0, 10);
+    this.publish({ type: 'notice', sessionId: live.info.id, message: `${t} 에서 옮겨 옴 — 폴더 ${dest}${m.own ? '' : '(그 PC 에서 여러 작업이 함께 쓰던 폴더라 첨부만)'}${todo.length ? `. 이 PC 에서 할 일: ${todo.join(' / ')}` : ''}` });
+    // 설치 명령: 뒤에서 차례로 돌리고 결과만 알린다(받는 PC 운영체제에 맞는 셸)
+    const cmds = (Array.isArray(m.setup) ? m.setup : []).map(String).filter((c: string) => /^(npm|pnpm|yarn|uv|python3? -m venv)\b/.test(c)).slice(0, 3);
+    if (cmds.length && m.own) void this.runSetup(live, dest, cmds);
+    return { sessionId: live.info.id, workdir: dest };
+  }
+
+  private async runSetup(live: Live, dir: string, cmds: string[]) {
+    for (const c of cmds) {
+      const cmd = process.platform === 'win32' ? c.replace(/\.venv\/bin\/pip/g, '.venv\\Scripts\\pip').replace(/^python3 /, 'python ') : c;
+      this.publish({ type: 'notice', sessionId: live.info.id, message: `세팅 · ${cmd} 돌리는 중` });
+      const ok = await new Promise<boolean>((res) => {
+        const p = spawn(cmd, { cwd: dir, shell: true, stdio: 'ignore' });
+        const t = setTimeout(() => { p.kill(); res(false); }, 15 * 60_000);
+        p.on('exit', (code) => { clearTimeout(t); res(code === 0); });
+        p.on('error', () => { clearTimeout(t); res(false); });
+      });
+      this.publish({ type: 'notice', sessionId: live.info.id, message: `세팅 · ${cmd} ${ok ? '끝남' : '실패 — 이 작업에서 직접 다시 돌려 본다'}` });
+      if (!ok) break;
+    }
   }
 
   /** 이 PC 작업을 다른 PC 작업에 합친다(session.mergeIntoPeer) */

@@ -67,6 +67,27 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? ''), body?.images, body?.merge === true); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, { ok: true });
       }
+      // 다른 PC 가 작업을 이 PC 로 옮긴다: 시작(이어 받기) → 조각 → 끝(풀고 새 작업)
+      if (req.method === 'POST' && url.pathname === '/peer/move/start') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try { return json(res, 200, sessions.moveStart(body ?? {})); } catch (err) { return send(res, 400, (err as Error).message); }
+      }
+      if (req.method === 'POST' && url.pathname === '/peer/move/chunk') {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const c of req) { size += c.length; if (size > 8 * 1024 * 1024) return send(res, 413, '조각이 너무 큼'); chunks.push(c); }
+        try { return json(res, 200, sessions.moveChunk(url.searchParams.get('id') ?? '', Number(url.searchParams.get('offset')), Buffer.concat(chunks))); } catch (err) { return send(res, 400, (err as Error).message); }
+      }
+      if (req.method === 'POST' && url.pathname === '/peer/move/finish') {
+        const body = (await readJson(req, res, 2_000_000)) as any;
+        if (body === undefined) return;
+        try { return json(res, 200, await sessions.moveFinish(body ?? {})); } catch (err) { return send(res, 400, (err as Error).message); }
+      }
+      // 옮기기 전에 보여 줄 것(이 PC 화면이 부른다)
+      if (req.method === 'GET' && url.pathname === '/move/plan') {
+        try { return json(res, 200, sessions.movePlan(url.searchParams.get('sessionId') ?? '')); } catch (err) { return send(res, 400, (err as Error).message); }
+      }
       // 다른 PC 가 작업을 이 PC 작업에 합치며 따로 보내는 그림 한 장(같은 그림은 건너뜀)
       if (req.method === 'POST' && url.pathname === '/peer/image') {
         const body = (await readJson(req, res, 6_000_000)) as any;

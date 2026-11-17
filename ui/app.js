@@ -2578,6 +2578,10 @@ function renderPanel() {
       edit.onclick = () => { showNav('settings'); showSetTab('presets'); openForm(preset); };
       acts.append(edit);
     }
+    const mv = el('button', 'p-mini', '다른 PC로 옮기기');
+    mv.type = 'button';
+    mv.onclick = () => moveDialog(s);
+    acts.append(mv);
     role.append(acts);
     if (confEdit === s.info.id) role.append(configForm(s));
   }
@@ -2642,6 +2646,57 @@ function renderPanel() {
     al.append(row);
   }
 
+}
+
+/** 다른 PC 로 옮기기: 받을 PC · 폴더 이름을 고르고, 옮길 것 · 뺄 것 · 비밀 파일 · 옮길 수 없는 것을 보인 뒤 옮긴다 */
+async function moveDialog(s, remote) {
+  const peersOk = remote ? [{ name: peerState?.me ?? '이 PC', url: peerState?.myUrls?.[0] }, ...(peerState?.peers ?? []).filter((p) => p.ok && p.url !== remote.pc.url)] : (peerState?.peers ?? []).filter((p) => p.ok);
+  if (!peersOk.length || !peersOk[0].url) return flash('옮길 수 있는 연결된 PC 가 없어요(왼쪽 연결)', true);
+  const plan = remote ? null : await getJson(`/move/plan?sessionId=${encodeURIComponent(s.info.id)}`, null);
+  if (!remote && !plan) return flash('옮길 내용을 읽지 못했어요', true);
+  if (plan?.busy) return flash('일하는 중이에요 — 끝난 뒤에 옮길 수 있어요', true);
+  const back = el('div', 'dlg-back');
+  const box = el('div', 'dlg move-dlg');
+  const name = remote ? remote.t.name : titleOf(s).split('\n')[0];
+  box.append(el('div', 'dlg-title', `다른 PC로 옮기기 · ${name}`));
+  const pcSel = el('select');
+  pcSel.append(...peersOk.map((p) => new Option(p.name || p.url, p.url)));
+  const folder = el('input', 'dlg-input');
+  folder.value = plan ? plan.folder.split(/[\\/]/).filter(Boolean).pop() ?? '' : name.replace(/[\\/:*?"<>|]/g, '-');
+  const row = (label, input) => { const l = el('label', 'p-conf-row'); l.append(el('span', 'p-meta', label), input); return l; };
+  box.append(row('받을 PC', pcSel), row('받을 폴더', folder));
+  const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  const info = el('div', 'move-info');
+  const picks = [];
+  if (plan) {
+    const ul = (title, items) => { if (!items.length) return; info.append(el('div', 'move-h', title)); const u = el('ul'); for (const x of items) u.append(el('li', '', x)); info.append(u); };
+    ul('옮기는 것', ['대화 기록 · 요약 · 역할 설명', `예약 ${plan.schedules}개(이 PC 에서는 끄고 받는 PC 에서 켬)`, plan.own ? `작업 폴더 파일 ${plan.files.toLocaleString()}개 · ${mb(plan.bytes)}${plan.git ? ' (git 저장소 — 커밋 안 된 변경까지)' : ''}` : `첨부 파일만 — ${plan.why}`]);
+    ul('빼는 것(받는 PC 에서 다시 만듦)', plan.skipped.slice(0, 8).concat(plan.skipped.length > 8 ? [`… 외 ${plan.skipped.length - 8}개`] : []));
+    if (plan.setup.length) ul('받는 PC 에서 돌릴 설치 명령', plan.setup);
+    if (plan.secrets.length) {
+      info.append(el('div', 'move-h', '비밀일 수 있는 파일 — 고른 것만 옮김(내용은 보이지 않음)'));
+      for (const f of plan.secrets.slice(0, 20)) { const l = el('label', 'move-secret'); const c = el('input'); c.type = 'checkbox'; c.value = f; picks.push(c); l.append(c, ` ${f}`); info.append(l); }
+    }
+    ul('옮길 수 없는 것 — 받는 PC 에서 할 일', plan.cannot);
+  } else info.append(el('p', 'hint', `${remote.pc.name} 이 옮깁니다. 옮길 것 · 뺄 것은 그 PC 기준으로 같고, 비밀 파일은 옮기지 않습니다.`));
+  info.append(el('p', 'hint', '이 작업은 지우지 않고 "옮김"으로 보관해 되돌릴 수 있어요(받은 PC 작업에서 다시 옮기기).'));
+  box.append(info);
+  const foot = el('div', 'dlg-foot');
+  const no = el('button', 'dlg-no', '취소'); no.type = 'button';
+  const ok = el('button', 'dlg-yes', '옮기기'); ok.type = 'button';
+  foot.append(no, ok);
+  box.append(foot);
+  back.append(box);
+  document.body.append(back);
+  const close = () => back.remove();
+  no.onclick = close;
+  back.onmousedown = (e) => { if (e.target === back) close(); };
+  ok.onclick = async () => {
+    close();
+    const cmd = { type: 'session.moveToPeer', sessionId: remote ? remoteKey(remote.pc.url, remote.t.id) : s.info.id, url: pcSel.value, folder: folder.value.trim(), secrets: picks.filter((c) => c.checked).map((c) => c.value) };
+    await send(cmd);
+    flash('옮기는 중 — 진행은 그 작업 대화에 보여요');
+  };
 }
 
 /** 생각 깊이(effort): 작업마다, 다음 차례부터(일하는 중이면 끝난 뒤). Claude 만 받는다 */
@@ -3407,6 +3462,7 @@ function openRemoteMenu(n, x, y) {
     [`${n.pc.name} 화면 새 탭으로`, () => window.open(`${n.pc.url}/`, '_blank', 'noopener')],
     ['이름 바꾸기', async () => { const t = await askDialog({ title: `이름 바꾸기 · ${n.pc.name}`, input: n.t.name, ok: '바꾸기' }); if (t && t.trim()) { await send({ type: 'session.rename', sessionId: key, title: t.trim() }); after(); } }],
     ['하위 작업 만들기', async () => { await send({ type: 'session.split', sessionId: key }); after(); }],
+    ['다른 PC로 옮기기', () => moveDialog(null, { pc: n.pc, t: n.t })],
     ['다른 작업에 합치기', async () => {
       // 그 PC 가 합친다: 같은 PC 작업이면 그 PC 안 합치기, 이 PC · 다른 PC 작업이면 그 PC 가 그쪽으로 보낸다
       const me = peerState?.myUrls?.[0];

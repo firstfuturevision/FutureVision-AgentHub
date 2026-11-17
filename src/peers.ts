@@ -165,10 +165,20 @@ export class Peers {
   }
 
   /** 그 PC 의 /intake·/memory 로 보내기(설정 맞추기) */
-  async post(url: string, path: '/intake' | '/memory' | '/peer/parent' | '/peer/share' | '/peer/image' | '/peer/hello' | '/peer/bye', body: unknown): Promise<unknown> {
+  /** 그 PC 로 날것(파일 조각) 보내기 — 작업 옮기기 */
+  async postRaw(url: string, path: string, body: Buffer): Promise<any> {
     const u = peerUrl(url);
     if (!u) throw new Error('주소가 맞지 않음');
-    const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(path === '/peer/share' || path === '/peer/image' ? 30_000 : TIMEOUT_MS * 2) }); // 공유 · 합치기는 그림이 함께 갈 수 있어 넉넉히
+    const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body, signal: AbortSignal.timeout(120_000) });
+    if (r.status === 404 || r.status === 405) throw new Error('그 PC 의 Agent Hub 가 옛 버전(업데이트 필요)');
+    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+    return r.json();
+  }
+
+  async post(url: string, path: '/intake' | '/memory' | '/peer/parent' | '/peer/share' | '/peer/image' | '/peer/hello' | '/peer/bye' | '/peer/move/start' | '/peer/move/finish', body: unknown): Promise<unknown> {
+    const u = peerUrl(url);
+    if (!u) throw new Error('주소가 맞지 않음');
+    const r = await fetch(`${u}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(path === '/peer/move/finish' ? 600_000 : path.startsWith('/peer/') && path !== '/peer/hello' && path !== '/peer/bye' && path !== '/peer/parent' ? 30_000 : TIMEOUT_MS * 2) }); // 공유 · 합치기는 그림이 함께 갈 수 있어 넉넉히
     if (r.status === 404 || r.status === 405) throw new Error('그 PC 의 Agent Hub 가 옛 버전(업데이트 필요)'); // 모르는 주소: 옛 버전은 405 로 답하기도 한다
     if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
     this.cache.delete(u);

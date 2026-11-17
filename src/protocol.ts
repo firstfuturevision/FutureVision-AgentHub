@@ -43,6 +43,7 @@ export interface SessionInfo {
   preset?: { id: string; name: string }; // 쓴 에이전트(worker: 맡길 때, main: 메인으로 고른 것)
   workPreset?: { id: string; name: string }; // 작업 환경 프리셋(폴더 구조·작업 방식 지침)
   customTitle?: string; // 사람이 바꾼 이름(없으면 화면이 첫 마디로 이름을 짓는다)
+  movedTo?: { url: string; id: string; pc: string }; // 다른 PC 로 옮긴 작업(여기는 보관) — 되돌리면 지운다
   remoteParent?: { url: string; id: string; pc: string }; // 다른 PC 작업 아래에 둔 하위 작업: 한 일이 그 PC 의 그 작업으로 위로 공유된다
   viaIntake?: boolean; // 입력 거치기: 사람 지시를 입력 세션이 먼저 정리해 넘긴다
   archived?: boolean; // 보관: 목록에서 숨기고 예약을 돌리지 않는다(지우기 전 단계). 왼쪽 "보관"에서 꺼낸다
@@ -140,6 +141,7 @@ export type ClientCommand =
   | { type: 'session.reparent'; sessionId: string; parentId: string | null }
   | { type: 'session.mergeInto'; sessionId: string; targetId: string }
   | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string }
+  | { type: 'session.moveToPeer'; sessionId: string; url: string; folder?: string; secrets?: string[] } // 다른 PC 로 옮기기(folder = 받는 PC 작업 폴더 이름, secrets = 함께 옮길 비밀 파일)
   | { type: 'session.effort'; sessionId: string; effort: Effort | null } // 생각 깊이(null = CLI 기본). 다음 차례부터 // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
   | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
@@ -279,6 +281,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
     case 'session.mergeInto':
       if (!str(c.sessionId) || !str(c.targetId)) return null;
       return { type: 'session.mergeInto', sessionId: c.sessionId as string, targetId: c.targetId as string };
+    case 'session.moveToPeer':
+      if (!str(c.sessionId) || !str(c.url)) return null;
+      return { type: 'session.moveToPeer', sessionId: c.sessionId as string, url: c.url as string, ...(str(c.folder) ? { folder: (c.folder as string).slice(0, 80) } : {}), ...(Array.isArray(c.secrets) ? { secrets: (c.secrets as unknown[]).filter(str).slice(0, 50) as string[] } : {}) };
     case 'session.effort':
       if (!str(c.sessionId) || !(c.effort === null || EFFORTS.includes(c.effort as Effort))) return null;
       return { type: 'session.effort', sessionId: c.sessionId as string, effort: c.effort as Effort | null };
