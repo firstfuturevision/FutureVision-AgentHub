@@ -383,6 +383,13 @@
       <span class="screen-title">화면 제어</span>
       <select id="screen-mon" aria-label="모니터" hidden></select>
       <span id="screen-state" class="screen-state"></span>
+      <span class="screen-zoom" role="group" aria-label="확대 · 축소">
+        <button id="screen-zout" type="button" title="축소">−</button>
+        <span id="screen-zval" class="screen-zval">100%</span>
+        <button id="screen-zin" type="button" title="확대 (Ctrl+휠, 두 손가락 벌리기)">+</button>
+        <button id="screen-zfit" type="button" title="화면에 맞춤">맞춤</button>
+        <button id="screen-pan" type="button" aria-pressed="false" title="켜면 끌어서 둘러보기(누르기 대신). 가운데 버튼으로 끌어도 됨">끌어 보기</button>
+      </span>
       <button id="screen-switch" class="switch" type="button" role="switch" aria-checked="false" aria-label="화면 제어 켜기"></button>
       <button id="screen-close" class="icon" type="button" aria-label="닫기">✕</button>
     </header>

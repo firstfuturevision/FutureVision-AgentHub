@@ -57,7 +57,7 @@ async function loop() {
       if (document.hidden) { await sleep(500); continue; }
       const t0 = performance.now();
       const full = scr.size?.w ?? 1920;
-      const w = Math.max(320, Math.min(full, Math.round(stage.clientWidth * (devicePixelRatio || 1))));
+      const w = Math.max(320, Math.min(full, Math.round(stage.clientWidth * (devicePixelRatio || 1) * view.z))); // 확대하면 그만큼 선명한 프레임
       let r;
       try {
         r = await fetch(`/screen/frame?m=${scr.mon}&w=${w}&q=70&v=${viewer}`, { cache: 'no-store' });
@@ -102,6 +102,41 @@ $('screen-close').onclick = closeScreen;
 $('screen-switch').onclick = () => load({ enabled: !scr.st?.enabled });
 $('screen-mon').onchange = () => { scr.mon = Number($('screen-mon').value) || 0; scr.size = scr.st.monitors[scr.mon]; };
 
+// ── 확대 · 둘러보기: 화면(캔버스)에 CSS 변환만 건다. 누른 자리는 변환된 상자(getBoundingClientRect)로 재므로 확대 · 이동해도 PC 의 같은 자리가 눌린다 ──
+const view = { z: 1, x: 0, y: 0, pan: false };
+const ZMIN = 1, ZMAX = 8;
+function applyView() {
+  // 화면 밖으로 밀려나지 않게: 확대한 만큼만 움직일 수 있다
+  const mx = ((view.z - 1) * canvas.offsetWidth) / 2, my = ((view.z - 1) * canvas.offsetHeight) / 2;
+  view.x = Math.max(-mx, Math.min(mx, view.x));
+  view.y = Math.max(-my, Math.min(my, view.y));
+  canvas.style.transform = view.z === 1 ? '' : `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+  $('screen-zval').textContent = `${Math.round(view.z * 100)}%`;
+}
+/** (cx, cy) 화면 점을 그 자리에 둔 채 배율을 z 로 */
+function zoomAt(z, cx, cy) {
+  z = Math.max(ZMIN, Math.min(ZMAX, z));
+  const s = stage.getBoundingClientRect();
+  const c = { x: s.left + stage.clientWidth / 2, y: s.top + stage.clientHeight / 2 }; // 캔버스는 가운데 놓인다
+  if (cx == null) { cx = c.x; cy = c.y; }
+  const qx = (cx - c.x - view.x) / view.z, qy = (cy - c.y - view.y) / view.z;
+  view.x = cx - c.x - z * qx;
+  view.y = cy - c.y - z * qy;
+  view.z = z;
+  if (z === 1) { view.x = 0; view.y = 0; }
+  applyView();
+}
+function setPan(on) { view.pan = on; stage.classList.toggle('panning', on); $('screen-pan').setAttribute('aria-pressed', String(on)); }
+$('screen-zin').onclick = () => zoomAt(view.z * 1.5);
+$('screen-zout').onclick = () => zoomAt(view.z / 1.5);
+$('screen-zfit').onclick = () => { view.z = 1; view.x = 0; view.y = 0; applyView(); };
+$('screen-pan').onclick = () => setPan(!view.pan);
+addEventListener('resize', applyView);
+let panFrom = null; // 마우스 끌어 보기 { x, y, vx, vy }
+function panStart(e) { panFrom = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; stage.classList.add('drag'); }
+function panMove(e) { if (!panFrom) return; view.x = panFrom.vx + e.clientX - panFrom.x; view.y = panFrom.vy + e.clientY - panFrom.y; applyView(); }
+function panEnd() { panFrom = null; stage.classList.remove('drag'); }
+
 // ── 입력: 모아서 하나씩 보낸다(마우스 이동은 마지막 것만) ──
 function push(ev) {
   if (!scr.st?.enabled) return;
@@ -133,20 +168,26 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'touch') return touchDown(e);
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
+  if (view.pan || (e.button === 1 && view.z > 1)) return panStart(e); // 끌어 보기 · 확대 중 가운데 버튼 끌기는 PC 로 보내지 않는다
   push({ t: 'down', ...at(e), b: BUTTON[e.button] ?? 0 });
 });
 canvas.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return touchMove(e);
+  if (panFrom) return panMove(e);
+  if (view.pan) return;
   push({ t: 'move', ...at(e) });
 });
 canvas.addEventListener('pointerup', (e) => {
   if (e.pointerType === 'touch') return touchUp(e);
+  if (panFrom) return panEnd();
+  if (view.pan) return;
   push({ t: 'up', ...at(e), b: BUTTON[e.button] ?? 0 });
 });
 canvas.addEventListener('pointercancel', (e) => { if (e.pointerType === 'touch') touches.clear(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (e.ctrlKey || e.metaKey) return zoomAt(view.z * Math.exp(-e.deltaY * (e.deltaMode ? 0.03 : 0.0015)), e.clientX, e.clientY); // Ctrl+휠(노트북 두 손가락 벌리기 포함): 확대 · 축소
   const dy = Math.round(-e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1.2));
   if (dy) push({ t: 'wheel', ...at(e), dy });
 }, { passive: false });
@@ -157,15 +198,36 @@ let twoY = null;
 function touchDown(e) {
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
-  touches.set(e.pointerId, { sx: e.clientX, sy: e.clientY, y: e.clientY, t: Date.now(), start: at(e), dragging: false, cancel: false });
-  if (touches.size === 2) twoY = avgY();
+  touches.set(e.pointerId, { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, t: Date.now(), start: at(e), dragging: false, cancel: false });
+  if (touches.size === 2) { twoY = avgY(); pinch = { d: spread(), z: view.z, mx: mid().x, my: mid().y, vx: view.x, vy: view.y, on: false }; }
+  if (touches.size === 1 && view.pan) panStart(e);
 }
+let pinch = null; // 두 손가락: 벌리고 좁히면 확대 · 축소(그 뒤엔 끌어 둘러보기), 그냥 올리고 내리면 PC 스크롤
+function spread() { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; }
+function mid() { const [a, b] = [...touches.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function touchMove(e) {
   const p = touches.get(e.pointerId);
   if (!p) return;
+  p.x = e.clientX;
   p.y = e.clientY;
+  if (touches.size === 1 && panFrom) return panMove(e);
   if (touches.size >= 2) {
     for (const q of touches.values()) q.cancel = true;
+    if (pinch && touches.size === 2) {
+      const r = spread() / pinch.d;
+      if (!pinch.on && Math.abs(r - 1) > 0.08) pinch.on = true;
+      if (pinch.on) {
+        // 처음 두 손가락 가운데 있던 화면 자리가 지금 손가락 가운데에 오게(벌린 만큼 배율)
+        const m = mid();
+        const st = stage.getBoundingClientRect();
+        const c = { x: st.left + stage.clientWidth / 2, y: st.top + stage.clientHeight / 2 };
+        const z = Math.max(ZMIN, Math.min(ZMAX, pinch.z * r));
+        const qx = (pinch.mx - c.x - pinch.vx) / pinch.z, qy = (pinch.my - c.y - pinch.vy) / pinch.z;
+        view.z = z; view.x = m.x - c.x - z * qx; view.y = m.y - c.y - z * qy;
+        applyView();
+        return;
+      }
+    }
     const y = avgY();
     if (twoY != null && Math.abs(y - twoY) >= 8) { push({ t: 'wheel', ...at(e), dy: Math.round((y - twoY) * 4) }); twoY = y; }
     return;
@@ -181,7 +243,9 @@ function touchMove(e) {
 function touchUp(e) {
   const p = touches.get(e.pointerId);
   touches.delete(e.pointerId);
-  if (touches.size < 2) twoY = null;
+  if (touches.size < 2) { twoY = null; pinch = null; }
+  if (panFrom) { panEnd(); return; }
+  if (view.pan) return;
   if (!p || p.cancel) return;
   if (p.dragging) return push({ t: 'up', ...at(e), b: 0 });
   const b = Date.now() - p.t > 550 ? 1 : 0; // 길게 누르면 오른쪽 클릭
