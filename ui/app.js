@@ -2178,9 +2178,13 @@ function openTaskMenu(s, x, y) {
     })(),
     ['하위 작업 만들기', () => splitTask(s)],
     ['다른 작업에 합치기', async () => {
-      const t = await pickTask(`${titleOf(s).split('\n')[0].slice(0, 60)} 를 합칠 작업`, mains().filter((k) => k !== s && !descendsFrom(k, s)));
+      const t = await pickTask(`${titleOf(s).split('\n')[0].slice(0, 60)} 를 합칠 작업`, [...mains().filter((k) => k !== s && !descendsFrom(k, s)), ...peerTargets()]);
       if (!t) return;
       const kids = mains().filter((k) => parentOfTask(k) === s.info.id).length;
+      if (t.remote) {
+        if (await askDialog({ title: '다른 PC 작업에 합치기', text: `${titleOf(s).split('\n')[0].slice(0, 60)} 가 지금까지 한 일(사람 지시와 마지막 보고)과 그림 · 첨부 그림을 ${t.pc.name}/${t.t.name} 에 넘기고${kids ? `, 그 아래 작업 ${kids}개도 그 작업 아래로 옮긴 뒤` : ''} 이 작업은 보관합니다(지우지 않아 왼쪽 보관에서 꺼낼 수 있어요). 그 작업이 일하는 중이면 끝난 뒤 다음 지시에 함께 받습니다.`, ok: '합치기' })) { await send({ type: 'session.mergeIntoPeer', sessionId: s.info.id, url: t.pc.url, targetId: t.t.id }); setTimeout(() => loadPeers(true), 1500); }
+        return;
+      }
       if (await askDialog({ title: '작업 합치기', text: `${titleOf(s).split('\n')[0].slice(0, 60)} 가 지금까지 한 일을 ${titleOf(t).split('\n')[0].slice(0, 60)} 에 넘기고${kids ? `, 그 아래 작업 ${kids}개도 그쪽으로 옮긴 뒤` : ''} 이 작업은 보관합니다(지우지 않아 왼쪽 보관에서 꺼낼 수 있어요).`, ok: '합치기' })) send({ type: 'session.mergeInto', sessionId: s.info.id, targetId: t.info.id });
     }],
     ['복사', () => {
@@ -3385,6 +3389,16 @@ function openRemoteMenu(n, x, y) {
     [`${n.pc.name} 화면 새 탭으로`, () => window.open(`${n.pc.url}/`, '_blank', 'noopener')],
     ['이름 바꾸기', async () => { const t = await askDialog({ title: `이름 바꾸기 · ${n.pc.name}`, input: n.t.name, ok: '바꾸기' }); if (t && t.trim()) { await send({ type: 'session.rename', sessionId: key, title: t.trim() }); after(); } }],
     ['하위 작업 만들기', async () => { await send({ type: 'session.split', sessionId: key }); after(); }],
+    ['다른 작업에 합치기', async () => {
+      // 그 PC 가 합친다: 같은 PC 작업이면 그 PC 안 합치기, 이 PC · 다른 PC 작업이면 그 PC 가 그쪽으로 보낸다
+      const me = peerState?.myUrls?.[0];
+      const t = await pickTask(`${n.t.name} 를 합칠 작업`, [...(me ? mains() : []), ...peerTargets().filter((x) => x.off || x.t?.id !== n.t.id)]);
+      if (!t) return;
+      if (!(await askDialog({ title: `작업 합치기 · ${n.pc.name}`, text: `${n.t.name} 가 지금까지 한 일을 ${t.remote ? `${t.pc.name}/${t.t.name}` : titleOf(t).split('\n')[0]} 에 넘기고, 그 아래 작업도 그쪽으로 옮긴 뒤 ${n.pc.name} 에서 보관합니다(그 PC 보관에서 꺼낼 수 있어요).`, ok: '합치기' }))) return;
+      if (t.remote && t.pc.url === n.pc.url) await send({ type: 'session.mergeInto', sessionId: key, targetId: t.t.id });
+      else await send({ type: 'session.mergeIntoPeer', sessionId: key, url: t.remote ? t.pc.url : me, targetId: t.remote ? t.t.id : t.info.id });
+      after();
+    }],
     ...(hosted ? [['이 PC 작업 아래에서 빼기', () => setRemoteParent({ pc: n.pc, t: n.t }, null)]] : []),
     ['보관', async () => { if (await askDialog({ title: `작업 보관 · ${n.pc.name}`, text: `${n.t.name} 와 그 아래 작업을 그 PC 목록에서 숨깁니다(예약도 멈춤). 그 PC 의 보관에서 꺼낼 수 있어요.`, ok: '보관' })) { await send({ type: 'session.archive', sessionId: key, archived: true }); after(); } }],
     ['삭제', async () => { if (await askDialog({ title: `작업 삭제 · ${n.pc.name}`, text: `${n.t.name}\n그 PC 에서 지웁니다. 기록 파일은 그 PC 에 남습니다.`, ok: '삭제', danger: true })) { await send({ type: 'session.delete', sessionId: key }); after(); } }, 'danger'],
@@ -3453,6 +3467,10 @@ function remoteDropTop(head, pc) {
 
 // 끌어 놓기: 같은 단계의 작업 위에서만 놓을 수 있고, 줄의 위쪽 절반이면 그 앞, 아래쪽이면 그 뒤로
 /** 작업 하나 고르는 창(검색되는 목록) */
+/** 합칠 곳 고르기에 넣을 연결된 PC 작업들(연결이 끊긴 PC 는 흐리게 보일 자리 하나) */
+function peerTargets() {
+  return (peerState?.peers ?? []).flatMap((p) => (p.ok ? (p.summary?.tasks ?? []).map((t) => ({ remote: true, pc: { name: p.name || p.url, url: p.url }, t })) : [{ off: true, pc: { name: p.name || p.url, url: p.url } }]));
+}
 function pickTask(title, list) {
   return new Promise((resolve) => {
     const back = el('div', 'dlg-back');
@@ -3465,8 +3483,16 @@ function pickTask(title, list) {
     const done = (v) => { back.remove(); resolve(v); };
     const draw = () => {
       ul.replaceChildren();
-      for (const k of list.filter((k) => titleOf(k).toLowerCase().includes(q.value.trim().toLowerCase())).slice(0, 50)) {
-        const b = el('button', 'pick-item', titleOf(k).split('\n')[0]);
+      // 이 PC 작업, 그다음 연결된 PC 마다 묶어서("PC이름/작업"으로도 찾힘). 연결이 끊긴 PC 는 흐리게 · 못 고름
+      const word = q.value.trim().toLowerCase();
+      const name = (k) => (k.remote ? `${k.pc.name}/${k.t.name}` : titleOf(k).split('\n')[0]);
+      let group = null;
+      for (const k of list.filter((k) => (k.off ? k.pc.name : name(k)).toLowerCase().includes(word)).slice(0, 80)) {
+        const g = k.remote || k.off ? k.pc.name : null;
+        if (g !== group && g) ul.append(el('div', 'pick-group', k.off ? `${g} · 연결 안 됨` : g));
+        group = g;
+        if (k.off) continue;
+        const b = el('button', 'pick-item', k.remote ? k.t.name : name(k));
         b.type = 'button';
         b.onclick = () => done(k);
         ul.append(b);

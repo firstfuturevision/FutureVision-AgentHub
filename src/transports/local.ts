@@ -61,9 +61,9 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       // 다른 PC 의 Agent Hub(왼쪽 "연결"): 이 PC 요약은 다른 PC 가 원격 접속으로 가져간다
       // 다른 PC 작업을 이 PC 작업 아래에: 그 PC 가 하위 작업 공유를 보낸다 / 이 PC 작업을 다른 PC 작업 아래로 둔다
       if (req.method === 'POST' && url.pathname === '/peer/share') {
-        const body = (await readJson(req, res, 24_000_000)) as any; // 그림이 함께 올 수 있어(4장 · 장마다 4MB, base64)
+        const body = (await readJson(req, res, 36_000_000)) as any; // 그림이 함께 올 수 있어(6장 · 장마다 4MB, base64)
         if (body === undefined) return;
-        try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? ''), body?.images); } catch (err) { return send(res, 400, (err as Error).message); }
+        try { sessions.receiveRemoteShare(String(body?.to ?? ''), String(body?.fromPc ?? ''), String(body?.fromId ?? ''), String(body?.title ?? ''), String(body?.text ?? ''), body?.images, body?.merge === true); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, { ok: true });
       }
       // 다른 PC 가 이 PC 를 연결 목록에 더하거나 뺐다고 알려 옴 → 이 PC 목록에도(양방향). 원격 접속으로만 들어온다

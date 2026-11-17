@@ -1268,6 +1268,18 @@ export class SessionManager {
         this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함)` });
         return;
       }
+      case 'session.mergeIntoPeer': {
+        // 다른 PC 작업에 합치기: 이 PC 안 합치기와 같게 — 한 일(사람 지시 · 마지막 보고)과 그림 · 첨부 그림을 그 작업에 넘기고,
+        // 아래 작업은 그 작업 아래로 옮기고, 이 작업은 보관한다(지우지 않아 되돌릴 수 있다)
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main') return;
+        try {
+          await this.mergeIntoPeer(live, cmd.url, cmd.targetId, origin.user);
+        } catch (err) {
+          this.publish({ type: 'error', sessionId: live.info.id, message: `다른 PC 작업에 못 합침: ${(err as Error).message}` });
+        }
+        return;
+      }
       case 'session.setIntake': {
         const live = this.get(cmd.sessionId);
         if (!live || live.info.role !== 'main' || live.info.id === this.intake?.sessionId) return;
@@ -2088,16 +2100,43 @@ export class SessionManager {
     this.publish({ type: 'session.remoteShared', sessionId: from.info.id, until, ...(what === 'relay' ? { relay: true } : {}) });
   }
 
-  /** 다른 PC 에서 온 하위 작업 공유를 받는다 */
-  receiveRemoteShare(targetId: string, fromPc: string, fromId: string, title: string, text: string, images: unknown = []) {
+  /** 이 PC 작업을 다른 PC 작업에 합친다(session.mergeIntoPeer) */
+  private async mergeIntoPeer(live: Live, rawUrl: string, targetId: string, user: string) {
+    const peers = this.peers;
+    if (!peers) throw new Error('연결 기능이 꺼져 있음');
+    const view = (await peers.all()).find((v) => v.url === rawUrl);
+    if (!view?.ok) throw new Error(view ? `그 PC 와 연결이 끊김(${view.error ?? ''})` : '연결된 PC 가 아님');
+    const target = view.summary?.tasks.find((t) => t.id === targetId);
+    if (!target) throw new Error('그 PC 에 그 작업이 없음');
+    const events = live.history;
+    const text = tail(digest(events).join('\n'));
+    // 그림: 채팅에 띄운 그림과 사람이 올린 첨부 그림(최근 6장, 장마다 4MB 까지)
+    const files: string[] = [];
+    for (const e of events) {
+      if (e.type === 'agent.image') { const m = e.url.match(/^\/images\/([^/]+)\/([^/]+)$/); const f = m && this.imagePath(m[1], m[2]); if (f) files.push(f.path); }
+      if (e.type === 'user.message') for (const a of e.attachments ?? []) { const f = this.attachmentImage(live.info.id, a.path); if (f) files.push(f.path); }
+    }
+    const images = [...new Set(files)].slice(-6).flatMap((p) => (statSync(p).size > 4_000_000 ? [] : [{ name: basename(p), ext: extname(p), data: readFileSync(p).toString('base64') }]));
+    const me = peers.summary().name;
+    await peers.post(view.url, '/peer/share', { to: targetId, fromPc: me, fromId: live.info.id, title: this.nameOf(live), text, ...(images.length ? { images } : {}), merge: true });
+    // 아래 작업은 그 PC 작업 아래로(그 PC 목록에서 그 작업 아래에 보이고, 한 일이 그쪽으로 공유된다)
+    const parent = { url: view.url, id: targetId, pc: view.name ?? view.summary?.name ?? '' };
+    for (const k of [...this.sessions.values()]) if (k.info.role === 'main' && (k.info.splitFrom ?? k.info.forkedFrom) === live.info.id) this.setRemoteParent(k.info.id, parent);
+    if (live.info.status === 'working' || live.info.status === 'starting') this.halt(live, user);
+    live.info.archived = true;
+    this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
+    this.notice(`${this.nameOf(live)} 를 ${parent.pc}/${target.name} 에 합침(이 작업은 보관함 — 왼쪽 보관에서 꺼낼 수 있어요)`);
+  }
+
+  /** 다른 PC 에서 온 하위 작업 공유를 받는다. merge = 그 PC 가 작업을 이 작업에 합친 것 */
+  receiveRemoteShare(targetId: string, fromPc: string, fromId: string, title: string, text: string, images: unknown = [], merge = false) {
     const target = this.sessions.get(targetId);
     if (!target || target.info.role !== 'main') throw new Error('없는 작업');
     const t = `${fromPc.slice(0, 60)}/${title.slice(0, 80)}`;
     const body = text.slice(0, 20000);
-    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: `peer:${fromPc.slice(0, 60)}:${fromId.slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
-    // 함께 온 그림: 이 PC 에 두고 위 작업 채팅에 띄운다(같은 내용이 이미 있으면 빼고)
+    // 함께 온 그림: 이 PC 에 두고 위 작업 채팅에 띄운다(같은 내용이 이미 있으면 빼고). 공유 글보다 먼저 — 화면이 공유 카드 안에 작은 그림으로 넣는다
     const had = this.shotHashes(target);
-    for (const g of (Array.isArray(images) ? images : []).slice(0, 4)) {
+    for (const g of (Array.isArray(images) ? images : []).slice(0, 6)) {
       const ext = String(g?.ext ?? '').toLowerCase().replace('.jpeg', '.jpg');
       if (!IMAGE_TYPES[ext] || typeof g?.data !== 'string') continue;
       const data = Buffer.from(g.data, 'base64');
@@ -2112,8 +2151,11 @@ export class SessionManager {
       const caption = typeof g.caption === 'string' && g.caption.trim() ? g.caption.trim().slice(0, 300) : undefined;
       this.publish({ type: 'agent.image', sessionId: target.info.id, url: `/images/${target.info.id}/${file}`, name: String(g.name ?? '그림').slice(0, 120), ...(caption ? { caption } : {}), from: `${fromPc.slice(0, 60)}/${String(g.from ?? title).slice(0, 80)}` });
     }
-    (target.merges ??= []).push({ label: `하위 작업 공유 · ${t}`, text: `[하위 작업 공유: ${t} — 다른 PC 의 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]\n${body}` });
+    this.publish({ type: 'session.merged', sessionId: target.info.id, fromId: `peer:${fromPc.slice(0, 60)}:${fromId.slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
+    const head = merge ? `[합친 작업: ${t} — 다른 PC 에서 이 작업에 합친 작업이 지금까지 한 일(사람 지시와 마지막 보고). 이어서 맡는다]` : `[하위 작업 공유: ${t} — 다른 PC 의 아래 작업이 그사이 한 일(사람 지시와 마지막 보고). 겹치지 않게 반영한다]`;
+    (target.merges ??= []).push({ label: `${merge ? '합친 작업' : '하위 작업 공유'} · ${t}`, text: `${head}\n${body}` });
     this.publishContext(target);
+    if (merge) this.publish({ type: 'notice', sessionId: target.info.id, message: `${t} 를 합침(그 PC 에서는 보관함)${target.info.status === 'working' || target.info.status === 'starting' ? ' — 지금 하던 일이 끝난 뒤 다음 지시에 함께 받음' : ' — 다음 지시에 함께 받음'}` });
   }
 
   /** 다른 PC 작업 아래로 두기(그 PC 가 POST /peer/parent 로) */

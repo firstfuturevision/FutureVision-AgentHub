@@ -135,6 +135,7 @@ export type ClientCommand =
   | { type: 'session.setIntake'; sessionId: string; on: boolean }
   | { type: 'session.reparent'; sessionId: string; parentId: string | null }
   | { type: 'session.mergeInto'; sessionId: string; targetId: string }
+  | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string } // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
   | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
   | { type: 'session.copy'; sessionId: string } // 대화까지 가져가는 사본. 원본과 잇지 않는다(공유 없음)
@@ -273,6 +274,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
     case 'session.mergeInto':
       if (!str(c.sessionId) || !str(c.targetId)) return null;
       return { type: 'session.mergeInto', sessionId: c.sessionId as string, targetId: c.targetId as string };
+    case 'session.mergeIntoPeer':
+      if (!str(c.sessionId) || !str(c.url) || !str(c.targetId)) return null;
+      return { type: 'session.mergeIntoPeer', sessionId: c.sessionId as string, url: c.url as string, targetId: c.targetId as string };
     case 'session.setIntake':
       if (!str(c.sessionId) || typeof c.on !== 'boolean') return null;
       return { type: 'session.setIntake', sessionId: c.sessionId as string, on: c.on };

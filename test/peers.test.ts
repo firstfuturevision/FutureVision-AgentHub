@@ -167,3 +167,54 @@ test('다른 PC 작업에 첨부: 이 PC 호스트가 그 PC 의 /attach 로 넘
     srv.close();
   }
 });
+
+test('다른 PC 작업에 합치기: 한 일 · 그림을 그 PC 작업에 보내고, 아래 작업은 그 작업 아래로, 이 작업은 보관(받는 쪽은 다음 지시에 함께)', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { SessionManager } = await import('../src/sessions.ts');
+  const { ClaudeAdapter } = await import('../src/adapters/claude.ts');
+  const fake = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs');
+  const make = (name: string) => {
+    const base = mkdtempSync(join(tmpdir(), `agent hub merge ${name} `));
+    mkdirSync(join(base, 'ws', 'proj'), { recursive: true });
+    const events: any[] = [];
+    const sessions = new SessionManager({ workspaceRoot: join(base, 'ws'), dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+    sessions.subscribe((e) => events.push(e));
+    return { sessions, events };
+  };
+  const a = make('a');
+  const b = make('b');
+  const local = { via: 'local' as const, user: 'local' };
+  const create = async (w: any) => { const n = w.events.length; await w.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', workdir: 'proj' }, local); return w.events.slice(n).find((e: any) => e.type === 'session.created').session.id; };
+  const src = await create(a);
+  const dst = await create(b);
+  await a.sessions.handle({ type: 'user.message', sessionId: src, text: '해양 장면 정리' }, local);
+  await new Promise<void>((r) => { const t = setInterval(() => { if (a.events.some((e: any) => e.type === 'turn.done' && e.sessionId === src)) { clearInterval(t); r(); } }, 50); });
+  writeFileSync(join(a.sessions.info(src)!.workdir, 'scene.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  await a.sessions.showImage(src, { path: 'scene.png' });
+  await a.sessions.handle({ type: 'session.split', sessionId: src }, local);
+  const kid = await new Promise<string>((r) => { const t = setInterval(() => { const c = a.events.find((e: any) => e.type === 'session.created' && e.session.splitFrom === src); if (c) { clearInterval(t); r(c.session.id); } }, 50); });
+  // 가짜 연결: 그 PC 로 보내는 것을 b 가 받는다
+  const URL = 'http://192.168.0.9:4319';
+  (a.sessions as any).peers = {
+    summary: () => ({ name: 'pcA', tasks: [] }),
+    all: async () => [{ url: URL, ok: true, name: 'pcB', summary: { name: 'pcB', tasks: [{ id: dst, name: '해양VR', status: '대기' }] } }],
+    post: async (_u: string, path: string, body: any) => { assert.equal(path, '/peer/share'); b.sessions.receiveRemoteShare(body.to, body.fromPc, body.fromId, body.title, body.text, body.images, body.merge); return { ok: true }; },
+  };
+  await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src, url: URL, targetId: dst } as any, local);
+  const merged = b.events.find((e: any) => e.type === 'session.merged' && e.sessionId === dst);
+  assert.ok(merged && /해양 장면 정리/.test(merged.text), '한 일이 그 PC 작업으로');
+  assert.ok(b.events.some((e: any) => e.type === 'agent.image' && e.sessionId === dst), '그림도');
+  assert.ok(b.events.some((e: any) => e.type === 'notice' && e.sessionId === dst && /합침/.test(e.message)), '받는 쪽에 알림');
+  assert.equal(a.sessions.info(src)!.archived, true, '이 작업은 보관(지우지 않음)');
+  assert.deepEqual(a.sessions.info(kid)!.remoteParent, { url: URL, id: dst, pc: 'pcB' }, '아래 작업은 그 PC 작업 아래로');
+  // 연결이 끊긴 PC 면 아무것도 바꾸지 않고 알린다
+  const src2 = await create(a);
+  (a.sessions as any).peers.all = async () => [{ url: URL, ok: false, error: '응답 없음' }];
+  await a.sessions.handle({ type: 'session.mergeIntoPeer', sessionId: src2, url: URL, targetId: dst } as any, local);
+  assert.ok(!a.sessions.info(src2)!.archived);
+  assert.ok(a.events.some((e: any) => e.type === 'error' && e.sessionId === src2 && /끊김/.test(e.message)));
+  a.sessions.stopAll(); b.sessions.stopAll();
+});
