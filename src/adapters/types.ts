@@ -27,6 +27,7 @@ export interface StartContext {
   extraDirs?: string[]; // 작업 폴더 말고 더 쓸 수 있게 연결한 폴더
   pluginDir?: string; // Claude: 이 세션에만 꽂을 플러그인 폴더(Agent Hub 스킬)
   resume?: string; // Claude: 이 대화 id 에 이어 간다(--resume)
+  effort?: string; // Claude: 이번 차례만의 생각 깊이(입력 세션이 고름) — 없으면 작업 설정
 }
 
 /**

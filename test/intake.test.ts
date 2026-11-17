@@ -219,3 +219,48 @@ test('넘기기 전에 정리: 입력 세션은 받는 작업의 컨텍스트 �
     sessions.stopAll();
   }
 });
+
+test('입력 세션이 고른 생각 깊이: 그 지시 한 번에만 쓰고 다음엔 작업 설정으로, 작업에 정해 둔 깊이가 있으면 그것을 따른다', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub intake effort '));
+  const ws = join(base, 'ws');
+  mkdirSync(ws);
+  const events: HostEvent[] = [];
+  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+  sessions.intake = new IntakeStore(join(base, 'data', 'intake.json'));
+  sessions.subscribe((e) => events.push(e));
+  try {
+    await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title: '앱' }, local);
+    const task = (await waitFor(events, (e) => e.type === 'session.created')).session.id;
+    await sessions.handle({ type: 'session.setIntake', sessionId: task, on: true }, local);
+    let intakeId = '';
+    const round = async (effort?: string) => {
+      const n = events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length;
+      await sessions.handle({ type: 'user.message', sessionId: task, text: 'argv?' }, local);
+      intakeId = sessions.intake!.sessionId!;
+      await waitFor(events, () => events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length > n);
+      const req = (events.filter((e) => e.type === 'session.intake' && e.state === 'pending').at(-1) as any).request;
+      const done = events.filter((e) => e.type === 'turn.done' && e.sessionId === task).length;
+      const said = await sessions.intakeForwardByMain(intakeId, req, '인자 보기', undefined, undefined, effort);
+      await waitFor(events, () => events.filter((e) => e.type === 'turn.done' && e.sessionId === task).length > done);
+      await waitFor(events, () => sessions.info(task)?.status === 'idle');
+      const argv = (events.filter((e) => e.type === 'agent.text' && e.sessionId === task && !(e as any).partial && /^argv:/.test((e as any).text)).at(-1) as any).text.split('\n')[0];
+      const msg = events.filter((e) => e.type === 'user.message' && e.sessionId === task && (e as any).from === '입력').at(-1) as any;
+      return { said, argv, effort: msg.effort };
+    };
+    const low = await round('low');
+    assert.match(low.argv, /--effort low/);
+    assert.equal(low.effort, 'low', '채팅의 그 지시에 표시');
+    assert.match(low.said, /생각 깊이 low/);
+    const plain = await round();
+    assert.doesNotMatch(plain.argv, /--effort/, '다음 지시는 작업 설정(기본)으로 돌아감');
+    const high = await round('high');
+    assert.match(high.argv, /--effort high/);
+    // 사람이 작업에 정해 둔 깊이가 이긴다
+    await sessions.handle({ type: 'session.effort', sessionId: task, effort: 'max' } as any, local);
+    const fixed = await round('low');
+    assert.match(fixed.argv, /--effort max/);
+    assert.match(fixed.said, /작업에 정해 둔 max/);
+  } finally {
+    sessions.stopAll();
+  }
+});

@@ -77,7 +77,7 @@ export type HostEvent =
   | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
   | { type: 'session.cli'; sessionId: string; cliSessionId: string } // CLI 가 알려 준 대화 id(바뀔 때만)
   | { type: 'session.imported'; sessionId: string; shown: number } // Claude Code 에서 가져옴 — 앞의 shown 개는 그 대화의 끝부분
-  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia; author?: Author }
+  | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia; author?: Author; effort?: Effort } // effort: 입력 세션이 이 지시에만 고른 생각 깊이
   // 원격 접속 막기·풀기(기록에 남아 다시 켜도 그대로)
   | { type: 'session.remoteBlocked'; sessionId: string; app: string; label: string; blocked: boolean; by: string }
   // 연결된 원격 접속 목록 — 바뀔 때마다 전체. 기록에서 모은 것이라 기록하지 않고, 화면이 붙을 때 다시 보낸다
@@ -129,7 +129,7 @@ export interface ContextItem { label: string; chars: number; pending: boolean }
 // 화면 → 호스트
 export type ClientCommand =
   | { type: 'session.create'; agent: AgentKind; role: 'main' | 'direct'; model?: string; defaultWorker?: DefaultWorker; preset?: string; workPreset?: string; workdir?: string; title?: string; via?: RemoteVia }
-  | { type: 'user.message'; sessionId: string; text: string; attachments?: Attachment[]; via?: RemoteVia }
+  | { type: 'user.message'; sessionId: string; text: string; attachments?: Attachment[]; via?: RemoteVia; effort?: Effort } // effort 는 앱 안에서만(입력 세션) — 화면 명령에서는 받지 않는다
   // 원격 접속 막기·풀기: 막는 것은 어디서든, 푸는 것은 PC 앞에서만
   | { type: 'session.remote'; sessionId: string; app: string; label: string; blocked: boolean }
   | { type: 'permission.respond'; sessionId: string; requestId: string; allow: boolean }

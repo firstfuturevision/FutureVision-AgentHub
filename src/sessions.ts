@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute, extname, basename, sep } from 'node:path';
 import { AGENTS, EFFORTS, MODEL_RE, viaLabel } from './protocol.ts';
 import { scanFolder, setupCommands, cannotMove, packFolder, unpackTo, type MovePlan } from './move.ts';
-import type { AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, RemoteLink, RemoteVia, SessionInfo, SessionRole } from './protocol.ts';
+import type { Effort, AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, RemoteLink, RemoteVia, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
 import type { ToolStore } from './tools.ts';
@@ -59,6 +59,8 @@ interface Turn {
 interface Live {
   info: SessionInfo;
   relaunch?: boolean; // 이번 차례가 끝나면 CLI 를 내려 바뀐 설정(생각 깊이)으로 다시 띄운다
+  turnEffort?: Effort; // 이번 차례만의 생각 깊이(입력 세션이 고름). 차례가 끝나면 지우고 작업 설정으로
+  launchedEffort?: Effort | null; // 지금 떠 있는 CLI 의 생각 깊이
   schedRun?: { id: string; skip: number; started: number; note: string; error?: string }; // 예약으로 보낸 지시의 차례 — 끝나면 예약 결과를 고친다
   adapter: AgentAdapter;
   history: HostEvent[]; // 나중에 붙은 화면이 이어서 볼 수 있게
@@ -725,7 +727,7 @@ export class SessionManager {
   }
 
   /** 입력 세션 도구: 정리한 지시를 작업에 넘긴다(session 을 주면 그 작업으로 — 역할에 더 맞는 작업). compact 면 그 작업 컨텍스트를 먼저 정리하고 넘긴다 */
-  async intakeForwardByMain(mainId: string, request: unknown, instruction: unknown, key?: unknown, compact?: unknown): Promise<string> {
+  async intakeForwardByMain(mainId: string, request: unknown, instruction: unknown, key?: unknown, compact?: unknown, effort?: unknown): Promise<string> {
     const req = this.intakeReq(mainId, request);
     const body = String(instruction ?? '').trim();
     if (!body) throw new Error('정리한 지시가 비어 있음');
@@ -741,7 +743,14 @@ export class SessionManager {
     const shown = doCompact ? `(넘기기 전에 컨텍스트를 정리함)\n${body}` : body;
     this.publish({ type: 'session.intake', sessionId: target.info.id, state: 'forwarded', text: shown, request: req.id });
     this.intake!.log({ state: origin && origin !== target ? 'routed' : 'forwarded', request: req.id, taskId: req.taskId, task: origin ? this.nameOf(origin) : '(지워진 작업)', target: this.nameOf(target), original: req.original, text: shown });
-    const deliver = () => this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}) }, { via: 'local', user: '입력' });
+    // 이번 지시만의 생각 깊이: 사람이 작업에 깊이를 정해 두었으면 그것을 따른다(입력 세션 값은 버림). Claude 작업이 아니거나 일하는 중이면 쓰지 않는다
+    const want = EFFORTS.includes(effort as Effort) ? (effort as Effort) : undefined;
+    const useEffort = want && !target.info.effort && target.info.agent === 'claude' && !busy ? want : undefined;
+    if (useEffort) {
+      target.turnEffort = useEffort;
+      if (!target.dormant && (target.launchedEffort ?? null) !== useEffort) this.sleep(target); // 다음 지시에 그 깊이로 다시 뜬다(같은 대화)
+    }
+    const deliver = () => this.handle({ type: 'user.message', sessionId: target.info.id, text: forwardedText(body, req.original), ...(req.attachments ? { attachments: req.attachments } : {}), ...(want ? { effort: want } : {}) }, { via: 'local', user: '입력' });
     if (doCompact) {
       await this.compact(target, '입력');
       if (target.compacting) {
@@ -750,7 +759,8 @@ export class SessionManager {
       }
     }
     await deliver();
-    return compact === true && busy ? `${this.nameOf(target)} 에 넘김(일하는 중·승인 대기라 정리하지 않음)` : `${this.nameOf(target)} 에 넘김`;
+    const eff = want ? (useEffort ? ` · 생각 깊이 ${useEffort}` : target.info.effort ? ` · 생각 깊이는 작업에 정해 둔 ${target.info.effort}` : '') : '';
+    return compact === true && busy ? `${this.nameOf(target)} 에 넘김(일하는 중·승인 대기라 정리하지 않음)${eff}` : `${this.nameOf(target)} 에 넘김${eff}`;
   }
 
   /** 입력 세션 도구: 그 작업 화면에 사람에게 묻는다. 사람의 답은 다시 입력 세션으로 온다 */
@@ -1194,7 +1204,7 @@ export class SessionManager {
           return this.publish({ type: 'error', sessionId: cmd.sessionId, message: `막힌 원격 접속에서 온 글이라 받지 않았습니다: ${viaLabel(cmd.via)}` });
         }
         const atts = cmd.attachments?.filter((a) => this.attachmentPath(live, a.path)) ?? [];
-        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}), ...(origin.author && !cmd.via ? { author: origin.author } : {}) });
+        this.publish({ type: 'user.message', sessionId: cmd.sessionId, text: cmd.text, from: origin.user, ...(cmd.effort ? { effort: cmd.effort } : {}), ...(atts.length ? { attachments: atts } : {}), ...(cmd.via ? { via: cmd.via } : {}), ...(origin.author && !cmd.via ? { author: origin.author } : {}) });
         // 컨텍스트 정리 부탁(글 전체가 그 말일 때만): AI 에게 보통 지시로 보내지 않고 앱이 정리한다
         if (isCompactRequest(cmd.text) && !atts.length) return this.compact(live, origin.user);
         // 입력 거치기: 사람이 쓴 지시는 이 작업 AI 로 바로 보내지 않고 입력 세션이 먼저 정리한다(다른 작업·예약·입력 세션이 보낸 것, / 명령은 그대로)
@@ -1862,7 +1872,8 @@ export class SessionManager {
         this.hubSkills?.syncTo(join(env.CODEX_HOME, 'skills'), names);
       }
     }
-    const ctx: StartContext = { tools, configDir, env, authMethod: launch?.authMethod, extraDirs: o.extraDirs, pluginDir, ...(live.resume ? { resume: live.resume } : {}) };
+    const ctx: StartContext = { tools, configDir, env, authMethod: launch?.authMethod, extraDirs: o.extraDirs, pluginDir, ...(live.resume ? { resume: live.resume } : {}), ...(live.turnEffort ? { effort: live.turnEffort } : {}) };
+    live.launchedEffort = live.turnEffort ?? info.effort ?? null;
     live.resume = undefined;
     if (o.role === 'main' && this.mcpBaseUrl) {
       live.token = randomUUID().replace(/-/g, '');
@@ -2012,6 +2023,8 @@ export class SessionManager {
     // 사용 한도는 기록하지 않고 연결별로 모은다
     if (ev.type === 'agent.limits') { this.limits?.record(live.info.agent, this.accountOf(live), ev.info); return; }
     if (ev.type === 'turn.done') this.limits?.turn(live.info.agent, this.accountOf(live), ev.costUsd);
+    // 이번 차례만의 생각 깊이가 끝나면 작업 설정으로: 떠 있는 CLI 가 다른 깊이면 차례가 끝난 뒤 내려 두어 다음 지시에 작업 설정으로 다시 뜨게
+    if (ev.type === 'turn.done' && live.turnEffort) { delete live.turnEffort; if ((live.launchedEffort ?? null) !== (live.info.effort ?? null)) live.relaunch = true; }
     if (ev.type === 'session.cli') {
       // 대화 id 는 바뀔 때만 기록(다시 켠 뒤 --resume 에 쓴다)
       if (live.info.cliSessionId === ev.cliSessionId) return;

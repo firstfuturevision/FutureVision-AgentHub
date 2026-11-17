@@ -1972,7 +1972,7 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id }); s.turnStart = at; s.doing = null; break;
+      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort }); s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -3891,6 +3891,12 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
         else if (who === '예약') w.append(`예약 · ${String(it.t ?? '').split('\n')[0].replace(/^\[예약[^\]]*\]\s*/, '').slice(0, 40)}`);
         else w.append(who);
         t.prepend(w, ' · ');
+      }
+      // 입력 세션이 이 지시에만 고른 생각 깊이(Claude 가 아니면 흐리게 — 쓰이지 않음)
+      if (it.effort) {
+        const e = el('span', `msg-effort${s.info.agent === 'claude' && !s.info.effort ? '' : ' off'}`, `생각 깊이 ${it.effort}`);
+        e.title = s.info.agent !== 'claude' ? `${NAMES[s.info.agent]} 는 생각 깊이를 받지 않아 쓰이지 않음` : s.info.effort ? `작업에 정해 둔 ${s.info.effort} 를 따름` : '입력 세션이 이 지시에만 고른 생각 깊이';
+        t.append(' · ', e);
       }
       lastWho = who;
     }

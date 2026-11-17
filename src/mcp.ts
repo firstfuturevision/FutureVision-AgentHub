@@ -180,7 +180,7 @@ export const TASK_TOOLS = [
     name: 'intake_forward',
     title: '정리한 지시 넘기기(입력 세션만)',
     description: '입력 세션 전용: [입력 요청] 을 정리한 지시를 그 작업에 넘긴다. 작업은 정리본과 사람 원문을 함께 받는다. 역할이 더 맞는 다른 작업이 있으면 session 에 그 이름.',
-    inputSchema: { type: 'object', properties: { request: { type: 'string', description: '입력 요청 번호(r…)' }, instruction: { type: 'string', description: '정리한 지시: 목표, 범위, 할 일, 끝나는 조건, 지킬 규칙(짧게)' }, session: { type: 'string', description: '다른 작업으로 보낼 때만: 그 이름(session_list 의 name)' }, compact: { type: 'boolean', description: '넘기기 전에 받는 작업의 컨텍스트를 정리한다(많이 찼고 앞 일과 이어지지 않는 새 일일 때만. 애매하면 쓰지 않는다). 일하는 중·승인 대기면 앱이 정리하지 않고 넘긴다' } }, required: ['request', 'instruction'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { request: { type: 'string', description: '입력 요청 번호(r…)' }, instruction: { type: 'string', description: '정리한 지시: 목표, 범위, 할 일, 끝나는 조건, 지킬 규칙(짧게)' }, session: { type: 'string', description: '다른 작업으로 보낼 때만: 그 이름(session_list 의 name)' }, compact: { type: 'boolean', description: '넘기기 전에 받는 작업의 컨텍스트를 정리한다(많이 찼고 앞 일과 이어지지 않는 새 일일 때만. 애매하면 쓰지 않는다). 일하는 중·승인 대기면 앱이 정리하지 않고 넘긴다' }, effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'], description: '이 지시에만 쓸 생각 깊이(Claude 작업만). 짧은 물음·단순 고침·확인은 low, 보통 일은 medium, 설계·원인 찾기·여러 파일 고침·돈이나 바깥 공개가 걸린 판단은 high, 아주 어렵고 되돌리기 어려운 것만 xhigh·max. 작업에 사람이 정해 둔 깊이가 있으면 그것을 따른다. 애매하면 주지 않는다(작업 설정)' } }, required: ['request', 'instruction'], additionalProperties: false },
   },
   {
     name: 'intake_ask',
@@ -337,7 +337,7 @@ export async function handleMcp(msg: Rpc, mainId: string, sessions: SessionManag
           }
         case 'intake_forward':
           try {
-            return text(await sessions.intakeForwardByMain(mainId, a.request, a.instruction, a.session, a.compact));
+            return text(await sessions.intakeForwardByMain(mainId, a.request, a.instruction, a.session, a.compact, a.effort));
           } catch (err) {
             return text(`안 넘김: ${(err as Error).message}`, true);
           }
