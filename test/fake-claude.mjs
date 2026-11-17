@@ -134,7 +134,7 @@ async function handle(text) {
   }
   // 받은 실행 인자를 그대로 돌려준다(시험에서 플래그 확인용)
   if (text === 'argv?' || text.endsWith('\n[이어서 할 일]\nargv?')) { // 다시 띄운 뒤(앞 대화가 붙은) 지시도
-    out({ type: 'assistant', message: { content: [{ type: 'text', text: `argv: ${argv.slice(2).join(' ')}` }] }, parent_tool_use_id: null, session_id: sid });
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: `argv: ${argv.slice(2).join(' ')}${text === 'argv?' ? '' : `\n받은 글: ${text}`}` }] }, parent_tool_use_id: null, session_id: sid }); // 앞 대화가 붙은 지시면 받은 글도(앞 대화를 이어받았는지 보게)
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1, total_cost_usd: 0, session_id: sid });
     return;
   }

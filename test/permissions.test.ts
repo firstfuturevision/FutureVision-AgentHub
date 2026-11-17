@@ -95,7 +95,7 @@ test('생각 깊이(effort): 작업마다 정하면 다음 차례에 같은 대�
     await a.sessions.handle({ type: 'user.message', sessionId: sid, text: 'argv?' }, local);
     const t = await waitFor(a.events, (e) => a.events.indexOf(e) >= n && e.type === 'agent.text' && !(e as any).partial && /argv:/.test((e as any).text)) as any;
     await waitFor(a.events, (e) => a.events.indexOf(e) >= n && e.type === 'turn.done');
-    return t.text as string;
+    return (t.text as string).split('\n')[0]; // 첫 줄이 이번에 뜬 CLI 의 인자(뒤는 이어받은 앞 대화)
   };
   assert.doesNotMatch(await ask(), /--effort/);
   await a.sessions.handle({ type: 'session.effort', sessionId: sid, effort: 'high' } as any, local);
