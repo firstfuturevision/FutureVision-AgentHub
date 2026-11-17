@@ -2534,6 +2534,7 @@ function renderPanel() {
   $('panel-btn').hidden = !s || Boolean(s.info.remotePc);
   $('panel').hidden = !(show && panelIsOpen());
   document.querySelector('.app').classList.toggle('with-panel', show && panelIsOpen());
+  $('panel-resizer').hidden = !(show && panelIsOpen());
   if (!show || !panelIsOpen()) return;
   const preset = s.info.preset ? presets.find((p) => p.id === s.info.preset.id) : undefined;
 
@@ -4185,3 +4186,41 @@ function askDialog({ title, text = '', input, placeholder = '', ok = '확인', d
     if (field) field.select();
   });
 }
+
+// ── 양옆 넓이 끌기: 왼쪽 목록 180~480px, 작업 정보 240~560px, 가운데 대화는 420px 아래로 줄지 않게. 이 브라우저에 기억, 두 번 누르면 기본 ──
+(() => {
+  const app = document.querySelector('.app');
+  const DEF = { side: 260, panel: 300 };
+  const LIM = { side: [180, 480], panel: [240, 560] };
+  const w = { side: Number(store.get('sideW', DEF.side)) || DEF.side, panel: Number(store.get('panelW', DEF.panel)) || DEF.panel };
+  const apply = () => { app.style.setProperty('--side-w', `${w.side}px`); app.style.setProperty('--panel-w', `${w.panel}px`); };
+  const fit = (which, px) => {
+    const other = which === 'side' ? (app.classList.contains('with-panel') ? w.panel : 0) : w.side;
+    const room = window.innerWidth - other - 420; // 가운데 대화 자리
+    return Math.round(Math.max(LIM[which][0], Math.min(LIM[which][1], room, px)));
+  };
+  const hook = (el, which) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('drag');
+      document.body.classList.add('resizing');
+      const move = (ev) => { w[which] = fit(which, which === 'side' ? ev.clientX : window.innerWidth - ev.clientX); apply(); };
+      const up = () => {
+        el.classList.remove('drag');
+        document.body.classList.remove('resizing');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+        store.set(which === 'side' ? 'sideW' : 'panelW', w[which]);
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
+    el.addEventListener('dblclick', () => { w[which] = DEF[which]; apply(); store.set(which === 'side' ? 'sideW' : 'panelW', w[which]); });
+  };
+  hook($('side-resizer'), 'side');
+  hook($('panel-resizer'), 'panel');
+  apply();
+})();
