@@ -14,7 +14,7 @@ export const DEFAULT_INTAKE_MODEL = 'opus';
 
 export class IntakeStore {
   private file: string;
-  private s: Saved = { model: DEFAULT_INTAKE_MODEL };
+  private s: Saved = { model: DEFAULT_INTAKE_MODEL, newTasksOn: true };
   /** 아직 넘기지 않은 요청(id → 요청). 다시 켜면 사라진다 — 그때는 사람이 다시 보낸다 */
   pending = new Map<string, IntakeRequest>();
   private seq = 0;
@@ -24,13 +24,13 @@ export class IntakeStore {
     try {
       if (existsSync(file)) {
         const raw = JSON.parse(readFileSync(file, 'utf8'));
-        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}), recent: Array.isArray(raw.recent) ? raw.recent.slice(-50) : [], newTasksOn: raw.newTasksOn === true };
+        this.s = { model: typeof raw.model === 'string' && raw.model ? raw.model.slice(0, 80) : DEFAULT_INTAKE_MODEL, ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}), recent: Array.isArray(raw.recent) ? raw.recent.slice(-50) : [], newTasksOn: raw.newTasksOn !== false };
       }
     } catch {}
   }
 
   get model() { return this.s.model; }
-  /** 새 작업을 입력 거치기 켠 채로(처음 설치는 꺼짐 — 지시마다 한 번 더 거쳐 늦고 비용이 들어, 쓰는 사람이 켠다) */
+  /** 새 작업(새로 만들기 · 분담 · 포크 · 다른 PC 에서 옮겨 온 것)을 입력 거치기 켠 채로. 처음 설치부터 켜짐 — 끄면 꺼진 채로 기억 */
   get newTasksOn() { return Boolean(this.s.newTasksOn); }
   setNewTasksOn(on: unknown) { if (typeof on === 'boolean') { this.s.newTasksOn = on; this.save(); } }
   get sessionId() { return this.s.sessionId; }

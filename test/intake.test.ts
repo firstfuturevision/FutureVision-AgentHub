@@ -94,11 +94,18 @@ test('새 작업 기본 입력 거치기: 켜 두면 이 화면에서 사람이 
     return (events.filter((e) => e.type === 'session.created')[n] as any).session;
   };
   try {
-    assert.equal(sessions.intake.newTasksOn, false); // 처음 설치는 꺼짐
+    assert.equal(sessions.intake.newTasksOn, true); // 처음 설치부터 켜짐
+    sessions.intake.setNewTasksOn(false);
     assert.equal((await made({ title: '꺼짐' })).viaIntake, undefined);
+    assert.equal(new IntakeStore(join(base, 'data', 'intake.json')).newTasksOn, false, '끈 것은 꺼진 채로 기억');
     sessions.intake.setNewTasksOn(true);
     const t = await made({ title: '새 작업' });
     assert.equal(t.viaIntake, true);
+    // 분담 · 포크로 만든 작업도 켜진 채로
+    const nSplit = events.filter((e) => e.type === 'session.created').length;
+    await sessions.handle({ type: 'session.split', sessionId: t.id }, local);
+    await waitFor(events, () => events.filter((e) => e.type === 'session.created').length > nSplit);
+    assert.equal((events.filter((e) => e.type === 'session.created').at(-1) as any).session.viaIntake, true);
     assert.equal((await made({ title: '대시보드', via: { app: '대시보드', label: '프로젝트 A' } })).viaIntake, undefined);
     assert.equal((await made({ title: '예약' }, { via: 'local' as const, user: '예약' })).viaIntake, undefined);
     // 첫 지시가 입력 세션을 거치고, 입력 세션 자신은 켜지지 않는다
@@ -121,6 +128,7 @@ test('입력 거치기 모두 켜기: 입력 세션 자신·보관한 작업은 
   const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
   sessions.intake = new IntakeStore(join(base, 'data', 'intake.json'));
   sessions.subscribe((e) => events.push(e));
+  sessions.intake.setNewTasksOn(false); // 이 시험은 작업마다 직접 켠다
   const made = async (title: string) => {
     const n = events.filter((e) => e.type === 'session.created').length;
     await sessions.handle({ type: 'session.create', agent: 'claude', role: 'main', title }, local);
@@ -161,6 +169,7 @@ test('넘기기 전에 정리: 입력 세션은 받는 작업의 컨텍스트 �
   const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), claudeHome: join(base, 'home'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
   sessions.intake = new IntakeStore(join(base, 'data', 'intake.json'));
   sessions.subscribe((e) => events.push(e));
+  sessions.intake.setNewTasksOn(false); // 이 시험은 작업마다 직접 켠다
   const pending = async () => {
     await waitFor(events, () => events.filter((e) => e.type === 'session.intake' && e.state === 'pending').length > 0);
     return (events.filter((e) => e.type === 'session.intake' && e.state === 'pending').at(-1) as any).request as string;

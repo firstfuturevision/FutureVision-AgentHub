@@ -1832,7 +1832,8 @@ export class SessionManager {
       ...(o.autoApprove && !o.permMode ? { autoApprove: true } : {}),
       ...(o.permMode ? { permMode: o.permMode } : {}),
       ...(o.cliSessionId ? { cliSessionId: o.cliSessionId, imported: true } : {}),
-      ...(o.viaIntake ? { viaIntake: true } : {}),
+      // 입력 거치기: 정했으면 그대로, 아니면 새 작업 기본값(분담 · 포크 · 복사 · 옮겨 온 작업 포함). 입력 세션 자신 · 바깥 시스템이 만든 작업 · 작업자는 빼고
+      ...((o.viaIntake ?? (o.role === 'main' && !o.via && !this.makingIntake && Boolean(this.intake?.newTasksOn))) ? { viaIntake: true } : {}),
       title: o.title ?? (o.role === 'main' ? '메인 에이전트' : `${o.agent} 작업`),
       workdir: o.workdir,
       requestedBy: o.origin.user,
