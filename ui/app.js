@@ -1928,7 +1928,7 @@ function reduceEvent(s, ev, at) {
       else if (ev.state === 'asked') { s.items.push({ k: 'intake-ask', t: ev.text }); s.doneAt = at; if (replayed) notify(s, `입력 세션 물음 · ${ev.text.split('\n')[0]}`); }
       else if (ev.state === 'routed') s.items.push({ k: 'note', t: `입력 세션: ${ev.text}` });
       break;
-    case 'session.archived': if (ev.archived) { s.info.archived = true; if (viewId === s.info.id && !$('chat').hidden && replayed) viewId = null; } else delete s.info.archived; renderArchiveCount(); break;
+    case 'session.archived': if (ev.archived) { s.info.archived = true; if (viewId === s.info.id && !$('chat').hidden && replayed) viewId = null; } else delete s.info.archived; renderArchiveCount(); if (replayed) refreshLinks(); break;
     case 'session.about': if (ev.about) s.info.about = ev.about; else delete s.info.about; break;
     case 'session.rewound': {
       // 되감기: upTo 번째 사람 지시까지만 남기고 그 뒤는 화면에서도 걷는다(기록 파일에는 남음)
@@ -1967,6 +1967,7 @@ function reduceEvent(s, ev, at) {
       break;
     case 'session.halted': s.draft = null; s.items.push({ k: 'line halt', t: '멈춤' }); break;
     case 'session.cli': s.info.cliSessionId = ev.cliSessionId; return;
+    case 'session.model': s.info.lastModel = ev.model; return;
     case 'session.imported': s.items.push({ k: 'note', t: `Claude Code 에서 가져온 대화${ev.shown ? `(끝부분 ${ev.shown}개)` : ''}. 보내면 그 대화에 이어서 해요` }); break;
     // 원격 접속으로 온 글은 보낸 곳을 그 연결 이름으로(대시보드 · 채팅 #일반)
     case 'user.message':
@@ -2538,6 +2539,7 @@ function renderPanel() {
   if (!show || !panelIsOpen()) return;
   const preset = s.info.preset ? presets.find((p) => p.id === s.info.preset.id) : undefined;
 
+  renderModel(s);
   renderAbout(s);
   renderContext(s);
   renderLinks(s);
@@ -2701,6 +2703,23 @@ async function moveDialog(s, remote) {
 
 /** 생각 깊이(effort): 작업마다, 다음 차례부터(일하는 중이면 끝난 뒤). Claude 만 받는다 */
 const EFFORT_NAMES = { low: '낮게 (low)', medium: '보통 (medium)', high: '높게 (high)', xhigh: '아주 높게 (xhigh)', max: '최대 (max)' };
+/** 작업 정보 맨 위: 지금 도는 모델과 모델 고르기(다음 차례부터, 같은 대화로) */
+function renderModel(s) {
+  const box = $('p-model');
+  box.replaceChildren();
+  box.closest('.psec').hidden = s.info.role === 'worker';
+  const now = el('div', 'p-model-now');
+  now.append(el('b', '', modelNow(s) || '아직 모름'), el('span', 'p-meta', s.info.lastModel ? ' 마지막 차례에 쓴 모델' : ' 다음 차례에 알 수 있어요'));
+  const l = el('label', 'p-conf-row');
+  const sel = el('select');
+  sel.append(new Option('기본 (CLI 설정 그대로)', ''), ...models[s.info.agent].map((m) => new Option(m.name, m.id)));
+  if (s.info.model && ![...sel.options].some((o) => o.value === s.info.model)) sel.append(new Option(s.info.model, s.info.model));
+  sel.value = s.info.model ?? '';
+  sel.onchange = () => send({ type: 'session.setModel', sessionId: s.info.id, model: sel.value || null });
+  l.append(el('span', 'p-meta', '모델'), sel);
+  box.append(now, l, el('div', 'p-meta', `${s.info.status === 'working' || s.info.status === 'starting' ? '지금 차례가 끝난 뒤' : '다음 지시'}부터 같은 대화로 이어서 씁니다.`));
+}
+
 function effortRow(s) {
   const box = el('div', 'p-effort');
   const l = el('label', 'p-conf-row');
@@ -2858,7 +2877,10 @@ function renderLinks(s) {
     const line = firstLine(rep.t);
     return rep.at && !line.includes(stampText({ at: rep.at })) ? `${line}${when(rep.at)}` : line; // 글에 이미 그 시각이 있으면 한 번만
   };
-  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id) forks.push({ s: f, label: '하위 작업', sub: titleOf(f), report: lastNews(f) });
+  // 보관된(합쳐진 것 포함) 하위 작업은 빼고 맨 아래에 개수만 — 왼쪽 "보관"에서 꺼낼 수 있다
+  let archivedKids = 0;
+  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id && f.info.archived) archivedKids++;
+  for (const f of sessions.values()) if (f.info.role === 'main' && parentOfTask(f) === s.info.id && !f.info.archived) forks.push({ s: f, label: '하위 작업', sub: titleOf(f), report: lastNews(f) });
   // 이 작업 아래에 둔 다른 PC 작업: 그 작업이 보내 온 마지막 공유의 마지막 보고
   for (const r of remoteTasks().under.get(s.info.id) ?? []) {
     const m = [...s.items].reverse().find((it) => it.k === 'merged' && it.fromId === `peer:${r.pc.name}:${r.t.id}`);
@@ -2874,6 +2896,7 @@ function renderLinks(s) {
     (pendingPerm(w) || w.info.status === 'working' || w.info.status === 'starting' ? running : rest).push(l);
   }
   fillLinks($('p-sessions'), forks);
+  if (archivedKids) $('p-sessions').append(el('div', 'p-empty', `보관된 하위 작업 ${archivedKids}개(합친 작업 포함) — 왼쪽 "보관"에서 볼 수 있어요`));
   fillLinks($('p-running'), running);
   fillLinks($('p-subtasks'), rest);
 }
@@ -3388,9 +3411,9 @@ function remoteGroup(n, depth, tagged) {
   if (depth) stateMark(head, st === '작업 중', st === '승인 대기');
   b.append(head);
   const now = st === '작업 중' ? `${n.t.doing || '작업 중'}${n.t.since ? ` · ${sinceText(n.t.since)}` : ''}` : st;
-  if (!depth) b.append(el('span', `task-sub${st === '승인 대기' ? ' wait' : st === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${now}`));
+  if (!depth) b.append(el('span', `task-sub${st === '승인 대기' ? ' wait' : st === '작업 중' ? ' busy' : ''}`, `${n.pc.name} · ${n.t.model ? `${shortModel(n.t.model)} · ` : ''}${now}`));
   else if (st === '작업 중') b.append(el('span', 'task-sub busy', now));
-  b.title = [`${n.t.name} · ${n.pc.name} · ${st}`, n.t.about, '누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)'].filter(Boolean).join('\n');
+  b.title = [`${n.t.name} · ${n.pc.name}${n.t.model ? ` · ${shortModel(n.t.model)}` : ''} · ${st}`, n.t.about, '누르면 여기서 대화를 열어요(우클릭: 그 PC 화면 새 탭)'].filter(Boolean).join('\n');
   b.onclick = () => openRemote(n.pc, n.t); // 이 화면 가운데에서 그 작업 대화
   b.oncontextmenu = (e) => { e.preventDefault(); openRemoteMenu(n, e.clientX, e.clientY); }; // 우클릭: 작업 메뉴(그 PC 에서 실행)
   b.draggable = true;
@@ -3726,12 +3749,12 @@ function taskRow(s, depth, open) {
   // 일하는 중이면 지금 하는 일과 경과 시간, 아니면 AI · 상태 · 만든 시각
   const state = wait ? '승인 대기' : busy ? `${doingOf(s) || '작업 중'} · ${sinceText(s.compactAt ?? s.turnStart ?? Date.now())}` : ask ? '확인 필요' : fresh ? '새 답' : STATUS[s.info.status];
   if (!depth) {
-    const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '웹 · ' : ''}${time}`);
+    const sub = el('span', `task-sub${wait ? ' wait' : busy ? ' busy' : ask ? ' ask' : fresh ? ' fresh' : ''}`, busy && !wait ? state : `${modelNow(s) || NAMES[s.info.agent]} · ${state} · ${s.info.via === 'dashboard' ? '웹 · ' : ''}${time}`);
     sub.title = sub.textContent;
     b.append(sub);
     b.title = titleOf(s); // 잘린 이름 전체
   } else {
-    b.title = `${titleOf(s)} · ${state} · ${time}`;
+    b.title = `${titleOf(s)} · ${modelNow(s) ? `${modelNow(s)} · ` : ''}${state} · ${time}`;
     if (busy && !wait) b.append(el('span', 'task-sub busy', state)); // 하위 작업도 일하는 중이면 지금 하는 일 한 줄
   }
   b.onclick = () => { viewId = s.info.id; showNav('sessions'); render(); };
@@ -3758,6 +3781,8 @@ function renderChat() {
   }
   $('welcome').hidden = Boolean(s);
   $('chat-title').textContent = s ? `${s.info.remotePc ? `${s.info.remotePc} · ` : ''}${titleOf(s)}` : '새 작업';
+  $('chat-model').textContent = s ? modelNow(s) : '';
+  $('chat-model').title = s && s.info.lastModel ? `마지막 차례에 쓴 모델: ${s.info.lastModel}${s.info.model ? ` · 작업 설정: ${modelName(s.info.agent, s.info.model)}` : ' · 작업 설정: 기본(CLI 설정 그대로)'}` : '';
   const wait = s && waitingIn(s);
   $('chat-status').textContent = s ? (wait ? '승인 대기' : STATUS[s.info.status]) : '';
   $('chat-status').classList.toggle('wait', Boolean(wait));
@@ -3807,6 +3832,15 @@ function renderChat() {
 }
 
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
+/** 실제로 돈 모델의 짧은 이름: claude-opus-5-5 → Opus 5.5, claude-fable-5-2[1m] → Fable 5.2 (모르는 이름은 그대로) */
+function shortModel(id) {
+  if (!id) return '';
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?/.exec(id);
+  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
+  return models.claude.find((x) => x.id === id)?.name ?? id;
+}
+/** 이 작업이 지금 쓰는 모델: 마지막 차례에 실제로 쓴 모델, 아직 없으면 정해 둔 모델 */
+const modelNow = (s) => shortModel(s.info.lastModel) || (s.info.model ? modelName(s.info.agent, s.info.model) : '');
 // 답한 승인 요청도 접힌 줄 안으로(카드는 아직 답하지 않은 것만)
 const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || (it.k === 'perm' && it.resolved);
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');

@@ -59,6 +59,7 @@ export interface SessionInfo {
   permMode?: PermMode;
   permAllow?: string[]; // 데이터만: 요청을 보내도 되는 주소(앞부분)
   aliases?: string[]; // 예전 이름(최근 5개). 작업 이름으로 찾는 곳(session_send·바깥 시스템)이 이 이름도 알아듣는다
+  lastModel?: string; // 마지막 차례에 실제로 쓴 모델(CLI 가 알려 준 이름)
   cliSessionId?: string; // Claude 만: CLI 의 대화 id. 다시 띄울 때 --resume 으로 그 대화에 그대로 이어 간다
   imported?: boolean; // 이 PC 의 Claude Code 세션을 가져와 이어 가는 작업
   title: string;
@@ -76,6 +77,7 @@ export type HostEvent =
   | { type: 'session.ended'; sessionId: string; reason: string } // CLI 가 꺼짐. 작업은 대기로 남고 다음 지시 때 다시 띄운다
   | { type: 'session.halted'; sessionId: string; by: string } // 멈춤(■): 하던 차례만 멈춤
   | { type: 'session.cli'; sessionId: string; cliSessionId: string } // CLI 가 알려 준 대화 id(바뀔 때만)
+  | { type: 'session.model'; sessionId: string; model: string } // 실제로 돈 모델(CLI 가 알려 줌, 바뀔 때만)
   | { type: 'session.imported'; sessionId: string; shown: number } // Claude Code 에서 가져옴 — 앞의 shown 개는 그 대화의 끝부분
   | { type: 'user.message'; sessionId: string; text: string; from: string; attachments?: Attachment[]; via?: RemoteVia; author?: Author; effort?: Effort } // effort: 입력 세션이 이 지시에만 고른 생각 깊이
   // 원격 접속 막기·풀기(기록에 남아 다시 켜도 그대로)
@@ -142,6 +144,7 @@ export type ClientCommand =
   | { type: 'session.mergeInto'; sessionId: string; targetId: string }
   | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string }
   | { type: 'session.moveToPeer'; sessionId: string; url: string; folder?: string; secrets?: string[] } // 다른 PC 로 옮기기(folder = 받는 PC 작업 폴더 이름, secrets = 함께 옮길 비밀 파일)
+  | { type: 'session.setModel'; sessionId: string; model: string | null } // 모델만 바꾸기(null = CLI 기본). 같은 대화로 다음 차례부터
   | { type: 'session.effort'; sessionId: string; effort: Effort | null } // 생각 깊이(null = CLI 기본). 다음 차례부터 // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
   | { type: 'session.reorder'; sessionId: string; rank: number }
   | { type: 'session.fork'; sessionId: string; upTo?: number } // 같은 설정·폴더로 새 작업을 만들고 대화를 이어받는다. upTo: 사람 지시 몇 번째 차례까지(없으면 전부)
@@ -284,6 +287,9 @@ export function parseCommand(raw: unknown): ClientCommand | null {
     case 'session.moveToPeer':
       if (!str(c.sessionId) || !str(c.url)) return null;
       return { type: 'session.moveToPeer', sessionId: c.sessionId as string, url: c.url as string, ...(str(c.folder) ? { folder: (c.folder as string).slice(0, 80) } : {}), ...(Array.isArray(c.secrets) ? { secrets: (c.secrets as unknown[]).filter(str).slice(0, 50) as string[] } : {}) };
+    case 'session.setModel':
+      if (!str(c.sessionId) || !(c.model === null || (str(c.model) && MODEL_RE.test(c.model as string)))) return null;
+      return { type: 'session.setModel', sessionId: c.sessionId as string, model: c.model as string | null };
     case 'session.effort':
       if (!str(c.sessionId) || !(c.effort === null || EFFORTS.includes(c.effort as Effort))) return null;
       return { type: 'session.effort', sessionId: c.sessionId as string, effort: c.effort as Effort | null };

@@ -322,6 +322,7 @@ export class SessionManager {
         if (e.type === 'session.rewound') delete info.cliSessionId; // 되감은 뒤에는 옛 Claude 대화로 이어 가지 않는다
         if (e.type === 'session.dirs') info.extraDirs = e.dirs;
         if (e.type === 'session.cli') info.cliSessionId = e.cliSessionId;
+        if (e.type === 'session.model') info.lastModel = e.model;
         if (e.type === 'session.configured') Object.assign(info, { agent: e.session.agent, model: e.session.model, preset: e.session.preset, workPreset: e.session.workPreset, autoApprove: e.session.autoApprove, permMode: e.session.permMode, permAllow: e.session.permAllow, effort: e.session.effort, movedTo: e.session.movedTo });
       }
       // 길면 최근 것만. 만든 기록(session.created)은 꼭 남긴다 — 없으면 화면이 그 작업을 모른다
@@ -899,6 +900,7 @@ export class SessionManager {
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기',
+        ...(l.info.lastModel ? { model: l.info.lastModel } : {}), // 마지막 차례에 쓴 모델
         ...this.activityOf(l), // 일하는 중이면 지금 하는 일 · 시작 시각(다른 PC 화면에 같은 모양으로) // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
@@ -922,6 +924,7 @@ export class SessionManager {
         ...(l.info.about ? { about: l.info.about } : {}),
         ...(this.recentOf(l) ? { recent: this.recentOf(l) } : {}),
         status: l.info.status === 'working' || l.info.status === 'starting' ? (this.waitingPerm(l) ? '승인 대기' : '작업 중') : '대기',
+        ...(l.info.lastModel ? { model: l.info.lastModel } : {}), // 마지막 차례에 쓴 모델
         ...this.activityOf(l), // 일하는 중이면 지금 하는 일 · 시작 시각(다른 PC 화면에 같은 모양으로) // 다른 PC 화면의 상태 표시(승인을 기다리는 건 일하는 중일 때뿐 — 화면과 같은 기준)
         context: this.contextNote(l),
         ...(src ? { [l.info.splitFrom ? 'splitFrom' : 'forkedFrom']: this.nameOf(src) } : {}),
@@ -1277,7 +1280,10 @@ export class SessionManager {
         if (live.info.status === 'working' || live.info.status === 'starting') this.halt(live, origin.user);
         live.info.archived = true;
         this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
-        this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함)` });
+        // 예약도 받는 작업으로 옮긴다(보관된 작업의 예약은 돌지 않아 그대로 두면 멈춘다)
+        const moved = this.schedules?.moveSession(live.info.id, target.info.id) ?? 0;
+        if (moved) this.publish({ type: 'schedules.changed' });
+        this.publish({ type: 'notice', sessionId: target.info.id, message: `${this.nameOf(live)} 를 합침(그 작업은 보관함${moved ? ` · 예약 ${moved}개를 이 작업으로 옮김` : ''})` });
         return;
       }
       case 'session.moveToPeer': {
@@ -1288,6 +1294,18 @@ export class SessionManager {
         } catch (err) {
           this.publish({ type: 'error', sessionId: live.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` });
         }
+        return;
+      }
+      case 'session.setModel': {
+        // 모델만 바꾸기: 생각 깊이처럼 같은 대화로 다음 차례부터(쉬는 중이면 지금 내려 두고, 일하는 중이면 끝난 뒤)
+        const live = this.get(cmd.sessionId);
+        if (!live || live.info.role !== 'main') return;
+        if ((live.info.model ?? null) === cmd.model) return;
+        if (cmd.model) live.info.model = cmd.model;
+        else delete live.info.model;
+        this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } });
+        if (live.info.status === 'working' || live.info.status === 'starting') live.relaunch = true;
+        else this.sleep(live);
         return;
       }
       case 'session.effort': {
@@ -2026,6 +2044,11 @@ export class SessionManager {
     if (ev.type === 'turn.done') this.limits?.turn(live.info.agent, this.accountOf(live), ev.costUsd);
     // 이번 차례만의 생각 깊이가 끝나면 작업 설정으로: 떠 있는 CLI 가 다른 깊이면 차례가 끝난 뒤 내려 두어 다음 지시에 작업 설정으로 다시 뜨게
     if (ev.type === 'turn.done' && live.turnEffort) { delete live.turnEffort; if ((live.launchedEffort ?? null) !== (live.info.effort ?? null)) live.relaunch = true; }
+    if (ev.type === 'session.model') {
+      // 실제로 도는 모델은 바뀔 때만 기록
+      if (live.info.lastModel === ev.model) return;
+      live.info.lastModel = ev.model;
+    }
     if (ev.type === 'session.cli') {
       // 대화 id 는 바뀔 때만 기록(다시 켠 뒤 --resume 에 쓴다)
       if (live.info.cliSessionId === ev.cliSessionId) return;

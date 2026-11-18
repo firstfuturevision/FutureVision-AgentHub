@@ -69,7 +69,7 @@ test('계층 옮기기·합치기: 끌어 놓은 부모로 옮기고(새 부모�
   const ws = join(base, 'ws');
   mkdirSync(ws);
   const events: HostEvent[] = [];
-  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
+  const sessions = new SessionManager({ workspaceRoot: ws, dataDir: join(base, 'data'), schedules: new ScheduleStore(join(base, 'data', 'schedules.json')), makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [fake], permissionMode: 'default' }) });
   sessions.subscribe((e) => events.push(e));
   try {
     const mk = async (title: string) => {
@@ -100,7 +100,10 @@ test('계층 옮기기·합치기: 끌어 놓은 부모로 옮기고(새 부모�
     assert.doesNotMatch(toA[0].text, /옛 일 OLD/); // 옮긴 뒤부터
     // 다 를 만들고 나 를 다 에 합치기: 나 의 일 전체가 다 로, 나 는 보관
     const c = await mk('다');
+    const sch = (sessions as any).schedules.save({ sessionId: b, prompt: '매일 할 일', repeat: 'daily', time: '09:00', enabled: true });
     await sessions.handle({ type: 'session.mergeInto', sessionId: b, targetId: c }, local);
+    assert.equal((sessions as any).schedules.list().find((x: any) => x.id === sch.id).sessionId, c); // 예약도 받는 작업으로
+    assert.ok(events.some((e: any) => e.type === 'notice' && e.sessionId === c && /예약 1개/.test(e.message)));
     const toC = events.filter((e) => e.type === 'session.merged' && e.sessionId === c) as any[];
     assert.equal(toC.length, 1);
     assert.match(toC[0].text, /옛 일 OLD/);

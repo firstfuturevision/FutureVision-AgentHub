@@ -120,6 +120,14 @@ export class ScheduleStore {
     if (this.items.length !== n) this.flush();
   }
 
+  /** 작업을 합칠 때 그 작업의 예약을 받는 작업으로 옮긴다. 옮긴 수를 돌려준다 */
+  moveSession(from: string, to: string): number {
+    let n = 0;
+    for (const s of this.items) if (s.sessionId === from) { s.sessionId = to; n++; }
+    if (n) this.flush();
+    return n;
+  }
+
   /** now 기준으로 실행할 차례가 된 것 */
   due(now: Date): Schedule[] {
     return this.list().filter((s) => s.enabled && s.nextAt && Date.parse(s.nextAt) <= now.getTime());

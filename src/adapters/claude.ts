@@ -182,6 +182,7 @@ export class ClaudeAdapter implements AgentAdapter {
         return;
 
       case 'system':
+        if (ev.subtype === 'init' && typeof ev.model === 'string' && ev.model) this.emit({ type: 'session.model', model: ev.model });
         if (ev.subtype === 'init' && typeof ev.session_id === 'string' && ev.session_id !== this.claudeSessionId) {
           this.claudeSessionId = ev.session_id;
           this.emit({ type: 'session.cli', cliSessionId: ev.session_id });
@@ -205,6 +206,8 @@ export class ClaudeAdapter implements AgentAdapter {
 
       case 'assistant': {
         if (ev.parent_tool_use_id) return; // 하위 에이전트 내부 대화는 화면에 올리지 않는다
+        // 실제 답한 모델(설정과 다를 수 있다 — 한도에 걸려 바뀐 경우 등)
+        if (typeof ev.message?.model === 'string' && ev.message.model && !ev.message.model.startsWith('<')) this.emit({ type: 'session.model', model: ev.message.model });
         const u = ev.message?.usage;
         if (u) this.lastUsed = num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens) + num(u.output_tokens);
         if (ev.error) {

@@ -16,7 +16,7 @@ const ANNOUNCE_MS = 30_000;
 const FORGET_MS = 120_000; // 이만큼 안 들리면 찾은 목록에서 뺀다(손으로 더한 것은 남음)
 const TIMEOUT_MS = 3000;
 
-export interface PeerTask { name: string; id: string; status: string; rank?: number; remoteParent?: { url: string; id: string; pc: string }; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number; doing?: string; since?: number }
+export interface PeerTask { name: string; id: string; status: string; rank?: number; remoteParent?: { url: string; id: string; pc: string }; about?: string; recent?: string; splitFrom?: string; forkedFrom?: string; schedules?: number; doing?: string; since?: number; model?: string }
 export interface PeerSummary { name: string; url?: string; version?: string; tasks: PeerTask[] }
 export interface PeerView { url: string; manual: boolean; seenAt?: number; name?: string; ok: boolean; error?: string; summary?: PeerSummary; intake?: { model: string } | null; memory?: { items: number; guide: boolean } | null }
 
