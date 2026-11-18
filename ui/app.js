@@ -2710,10 +2710,11 @@ function renderModel(s) {
   box.closest('.psec').hidden = s.info.role === 'worker';
   const now = el('div', 'p-model-now');
   now.append(el('b', '', modelNow(s) || '아직 모름'), el('span', 'p-meta', s.info.lastModel ? ' 마지막 차례에 쓴 모델' : ' 다음 차례에 알 수 있어요'));
+  if (modelNext(s)) now.append(el('div', 'p-meta', `다음 차례부터 ${modelNext(s)}`));
   const l = el('label', 'p-conf-row');
   const sel = el('select');
   sel.append(new Option('기본 (CLI 설정 그대로)', ''), ...models[s.info.agent].map((m) => new Option(m.name, m.id)));
-  if (s.info.model && ![...sel.options].some((o) => o.value === s.info.model)) sel.append(new Option(s.info.model, s.info.model));
+  if (s.info.model && ![...sel.options].some((o) => o.value === s.info.model)) sel.append(new Option(shortModel(s.info.model), s.info.model));
   sel.value = s.info.model ?? '';
   sel.onchange = () => send({ type: 'session.setModel', sessionId: s.info.id, model: sel.value || null });
   l.append(el('span', 'p-meta', '고르기'), sel);
@@ -2777,7 +2778,7 @@ function configForm(s) {
     const agent = aiSel.value;
     const want = keepModel ?? p?.model ?? '';
     mSel.replaceChildren(new Option(p ? '에이전트 기본' : '기본', ''), ...models[agent].map((m) => new Option(m.name, m.id)));
-    if (want && ![...mSel.options].some((o) => o.value === want)) mSel.append(new Option(want, want));
+    if (want && ![...mSel.options].some((o) => o.value === want)) mSel.append(new Option(shortModel(want), want));
     mSel.value = want;
     Object.assign(d, { wp: wpSel.value, ag: agSel.value, ai: aiSel.value, m: mSel.value });
   };
@@ -3781,7 +3782,7 @@ function renderChat() {
   }
   $('welcome').hidden = Boolean(s);
   $('chat-title').textContent = s ? `${s.info.remotePc ? `${s.info.remotePc} · ` : ''}${titleOf(s)}` : '새 작업';
-  $('chat-model').textContent = s ? modelNow(s) : '';
+  $('chat-model').textContent = s ? `${modelNow(s)}${modelNext(s) ? ` → ${modelNext(s)}` : ''}` : '';
   $('chat-model').title = s && s.info.lastModel ? `마지막 차례에 쓴 모델: ${s.info.lastModel}${s.info.model ? ` · 작업 설정: ${modelName(s.info.agent, s.info.model)}` : ' · 작업 설정: 기본(CLI 설정 그대로)'}` : '';
   const wait = s && waitingIn(s);
   $('chat-status').textContent = s ? (wait ? '승인 대기' : STATUS[s.info.status]) : '';
@@ -3840,7 +3841,9 @@ function shortModel(id) {
   return models.claude.find((x) => x.id === id)?.name ?? id;
 }
 /** 이 작업이 지금 쓰는 모델: 마지막 차례에 실제로 쓴 모델, 아직 없으면 정해 둔 모델 */
-const modelNow = (s) => shortModel(s.info.lastModel) || (s.info.model ? modelName(s.info.agent, s.info.model) : '');
+const modelNow = (s) => shortModel(s.info.lastModel) || (s.info.model ? shortModel(s.info.model) : '');
+/** 정해 둔 모델이 마지막 차례와 다르면 다음 차례부터 쓸 모델 이름(같거나 정한 게 없으면 '') */
+const modelNext = (s) => { const want = s.info.model ? shortModel(s.info.model) : ''; return want && s.info.lastModel && want !== shortModel(s.info.lastModel) ? want : ''; };
 // 답한 승인 요청도 접힌 줄 안으로(카드는 아직 답하지 않은 것만)
 const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || (it.k === 'perm' && it.resolved);
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');
