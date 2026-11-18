@@ -2716,7 +2716,7 @@ function renderModel(s) {
   if (s.info.model && ![...sel.options].some((o) => o.value === s.info.model)) sel.append(new Option(s.info.model, s.info.model));
   sel.value = s.info.model ?? '';
   sel.onchange = () => send({ type: 'session.setModel', sessionId: s.info.id, model: sel.value || null });
-  l.append(el('span', 'p-meta', '모델'), sel);
+  l.append(el('span', 'p-meta', '고르기'), sel);
   box.append(now, l, el('div', 'p-meta', `${s.info.status === 'working' || s.info.status === 'starting' ? '지금 차례가 끝난 뒤' : '다음 지시'}부터 같은 대화로 이어서 씁니다.`));
 }
 
