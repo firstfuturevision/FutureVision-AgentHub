@@ -1312,11 +1312,14 @@ export class SessionManager {
         if (!live || live.info.role !== 'main') return;
         try {
           // 하위 작업도 함께: 위 작업을 먼저 옮기고, 그 아래 작업을 차례로 받는 PC 의 그 작업 아래로(위 · 하위 관계 그대로)
-          const moveTree = async (l: Live, parentId?: string, folder?: string, secrets: string[] = []) => {
+          // 하위 작업이 위 작업 폴더(또는 그 안)를 쓰면 파일은 위 작업과 함께 한 번만 보내고, 받는 PC 에서 같은 폴더를 쓴다
+          const moveTree = async (l: Live, parent?: { id: string; from: string; to: string }, folder?: string, secrets: string[] = []) => {
             const kids = cmd.withKids ? [...this.sessions.values()].filter((k) => k.info.role === 'main' && !k.info.archived && (k.info.splitFrom ?? k.info.forkedFrom) === l.info.id) : [];
-            const newId = await this.moveToPeer(l, cmd.url, folder, secrets, parentId);
+            const inside = parent && (l.info.workdir === parent.from || l.info.workdir.startsWith(parent.from + sep));
+            const reuse = inside ? (l.info.workdir === parent!.from ? parent!.to : `${parent!.to}/${relative(parent!.from, l.info.workdir).split(sep).join('/')}`) : undefined;
+            const done = await this.moveToPeer(l, cmd.url, folder, secrets, parent?.id, Boolean(cmd.withKids), reuse);
             for (const k of kids) {
-              try { await moveTree(k, newId); } catch (err) { this.publish({ type: 'error', sessionId: k.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` }); }
+              try { await moveTree(k, { id: done.sessionId, from: l.info.workdir, to: done.workdir }); } catch (err) { this.publish({ type: 'error', sessionId: k.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` }); }
             }
           };
           await moveTree(live, undefined, cmd.folder, cmd.secrets ?? []);
@@ -2225,11 +2228,20 @@ export class SessionManager {
   private get moveDir() { const d = join(this.logDir, '..', 'moves'); mkdirSync(d, { recursive: true }); return d; }
 
   /** 옮기기 전에 보여 줄 것(파일 수 · 크기 · 빼는 것 · 비밀 파일 · 옮길 수 없는 것 · 예약) */
-  movePlan(sessionId: string): MovePlan & { schedules: number; busy: boolean } {
+  /** 그 작업과 그 아래 작업(보관된 것 빼고) */
+  private treeOf(live: Live): Live[] {
+    const out = [live];
+    for (let i = 0; i < out.length; i++) for (const k of this.sessions.values()) if (k.info.role === 'main' && !k.info.archived && (k.info.splitFrom ?? k.info.forkedFrom) === out[i].info.id && !out.includes(k)) out.push(k);
+    return out;
+  }
+
+  /** withKids: 하위 작업도 함께 옮기면 그 작업들이 함께 쓰는 폴더는 "이 작업만 쓰는 폴더"로 본다 */
+  movePlan(sessionId: string, withKids = false): MovePlan & { schedules: number; busy: boolean } {
     const live = this.sessions.get(sessionId);
     if (!live || live.info.role !== 'main') throw new Error('없는 작업');
     const folder = live.info.workdir;
-    const others = [...this.sessions.values()].filter((l) => l !== live && l.info.role === 'main' && !l.info.archived);
+    const together = withKids ? this.treeOf(live) : [live];
+    const others = [...this.sessions.values()].filter((l) => !together.includes(l) && l.info.role === 'main' && !l.info.archived);
     const shared = others.find((l) => l.info.workdir === folder || l.info.workdir.startsWith(folder + sep));
     const own = folder !== resolve(this.workspaceRoot) && !shared;
     const scan = own ? scanFolder(folder) : { files: 0, bytes: 0, skipped: [], secrets: [], git: false };
@@ -2238,24 +2250,27 @@ export class SessionManager {
       folder, own, ...(own ? {} : { why: folder === resolve(this.workspaceRoot) ? '작업 폴더가 모든 작업이 함께 쓰는 맨 위 폴더라, 폴더는 두고 대화 · 첨부만 옮김' : `작업 폴더를 "${this.nameOf(shared!)}" 작업도 써서, 폴더는 두고 대화 · 첨부만 옮김` }),
       ...scan, setup: own ? setupCommands(folder) : [], cannot: cannotMove(folder, text),
       schedules: this.schedules?.forSession(live.info.id).length ?? 0,
-      busy: live.info.status === 'working' || live.info.status === 'starting',
+      busy: together.some((l) => l.info.status === 'working' || l.info.status === 'starting'),
     };
   }
 
-  private async moveToPeer(live: Live, rawUrl: string, folderName: string | undefined, secrets: string[], parentId?: string): Promise<string> {
+  /** reuse: 위 작업과 같은 폴더를 쓰던 하위 작업 — 파일은 위 작업이 이미 옮겼으니 받는 PC 의 그 폴더(dir)를 그대로 쓴다 */
+  private async moveToPeer(live: Live, rawUrl: string, folderName: string | undefined, secrets: string[], parentId?: string, withKids = false, reuse?: string): Promise<{ sessionId: string; workdir: string }> {
     const peers = this.peers;
     if (!peers) throw new Error('연결 기능이 꺼져 있음');
     if (live.info.id === this.intake?.sessionId) throw new Error('입력 세션은 옮기지 않는다(PC 마다 하나)');
+    if (live.info.archived) throw new Error(live.info.movedTo ? `이미 ${live.info.movedTo.pc} 로 옮긴 작업(보관됨)` : '보관된 작업은 옮기지 않는다 — 꺼낸 뒤에');
     if (live.info.status === 'working' || live.info.status === 'starting') throw new Error('일하는 중 — 끝난 뒤에 옮긴다');
     const view = (await peers.all()).find((v) => v.url === rawUrl);
     if (!view?.ok) throw new Error(view ? `그 PC 와 연결이 끊김(${view.error ?? ''})` : '연결된 PC 가 아님');
-    const plan = this.movePlan(live.info.id);
+    const plan = reuse !== undefined ? { ...this.movePlan(live.info.id), own: false } : this.movePlan(live.info.id, withKids);
     const say = (message: string) => this.publish({ type: 'notice', sessionId: live.info.id, message });
     // 1) 묶기: 이 작업만 쓰는 폴더면 폴더 전체(뺄 것 · 고르지 않은 비밀 파일 빼고), 아니면 이 작업 첨부만
     const id = `${live.info.id.slice(0, 8)}-${createHash('sha1').update(rawUrl).digest('hex').slice(0, 8)}`;
     const tgz = join(this.moveDir, `out-${id}.tgz`);
     say('옮기는 중 · 파일 묶는 중');
     if (plan.own) await packFolder(plan.folder, tgz, plan.secrets.filter((f) => !secrets.includes(f)));
+    else if (reuse !== undefined) rmSync(tgz, { force: true }); // 위 작업 묶음에 이미 들어 있다
     else {
       const atts = [...new Set(live.history.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []).map((a) => a.path) : [])))].filter((p) => this.attachmentPath(live, p));
       if (atts.length) await packFiles(plan.folder, tgz, atts);
@@ -2290,7 +2305,7 @@ export class SessionManager {
       // 여러 작업이 함께 쓰는 폴더(예: workspace)면 그 이름 대신 작업 이름으로 — 받는 PC 에 workspace\\workspace 처럼 겹치지 않게
       folder: (folderName || (plan.own ? basename(plan.folder) : this.nameOf(live)) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
       own: plan.own, git: plan.git, setup: plan.setup, cannot: plan.cannot, fromPc: peers.summary().name, fromId: live.info.id, secrets: secrets.length,
-      viaIntake: Boolean(live.info.viaIntake), ...(parentId ? { parentId } : {}),
+      viaIntake: Boolean(live.info.viaIntake), ...(parentId ? { parentId } : {}), ...(reuse !== undefined ? { reuse } : {}),
     };
     const done = (await peers.post(view.url, '/peer/move/finish', { id, sha1: size ? sha1 : '', meta })) as { sessionId: string; workdir: string };
     rmSync(tgz, { force: true });
@@ -2311,7 +2326,7 @@ export class SessionManager {
     live.info.archived = true;
     this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
     this.notice(`${this.nameOf(live)} 를 ${view.name}(${done.workdir}) 로 옮김 — 이 PC 에서는 보관하고 예약은 껐음. 되돌리려면 그 PC 작업에서 다시 이 PC 로 옮긴다`);
-    return done.sessionId;
+    return done;
   }
 
   /** 받는 PC: 옮겨 오는 묶음 받기 시작(이미 받은 만큼을 알려 이어 받는다) */
@@ -2344,7 +2359,9 @@ export class SessionManager {
     // 받을 폴더: 이 PC 작업 뿌리 아래 새 폴더(있으면 -2, -3 …)
     const base = String(m.folder ?? 'moved').replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '').slice(0, 80) || 'moved';
     let dest = join(this.workspaceRoot, base);
-    for (let i = 2; existsSync(dest) && readdirSync(dest).length; i++) dest = join(this.workspaceRoot, `${base}-${i}`);
+    const reuse = typeof m.reuse === 'string' ? resolve(m.reuse) : '';
+    if (reuse && (reuse === resolve(this.workspaceRoot) || reuse.startsWith(resolve(this.workspaceRoot) + sep)) && existsSync(reuse)) dest = reuse; // 위 작업과 같은 폴더
+    else for (let i = 2; existsSync(dest) && readdirSync(dest).length; i++) dest = join(this.workspaceRoot, `${base}-${i}`);
     mkdirSync(dest, { recursive: true });
     const renamed = b.sha1 ? (await unpackTo(file, dest)).renamed : [];
     rmSync(file, { force: true });

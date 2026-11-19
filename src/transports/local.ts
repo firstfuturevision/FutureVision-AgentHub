@@ -86,7 +86,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
       }
       // 옮기기 전에 보여 줄 것(이 PC 화면이 부른다)
       if (req.method === 'GET' && url.pathname === '/move/plan') {
-        try { return json(res, 200, sessions.movePlan(url.searchParams.get('sessionId') ?? '')); } catch (err) { return send(res, 400, (err as Error).message); }
+        try { return json(res, 200, sessions.movePlan(url.searchParams.get('sessionId') ?? '', url.searchParams.get('withKids') === '1')); } catch (err) { return send(res, 400, (err as Error).message); }
       }
       // 다른 PC 가 작업을 이 PC 작업에 합치며 따로 보내는 그림 한 장(같은 그림은 건너뜀)
       if (req.method === 'POST' && url.pathname === '/peer/image') {

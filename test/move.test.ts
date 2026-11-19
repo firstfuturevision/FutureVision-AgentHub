@@ -71,6 +71,12 @@ test('다른 PC 로 옮기기: 대화 · 역할 · 예약 · 작업 폴더(git �
   assert.equal(a.schedules.forSession(id)[0].enabled, false, '원래 PC 에서는 끔');
   assert.equal(a.sessions.info(id)!.archived, true);
   assert.deepEqual(a.sessions.info(id)!.movedTo, { url: b.url, id: made.id, pc: 'b' });
+  // 이미 옮긴(보관된) 작업은 다시 옮기지 않는다 — 두 번 눌러 받는 PC 에 같은 작업이 둘 생기지 않게
+  const nb = b.events.filter((e) => e.type === 'session.created').length;
+  await a.sessions.handle({ type: 'session.moveToPeer', sessionId: id, url: b.url } as any, local);
+  assert.ok(a.events.some((e) => e.type === 'error' && /이미 b 로 옮긴/.test(e.message)));
+  assert.equal(b.events.filter((e) => e.type === 'session.created').length, nb);
+  a.events.splice(0, a.events.length, ...a.events.filter((e) => e.type !== 'error'));
   assert.ok(b.events.some((e) => e.type === 'notice' && /할 일/.test(e.message)), '옮길 수 없는 것을 받는 쪽 할 일로');
 
   // 되돌리기: 받은 PC 에서 다시 원래 PC 로(비밀 파일을 골라 함께)
@@ -99,12 +105,14 @@ test('옮기기 이어 받기: 받은 만큼은 건너뛰고, 내용이 바뀌�
 test('옮기기: 하위 작업도 함께(받는 PC 에서도 그 아래로), 채팅 그림 · 모델 · 생각 깊이 · 입력 거치기 설정도 그대로', async () => {
   const a = pc('a'), b = pc('b');
   link(a, b);
-  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', model: 'claude-opus-5-5' }, local);
+  mkdirSync(join(a.ws, 'proj', '첨부'), { recursive: true });
+  writeFileSync(join(a.ws, 'proj', '첨부', '한글.txt'), '내용');
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', model: 'claude-opus-5-5', workdir: 'proj' }, local);
   const top = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
   await a.sessions.handle({ type: 'session.effort', sessionId: top, effort: 'high' } as any, local);
   await a.sessions.handle({ type: 'session.setIntake', sessionId: top, on: true } as any, local);
   await a.sessions.handle({ type: 'session.setIntake', sessionId: top, on: false } as any, local);
-  await a.sessions.handle({ type: 'session.split', sessionId: top }, local);
+  await a.sessions.handle({ type: 'session.split', sessionId: top }, local); // 하위 작업은 위 작업과 같은 폴더
   const kid = (await waitFor(a.events, (e) => e.type === 'session.created' && e.session.splitFrom === top)).session.id;
   // 채팅 그림 하나(작은 png)
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -116,6 +124,8 @@ test('옮기기: 하위 작업도 함께(받는 PC 에서도 그 아래로), 채
   assert.equal(made.length, 2, '위 · 하위 작업 둘 다');
   const [bTop, bKid] = made;
   assert.equal(b.sessions.info(bKid.id)!.splitFrom, bTop.id, '받는 PC 에서도 위 작업 아래로');
+  assert.equal(b.sessions.info(bKid.id)!.workdir, b.sessions.info(bTop.id)!.workdir, '같은 폴더를 쓰던 하위 작업은 받는 PC 에서도 같은 폴더');
+  assert.equal(readFileSync(join(b.sessions.info(bTop.id)!.workdir, '첨부', '한글.txt'), 'utf8'), '내용', '함께 쓰던 폴더는 위 작업과 함께 한 번에');
   assert.equal(b.sessions.info(bTop.id)!.model, 'claude-opus-5-5');
   assert.equal(b.sessions.info(bTop.id)!.effort, 'high');
   assert.ok(!b.sessions.info(bTop.id)!.viaIntake, '입력 거치기 꺼 둔 것 그대로');

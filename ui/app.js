@@ -2700,23 +2700,31 @@ async function moveDialog(s, remote) {
   const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
   const info = el('div', 'move-info');
   const picks = [];
-  if (plan) {
-    const ul = (title, items) => { if (!items.length) return; info.append(el('div', 'move-h', title)); const u = el('ul'); for (const x of items) u.append(el('li', '', x)); info.append(u); };
-    ul('옮기는 것', ['대화 기록 · 요약 · 역할 설명', `예약 ${plan.schedules}개(이 PC 에서는 끄고 받는 PC 에서 켬)`, plan.own ? `작업 폴더 파일 ${plan.files.toLocaleString()}개 · ${mb(plan.bytes)}${plan.git ? ' (git 저장소 — 커밋 안 된 변경까지)' : ''}` : `첨부 파일만 — ${plan.why}`]);
-    ul('빼는 것(받는 PC 에서 다시 만듦)', plan.skipped.slice(0, 8).concat(plan.skipped.length > 8 ? [`… 외 ${plan.skipped.length - 8}개`] : []));
-    if (plan.setup.length) ul('받는 PC 에서 돌릴 설치 명령', plan.setup);
-    if (plan.secrets.length) {
-      info.append(el('div', 'move-h', '비밀일 수 있는 파일 — 고른 것만 옮김(내용은 보이지 않음)'));
-      for (const f of plan.secrets.slice(0, 20)) { const l = el('label', 'move-secret'); const c = el('input'); c.type = 'checkbox'; c.value = f; picks.push(c); l.append(c, ` ${f}`); info.append(l); }
-    }
-    ul('옮길 수 없는 것 — 받는 PC 에서 할 일', plan.cannot);
-  } else info.append(el('p', 'hint', `${remote.pc.name} 이 옮깁니다. 옮길 것 · 뺄 것은 그 PC 기준으로 같고, 비밀 파일은 옮기지 않습니다.`));
-  info.append(el('p', 'hint', '이 작업은 지우지 않고 "옮김"으로 보관해 되돌릴 수 있어요(받은 PC 작업에서 다시 옮기기).'));
+  const drawInfo = (plan) => {
+    info.replaceChildren();
+    picks.length = 0;
+    if (plan) {
+      const ul = (title, items) => { if (!items.length) return; info.append(el('div', 'move-h', title)); const u = el('ul'); for (const x of items) u.append(el('li', '', x)); info.append(u); };
+      ul('옮기는 것', ['대화 기록 · 요약 · 역할 설명 · 채팅 그림 · 모델 · 생각 깊이 · 입력 거치기 설정', `예약 ${plan.schedules}개(이 PC 에서는 끄고 받는 PC 에서 켬)`, plan.own ? `작업 폴더 파일 ${plan.files.toLocaleString()}개 · ${mb(plan.bytes)}${plan.git ? ' (git 저장소 — 커밋 안 된 변경까지)' : ''}` : `첨부 파일만 — ${plan.why}`]);
+      ul('빼는 것(받는 PC 에서 다시 만듦)', plan.skipped.slice(0, 8).concat(plan.skipped.length > 8 ? [`… 외 ${plan.skipped.length - 8}개`] : []));
+      if (plan.setup.length) ul('받는 PC 에서 돌릴 설치 명령', plan.setup);
+      if (plan.secrets.length) {
+        info.append(el('div', 'move-h', '비밀일 수 있는 파일 — 고른 것만 옮김(내용은 보이지 않음)'));
+        for (const f of plan.secrets.slice(0, 20)) { const l = el('label', 'move-secret'); const c = el('input'); c.type = 'checkbox'; c.value = f; picks.push(c); l.append(c, ` ${f}`); info.append(l); }
+      }
+      ul('옮길 수 없는 것 — 받는 PC 에서 할 일', plan.cannot);
+    } else info.append(el('p', 'hint', `${remote.pc.name} 이 옮깁니다. 옮길 것 · 뺄 것은 그 PC 기준으로 같고, 비밀 파일은 옮기지 않습니다.`));
+    info.append(el('p', 'hint', '이 작업은 지우지 않고 "옮김"으로 보관해 되돌릴 수 있어요(받은 PC 작업에서 다시 옮기기).'));
+  };
+  drawInfo(plan);
   box.append(info);
-  // 하위 작업이 있으면 함께 옮길지(받는 PC 에서도 그 작업 아래로)
+  // 하위 작업이 있으면 함께 옮길지(받는 PC 에서도 그 작업 아래로). 고르면 함께 쓰는 폴더도 이 묶음의 폴더로 보고 다시 계산
   const kidsN = s ? mainsAll().filter((k) => k !== s && descendsFrom(k, s) && !k.info.archived).length : 0;
   const withKids = el('input'); withKids.type = 'checkbox';
-  if (kidsN) { const l = el('label', 'move-secret'); l.append(withKids, ` 하위 작업 ${kidsN}개도 함께 옮기기(받는 PC 에서도 이 작업 아래로)`); box.append(l); }
+  if (kidsN) {
+    const l = el('label', 'move-secret'); l.append(withKids, ` 하위 작업 ${kidsN}개도 함께 옮기기(받는 PC 에서도 이 작업 아래로)`); box.append(l);
+    withKids.onchange = async () => { const p2 = await getJson(`/move/plan?sessionId=${encodeURIComponent(s.info.id)}${withKids.checked ? '&withKids=1' : ''}`, null); if (p2) { if (p2.busy) flash('함께 옮길 작업 중 일하는 것이 있어요 — 끝난 뒤에', true); drawInfo(p2); } };
+  }
   const foot = el('div', 'dlg-foot');
   const no = el('button', 'dlg-no', '취소'); no.type = 'button';
   const ok = el('button', 'dlg-yes', '옮기기'); ok.type = 'button';
