@@ -267,3 +267,24 @@ function link(href) {
   a.rel = 'noopener noreferrer';
   return a;
 }
+
+/**
+ * 그림 · 파일 주소를 한 가지로 — 이 화면을 내준 서버 기준 상대 주소(images/… · attachment?… · peers/file?…).
+ * '/' 로 시작하는 주소는 대시보드 원격 연결 중계(/agent-hub/<이름>/)에서 접두어에 기대야 하고, 예전 버전이 보낸
+ * 사내망 주소(http://192.168…:4319/images/…)는 바깥 · 휴대폰에서 열리지 않았다. 읽을 때 고쳐 보인다(예전 기록도).
+ */
+export const SERVED = /^\/(images\/[\w-]+\/[\w-]+\.(png|jpe?g|gif|webp)|attachment\?.+)$/i;
+/** peers: 연결된 PC 목록({ url }) — 그 PC 주소로 걸린 그림은 이 서버를 거쳐(peers/file) */
+export function serverUrl(u, peers = []) {
+  if (typeof u !== 'string' || !u || /^(blob|data):/i.test(u)) return u;
+  const m = /^(https?:\/\/[^/?#]+)(\/.*)$/i.exec(u);
+  if (m) {
+    if (!SERVED.test(m[2])) return u; // 바깥 주소는 그대로
+    const origin = m[1].toLowerCase();
+    if (origin === (globalThis.location?.origin ?? '').toLowerCase()) return m[2].slice(1);
+    const peer = peers.find((p) => (p.url ?? '').replace(/\/+$/, '').toLowerCase() === origin);
+    if (peer) return `peers/file?url=${encodeURIComponent(peer.url)}&path=${encodeURIComponent(m[2])}`;
+    return m[2].slice(1); // 이 PC 의 다른 주소(사내망 IP · 원격 포트)로 걸린 이 PC 그림 — 이 서버에서
+  }
+  return u.startsWith('/') && !u.startsWith('//') ? u.slice(1) : u;
+}

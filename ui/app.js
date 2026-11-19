@@ -1,6 +1,12 @@
 // Agent Hub 화면 — 왼쪽 작업 목록, 가운데 메인 에이전트 대화(작업자 카드 포함), 아래 입력창.
 // 대시보드 화면도 같은 이벤트를 받으므로 이 렌더링 규칙을 그대로 옮겨 쓴다.
-import { renderMarkdown } from './md.js';
+import { renderMarkdown as mdRender, serverUrl, SERVED } from './md.js';
+/** 마크다운 + 본문 속 이 서버 그림 · 첨부 링크를 같은 주소 규칙으로(중계 · 휴대폰에서도 열리게) */
+function renderMarkdown(text) {
+  const root = mdRender(text);
+  for (const a of root.querySelectorAll('a[href]')) { const h = a.getAttribute('href'); const n = assetUrl(h); if (n !== h) a.setAttribute('href', n); }
+  return root;
+}
 
 const NAMES = { claude: 'Claude', gemini: 'Gemini', codex: 'Codex' };
 const AGENTS = ['claude', 'codex', 'gemini'];
@@ -3993,7 +3999,7 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
 /** 그림 크게 보기: 화면에 맞춰 띄우고, 그림을 누르면 원래 크기(넘치면 끌어 보기), 바깥 · Esc · 닫기로 닫는다 */
 function openImage(url, caption) {
   const back = el('div', 'lightbox');
-  const img = el('img');
+  const img = guardImg(el('img'));
   img.src = url;
   img.alt = caption || '';
   img.onclick = (e) => { e.stopPropagation(); back.classList.toggle('zoom'); };
@@ -4014,9 +4020,32 @@ function openImage(url, caption) {
   document.addEventListener('keydown', key, true);
   document.body.append(back);
 }
+/** 그림 · 파일 주소를 서버 기준 상대 주소로(md.js serverUrl) */
+const assetUrl = (u) => serverUrl(u, peerState?.peers ?? []);
 /** 그 작업의 그림 주소: 다른 PC 작업이면 이 PC 서버를 거쳐 그 PC 에서 */
 function peerFile(s, path) {
-  return s?.info.remoteUrl ? `/peers/file?url=${encodeURIComponent(s.info.remoteUrl)}&path=${encodeURIComponent(path)}` : path;
+  return s?.info.remoteUrl && SERVED.test(path ?? '') ? `peers/file?url=${encodeURIComponent(s.info.remoteUrl)}&path=${encodeURIComponent(path)}` : assetUrl(path);
+}
+/** 그림을 못 받으면 깨진 그림 대신 "그림을 찾을 수 없음 · 다시 받기"(누르면 다시 받음) */
+function guardImg(img) {
+  img.onerror = () => {
+    if (!img.isConnected || img.dataset.gone) return;
+    img.dataset.gone = '1';
+    const box = el('span', 'img-gone');
+    box.append(el('span', '', '그림을 찾을 수 없음'));
+    const again = el('button', 'p-mini', '다시 받기');
+    again.type = 'button';
+    again.onclick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const src = img.getAttribute('src') ?? '';
+      delete img.dataset.gone;
+      img.src = `${src.replace(/([?&])_r=\d+&?/, '$1').replace(/[?&]$/, '')}${src.includes('?') ? '&' : '?'}_r=${Date.now()}`;
+      box.replaceWith(img);
+    };
+    box.append(again);
+    img.replaceWith(box);
+  };
+  return img;
 }
 function imageItem(it) {
   const fig = el('figure', 'shot');
@@ -4025,7 +4054,7 @@ function imageItem(it) {
   a.target = '_blank';
   a.rel = 'noopener';
   a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.button === 1) return; e.preventDefault(); openImage(it.url, [it.from, it.caption].filter(Boolean).join(' · ')); };
-  const img = el('img');
+  const img = guardImg(el('img'));
   img.src = it.url;
   img.alt = it.caption || it.name || '';
   img.loading = 'lazy';
@@ -4132,7 +4161,7 @@ function thumbRow(imgs) {
   const row = el('div', 'thumbs');
   for (const g of imgs) {
     if (!g.url) continue;
-    const img = el('img');
+    const img = guardImg(el('img'));
     img.src = g.url; img.alt = g.caption || g.name || ''; img.loading = 'lazy';
     img.title = [g.from ? `${g.from} 에서` : '', g.caption].filter(Boolean).join(' · ') + ' — 누르면 크게';
     img.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openImage(g.url, [g.from, g.caption].filter(Boolean).join(' · ')); };
@@ -4213,8 +4242,7 @@ function item(it) {
       const own = it.sid && remoteOf(it.sid);
       const url = thumbs.get(f.path) ?? (pic && it.sid ? peerFile(sessions.get(it.sid), `/attachment?sessionId=${encodeURIComponent(own ? own.id : it.sid)}&path=${encodeURIComponent(f.path)}`) : null);
       if (url) {
-        const img = el('img'); img.src = url; img.alt = ''; img.loading = 'lazy';
-        img.onerror = () => img.remove(); // 지워진 첨부
+        const img = guardImg(el('img')); img.src = url; img.alt = ''; img.loading = 'lazy';
         chip.append(img);
         chip.classList.add('pic');
         chip.title = `${f.name} — 누르면 크게`;
