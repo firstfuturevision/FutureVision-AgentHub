@@ -218,6 +218,8 @@ body.resizing iframe { pointer-events: none; }
 .fold-line { font-size: 13px; color: var(--ink-soft); word-break: break-all; }
 .fold-line.fail { color: var(--warn); }
 .intake-msg { display: flex; flex-direction: column; gap: 6px; }
+.intake-msg.under { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--rule); }
+.intake-state { font-size: 12px; color: var(--ink-faint); }
 .intake-fold { align-self: flex-start; font-size: 12px; color: var(--ink-soft); padding: 2px 8px; margin-left: -8px; border-radius: 6px; }
 .intake-fold:hover { background: var(--hover, rgba(127,127,127,.12)); }
 .intake-fold .chev { display: inline-block; margin-left: 4px; transition: transform .12s; color: var(--ink-faint); }

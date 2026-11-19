@@ -1941,9 +1941,11 @@ function reduceEvent(s, ev, at) {
     case 'session.intake':
       if (replayed && ev.state !== 'pending') setTimeout(() => void loadIntake(), 300);
       // 입력 세션: 정리 중 · 물음(확인 필요로 보임) · 다른 작업으로 보냄. 넘긴 지시는 "입력"이 보낸 글로 따로 들어온다
-      if (ev.state === 'pending') s.items.push({ k: 'note', t: '입력 세션이 지시를 정리하는 중' });
-      else if (ev.state === 'asked') { s.items.push({ k: 'intake-ask', t: ev.text }); s.doneAt = at; if (replayed) notify(s, `입력 세션 물음 · ${ev.text.split('\n')[0]}`); }
-      else if (ev.state === 'routed') s.items.push({ k: 'note', t: `입력 세션: ${ev.text}` });
+      // 화면은 사람 말풍선 하나에 모은다: 정리 중 · 물음 · 다른 작업으로 보냄을 그 말풍선 아래 작은 줄로(AI 에게 가는 글은 그대로)
+      { const own = intakeTarget(s, ev.state === 'pending');
+        if (ev.state === 'pending') { if (own) own.intake = { state: 'pending' }; else s.items.push({ k: 'note', t: '입력 세션이 지시를 정리하는 중' }); }
+        else if (ev.state === 'asked') { if (own) own.intake = { state: 'asked', text: ev.text }; else s.items.push({ k: 'intake-ask', t: ev.text }); s.doneAt = at; if (replayed) notify(s, `입력 세션 물음 · ${ev.text.split('\n')[0]}`); }
+        else if (ev.state === 'routed') { if (own) own.intake = { state: 'routed', text: ev.text }; else s.items.push({ k: 'note', t: `입력 세션: ${ev.text}` }); } }
       break;
     case 'session.archived': if (ev.archived) { s.info.archived = true; if (viewId === s.info.id && !$('chat').hidden && replayed) viewId = null; } else delete s.info.archived; renderArchiveCount(); if (replayed) refreshLinks(); break;
     case 'session.about': if (ev.about) s.info.about = ev.about; else delete s.info.about; break;
@@ -1990,7 +1992,12 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      s.items.push({ k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort }); s.turnStart = at; s.doing = null; break;
+      { const u = { k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort };
+        // 입력 세션이 정리한 지시: 원래 사람 말풍선이 이 작업에 있으면 그 아래 접기 줄로 붙이고 이 글은 따로 그리지 않는다(되감기 번호는 그대로 세게 목록에는 남김)
+        const own = INTAKE_HEAD.test(ev.text) ? intakeTarget(s, false) : null;
+        if (own) { own.intake = { state: 'done', brief: intakeBrief(ev.text) }; u.hidden = true; }
+        s.items.push(u); }
+      s.turnStart = at; s.doing = null; break;
     case 'session.remotes': s.remotes = ev.remotes; break;
     case 'session.remoteBlocked': s.items.push({ k: 'note', t: `원격 접속 ${ev.blocked ? '막음' : '풂'}: ${ev.app} · ${ev.label}` }); break;
     case 'agent.text':
@@ -3961,6 +3968,7 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
   for (let i = from; i < items.length; ) {
     const it = items[i];
     if (it.k === 'user') users++;
+    if (it.hidden) { i++; continue; } // 사람 말풍선 아래로 붙인 입력 세션 정리본
     if (it !== skip && it.k !== 'line meta' && !isToolLine(it) && it.k !== 'worker') mark(it);
     if (it === skip || it.k === 'line meta') { i++; continue; } // 걸린 시간은 카드에만
     if (isToolLine(it)) {
@@ -3997,6 +4005,7 @@ function renderItems(s, live, into, skip, from = 0, days = true) {
     else if (it.k === 'agent' && s.info.role === 'main') into.append(agentItem(s, it, users));
     else if (it.k === 'user' && s.info.role === 'main') {
       const div = item(it);
+      if (it.intake) div.append(intakeLine(it)); // 첨부 아래에 입력 세션 줄
       const turn = users;
       div.oncontextmenu = (e) => messageMenu(s, it, turn, e);
       into.append(div);
@@ -4169,6 +4178,43 @@ function agentItem(s, it, upTo) {
 /** 입력 세션이 정리한 지시: 정리본은 한 줄 머리로 접고(누르면 펼침 · 다시 누르면 접힘), [사람 원문] 부터는 늘 보이게. 펼침은 그 글에만 · 새로 고치면 다시 접힘 */
 const INTAKE_HEAD = /^\[입력 세션이 정리한 지시\]/;
 const intakeOpen = new WeakSet();
+/** 입력 세션이 지금 다루는 사람 말풍선: 마지막 사람 글(입력 세션 글 · 이미 끝난 것 빼고). fresh = 새로 정리를 시작할 때(아직 표시 없는 글만) */
+function intakeTarget(s, fresh) {
+  for (let i = s.items.length - 1; i >= 0; i--) {
+    const it = s.items[i];
+    if (it.k !== 'user' || it.hidden || it.pending) continue;
+    if (INTAKE_HEAD.test(it.t ?? '')) return null;
+    if (fresh) return it.intake ? null : it;
+    return it.intake && it.intake.state !== 'done' ? it : null;
+  }
+  return null;
+}
+/** 정리본에서 [사람 원문] 앞까지(원문은 사람 말풍선에 이미 있다) */
+function intakeBrief(text) {
+  const at = text.search(/\n\[사람 원문\]\n/);
+  return (at >= 0 ? text.slice(0, at) : text).replace(INTAKE_HEAD, '').replace(/^\n+/, '').trim();
+}
+/** 사람 말풍선 아래 입력 세션 줄: 정리 중 · 접기(누르면 정리본) · 물음 · 다른 작업으로 보냄 */
+function intakeLine(it) {
+  const x = it.intake;
+  const box = el('span', 'intake-msg under');
+  if (x.state === 'pending') box.append(el('span', 'intake-state', '입력 세션이 지시를 정리하는 중…'));
+  else if (x.state === 'routed') box.append(el('span', 'intake-state', `입력 세션: ${x.text}`));
+  else if (x.state === 'asked') {
+    box.append(el('span', 'intake-state', '입력 세션 물음 · 여기에 답하면 입력 세션이 받아요'));
+    const q = el('span', 'intake-brief'); q.append(renderMarkdown(x.text)); box.append(q);
+  } else {
+    const open = intakeOpen.has(it);
+    const head = el('button', `intake-fold${open ? ' open' : ''}`, `입력 세션이 정리한 지시 · ${open ? '접기' : '펼치기'}`);
+    head.type = 'button';
+    head.setAttribute('aria-expanded', String(open));
+    head.append(el('span', 'chev', '›'));
+    head.onclick = (e) => { e.stopPropagation(); if (intakeOpen.has(it)) intakeOpen.delete(it); else intakeOpen.add(it); renderChat(); };
+    box.append(head);
+    if (open) box.append(el('span', 'intake-brief', x.brief));
+  }
+  return box;
+}
 function intakeText(it) {
   const box = el('span', 'intake-msg');
   const at = it.t.search(/\n\[사람 원문\]\n/);
