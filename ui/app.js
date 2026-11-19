@@ -3417,14 +3417,22 @@ function remoteTasks() {
     const byName = new Map(tasks.map((t) => [t.name, t]));
     const node = new Map(tasks.map((t) => [t.id, { pc, t, kids: [] }]));
     const tops = [];
+    const pending = []; // [옮겨 간 위 작업 id, 줄] — 순서대로 다 모은 뒤 붙인다
     for (const t of [...tasks].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))) {
       const n = node.get(t.id);
       const rp = t.remoteParent;
-      if (rp && mine.has(rp.url) && sessions.get(rp.id)) { (under.get(rp.id) ?? under.set(rp.id, []).get(rp.id)).push(n); continue; }
+      if (rp && mine.has(rp.url) && sessions.get(rp.id)) {
+        const host = sessions.get(rp.id);
+        if (!host.info.archived) { (under.get(rp.id) ?? under.set(rp.id, []).get(rp.id)).push(n); continue; }
+        // 위 작업이 보관됨(다른 PC 로 옮겼으면 옮겨 간 곳 아래로) — 보이지 않는 자리에 묻히지 않게
+        const moved = host.info.movedTo;
+        if (moved && moved.url === pc.url && node.get(moved.id) && moved.id !== t.id) { pending.push([moved.id, n]); continue; }
+      }
       const parent = byName.get(t.splitFrom ?? t.forkedFrom ?? '');
       if (parent && parent !== t) node.get(parent.id).kids.push(n);
       else tops.push(n);
     }
+    for (const [pid, n] of pending) node.get(pid).kids.push(n);
     // 이 PC 작업 가운데 이 PC 를 다른 PC 작업 아래에 둔 것: 그 PC 묶음의 그 작업 아래에 그린다(두 PC 가 같은 모양)
     for (const s of mains()) {
       const rp = s.info.remoteParent;

@@ -2335,6 +2335,20 @@ export class SessionManager {
     this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } });
     live.info.archived = true;
     this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
+    // 이 작업 아래에 붙어 있던 다른 PC 작업도 옮겨 간 작업을 따라간다 — 그대로 두면 보관된 이 작업 아래에 묻혀 트리에서 안 보인다
+    try {
+      const me = peers.myUrl();
+      for (const v of await peers.all()) {
+        if (!v.ok) continue;
+        for (const t of v.summary?.tasks ?? []) {
+          if (!t.remoteParent || t.remoteParent.id !== live.info.id || (me && t.remoteParent.url !== me)) continue;
+          if (v.url === view.url) {
+            await peers.cmd(v.url, { type: 'session.reparent', sessionId: t.id, parentId: done.sessionId }); // 같은 PC 안의 위 · 하위로
+            if (typeof t.rank === 'number') await peers.cmd(v.url, { type: 'session.reorder', sessionId: t.id, rank: t.rank });
+          } else await peers.setParentTo(v.url, t.id, { url: view.url, id: done.sessionId, pc: view.name ?? '' });
+        }
+      }
+    } catch (err) { say(`옮겼지만 다른 PC 하위 작업 자리를 못 맞춤: ${(err as Error).message}`); }
     // 함께 옮기지 않은 하위 작업은 이 PC 에 남아 옮겨 간 작업(그 PC) 아래로 — 트리 자리 그대로, 한 일은 그 작업으로 공유
     if (!withKids) for (const k of [...this.sessions.values()]) if (k.info.role === 'main' && !k.info.archived && (k.info.splitFrom ?? k.info.forkedFrom) === live.info.id) this.setRemoteParent(k.info.id, { url: view.url, id: done.sessionId, pc: view.name ?? '' });
     this.notice(`${this.nameOf(live)} 를 ${view.name}(${done.workdir}) 로 옮김 — 이 PC 에서는 보관하고 예약은 껐음. 되돌리려면 그 PC 작업에서 다시 이 PC 로 옮긴다`);

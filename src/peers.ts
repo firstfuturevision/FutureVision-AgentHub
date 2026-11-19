@@ -217,6 +217,11 @@ export class Peers {
     await this.post(url, '/peer/parent', { taskId, parent: parentId ? { url: me, id: parentId, pc: myName } : null });
   }
 
+  /** 그 PC 의 작업을 어느 PC 작업 아래로든(옮긴 위 작업을 따라가게) */
+  async setParentTo(url: string, taskId: string, parent: { url: string; id: string; pc: string } | null) {
+    await this.post(url, '/peer/parent', { taskId, parent });
+  }
+
   /** 그 PC 에 명령 하나(작업 순서 바꾸기 등 — 그 PC 의 /cmd 로) */
   async cmd(url: string, cmd: unknown) {
     const r = await fetch(`${peerUrl(url)}/cmd`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd), signal: AbortSignal.timeout(TIMEOUT_MS * 2) });

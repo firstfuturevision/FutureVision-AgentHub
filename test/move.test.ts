@@ -29,7 +29,7 @@ function link(a: ReturnType<typeof pc>, b: ReturnType<typeof pc>) {
     myUrl: () => a.url,
     setParent: async (_u: string, taskId: string, parentId: string | null, me: string) => b.sessions.setRemoteParent(taskId, parentId ? { url: a.url, id: parentId, pc: me } : null),
     cmd: async (_u: string, c: any) => b.sessions.handle(c, local),
-    all: async () => [{ url: b.url, ok: true, name: b.name, summary: { name: b.name, tasks: [] } }],
+    all: async () => [{ url: b.url, ok: true, name: b.name, summary: b.sessions.peerSummary(b.name) }],
     post: async (_u: string, path: string, body: any) => (path === '/peer/move/start' ? b.sessions.moveStart(body) : path === '/peer/move/finish' ? b.sessions.moveFinish(body) : path === '/peer/image' ? b.sessions.receiveRemoteImage(body.to, body.fromPc, body.title, body) : null),
     postRaw: async (_u: string, path: string, buf: Buffer) => { const q = new URL(`http://x${path}`).searchParams; return b.sessions.moveChunk(q.get('id')!, Number(q.get('offset')), buf); },
   };
@@ -197,5 +197,24 @@ test('옮긴 뒤 트리 자리: 하위 작업만 옮기면 받는 PC 에서 원�
   const btop = b.events.filter((e) => e.type === 'session.created').at(-1).session.id;
   assert.deepEqual(a.sessions.info(k2)!.remoteParent, { url: b.url, id: btop, pc: 'b' }, '남은 하위 작업은 옮겨 간 작업 아래');
   assert.ok(!a.sessions.info(k2)!.splitFrom);
+  a.sessions.stopAll(); b.sessions.stopAll();
+});
+
+test('위 작업을 옮기면 그 아래에 붙어 있던 다른 PC 작업도 따라간다(받는 PC 작업이면 그 PC 안의 위 · 하위로, 순서 그대로)', async () => {
+  const a = pc('a'), b = pc('b');
+  link(a, b);
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude' }, local);
+  const top = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
+  // b 의 작업 하나가 a 의 top 아래에 있다(다른 PC 하위 작업)
+  await b.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude' }, local);
+  const hosted = (await waitFor(b.events, (e) => e.type === 'session.created')).session.id;
+  b.sessions.setRemoteParent(hosted, { url: a.url, id: top, pc: 'a' });
+  await b.sessions.handle({ type: 'session.reorder', sessionId: hosted, rank: 777 } as any, local);
+  await a.sessions.handle({ type: 'session.moveToPeer', sessionId: top, url: b.url } as any, local);
+  const btop = b.events.filter((e) => e.type === 'session.created').at(-1).session.id;
+  assert.notEqual(btop, hosted);
+  assert.equal(b.sessions.info(hosted)!.splitFrom, btop, '옮겨 온 위 작업 아래로');
+  assert.ok(!b.sessions.info(hosted)!.remoteParent, '보관된 a 의 작업을 더는 가리키지 않음');
+  assert.equal(b.sessions.info(hosted)!.rank, 777, '순서 그대로');
   a.sessions.stopAll(); b.sessions.stopAll();
 });
