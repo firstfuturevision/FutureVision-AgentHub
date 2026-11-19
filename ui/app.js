@@ -4155,6 +4155,27 @@ function agentItem(s, it, upTo) {
   return div;
 }
 
+/** 입력 세션이 정리한 지시: 정리본은 한 줄 머리로 접고(누르면 펼침 · 다시 누르면 접힘), [사람 원문] 부터는 늘 보이게. 펼침은 그 글에만 · 새로 고치면 다시 접힘 */
+const INTAKE_HEAD = /^\[입력 세션이 정리한 지시\]/;
+const intakeOpen = new WeakSet();
+function intakeText(it) {
+  const box = el('span', 'intake-msg');
+  const at = it.t.search(/\n\[사람 원문\]\n/);
+  const brief = (at >= 0 ? it.t.slice(0, at) : it.t).replace(INTAKE_HEAD, '').replace(/^\n+/, '');
+  const rest = at >= 0 ? it.t.slice(at + 1) : '';
+  const open = intakeOpen.has(it);
+  const head = el('button', `intake-fold${open ? ' open' : ''}`, `입력 세션이 정리한 지시 · ${open ? '접기' : '펼치기'}`);
+  head.type = 'button';
+  head.setAttribute('aria-expanded', String(open));
+  head.append(el('span', 'chev', '›'));
+  head.onclick = (e) => { e.stopPropagation(); if (intakeOpen.has(it)) intakeOpen.delete(it); else intakeOpen.add(it); renderChat(); };
+  box.append(head);
+  if (open) box.append(el('span', 'intake-brief', brief));
+  if (rest) box.append(el('span', 'intake-orig', rest.replace(/^\[사람 원문\]\n/, '')));
+  else if (!open) box.append(el('span', 'intake-orig hint', '(원문 없음 — 펼쳐서 보세요)'));
+  return box;
+}
+
 /** 하위 작업에서 공유받은 대화: 접힌 카드, 누르면 그 대화 */
 /** 하위 작업 그림 작은 줄: 누르면 크게 */
 function thumbRow(imgs) {
@@ -4230,7 +4251,7 @@ function item(it) {
   // 사람 글의 보낸 곳 · 쓴 사람은 시각 줄에(renderItems). 여기엔 보내는 중 · 못 보냄만
   const from = it.failed ? '못 보냄 — 다시 보내 주세요' : it.pending ? '보내는 중' : it.k === 'user' && it.at ? null : it.from;
   if (from && from !== 'local') div.append(el('span', 'from', from));
-  if (it.t) div.append(it.k === 'agent' ? renderMarkdown(it.t) : document.createTextNode(it.t)); // 에이전트 답만 마크다운
+  if (it.t) div.append(it.k === 'agent' ? renderMarkdown(it.t) : it.k === 'user' && INTAKE_HEAD.test(it.t) ? intakeText(it) : document.createTextNode(it.t)); // 에이전트 답만 마크다운
   if (it.files?.length) {
     // 첨부: 이 브라우저에서 올린 이미지는 미리보기, 나머지는 이름
     const box = el('div', 'msg-files');
