@@ -117,6 +117,8 @@ body.resizing iframe { pointer-events: none; }
 .ctx-menu { position: fixed; z-index: 60; max-height: min(360px, calc(100vh - 16px)); overflow-y: auto; min-width: 160px; padding: 4px; background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); display: flex; flex-direction: column; }
 .ctx-menu button { text-align: left; padding: 8px 12px; font-size: 14px; }
 .ctx-menu button.danger { color: var(--warn); }
+.ctx-menu button.off { color: var(--ink-faint); cursor: default; }
+.ctx-menu .menu-why { display: block; font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
 .ctx-menu button:focus-visible { outline: none; background: var(--hover); }
 /* 선택 상자 메뉴: 고른 것에 체크 */
 .ctx-menu.sel { gap: 1px; }

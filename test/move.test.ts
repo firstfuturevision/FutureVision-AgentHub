@@ -27,7 +27,7 @@ function link(a: ReturnType<typeof pc>, b: ReturnType<typeof pc>) {
   (a.sessions as any).peers = {
     summary: () => ({ name: a.name, tasks: [] }),
     all: async () => [{ url: b.url, ok: true, name: b.name, summary: { name: b.name, tasks: [] } }],
-    post: async (_u: string, path: string, body: any) => (path === '/peer/move/start' ? b.sessions.moveStart(body) : path === '/peer/move/finish' ? b.sessions.moveFinish(body) : null),
+    post: async (_u: string, path: string, body: any) => (path === '/peer/move/start' ? b.sessions.moveStart(body) : path === '/peer/move/finish' ? b.sessions.moveFinish(body) : path === '/peer/image' ? b.sessions.receiveRemoteImage(body.to, body.fromPc, body.title, body) : null),
     postRaw: async (_u: string, path: string, buf: Buffer) => { const q = new URL(`http://x${path}`).searchParams; return b.sessions.moveChunk(q.get('id')!, Number(q.get('offset')), buf); },
   };
 }
@@ -94,4 +94,33 @@ test('옮기기 이어 받기: 받은 만큼은 건너뛰고, 내용이 바뀌�
   assert.equal(b.sessions.moveStart({ id: 'abcd-1234', size: 12, sha1: 'y' }).have, 0, '바뀌었으면 처음부터');
   assert.throws(() => b.sessions.moveStart({ id: '../x', size: 1, sha1: 'z' }));
   b.sessions.stopAll();
+});
+
+test('옮기기: 하위 작업도 함께(받는 PC 에서도 그 아래로), 채팅 그림 · 모델 · 생각 깊이 · 입력 거치기 설정도 그대로', async () => {
+  const a = pc('a'), b = pc('b');
+  link(a, b);
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude', model: 'claude-opus-5-5' }, local);
+  const top = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
+  await a.sessions.handle({ type: 'session.effort', sessionId: top, effort: 'high' } as any, local);
+  await a.sessions.handle({ type: 'session.setIntake', sessionId: top, on: true } as any, local);
+  await a.sessions.handle({ type: 'session.setIntake', sessionId: top, on: false } as any, local);
+  await a.sessions.handle({ type: 'session.split', sessionId: top }, local);
+  const kid = (await waitFor(a.events, (e) => e.type === 'session.created' && e.session.splitFrom === top)).session.id;
+  // 채팅 그림 하나(작은 png)
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const img = join(a.base, 'shot.png'); writeFileSync(img, png);
+  await (a.sessions as any).showImage(top, { path: img });
+  await a.sessions.handle({ type: 'session.moveToPeer', sessionId: top, url: b.url, withKids: true } as any, local);
+  assert.ok(!a.events.some((e) => e.type === 'error'), JSON.stringify(a.events.filter((e) => e.type === 'error')));
+  const made = b.events.filter((e) => e.type === 'session.created').map((e) => e.session);
+  assert.equal(made.length, 2, '위 · 하위 작업 둘 다');
+  const [bTop, bKid] = made;
+  assert.equal(b.sessions.info(bKid.id)!.splitFrom, bTop.id, '받는 PC 에서도 위 작업 아래로');
+  assert.equal(b.sessions.info(bTop.id)!.model, 'claude-opus-5-5');
+  assert.equal(b.sessions.info(bTop.id)!.effort, 'high');
+  assert.ok(!b.sessions.info(bTop.id)!.viaIntake, '입력 거치기 꺼 둔 것 그대로');
+  assert.ok(b.events.some((e) => e.type === 'agent.image' && e.sessionId === bTop.id), '채팅 그림');
+  assert.equal(a.sessions.info(top)!.archived, true);
+  assert.equal(a.sessions.info(kid)!.archived, true);
+  a.sessions.stopAll(); b.sessions.stopAll();
 });

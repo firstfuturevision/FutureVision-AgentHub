@@ -2212,6 +2212,11 @@ function openTaskMenu(s, x, y) {
       }
       if (await askDialog({ title: '작업 합치기', text: `${titleOf(s).split('\n')[0].slice(0, 60)} 가 지금까지 한 일을 ${titleOf(t).split('\n')[0].slice(0, 60)} 에 넘기고${kids ? `, 그 아래 작업 ${kids}개도 그쪽으로 옮긴 뒤` : ''} 이 작업은 보관합니다(지우지 않아 왼쪽 보관에서 꺼낼 수 있어요).`, ok: '합치기' })) send({ type: 'session.mergeInto', sessionId: s.info.id, targetId: t.info.id });
     }],
+    (() => {
+      // 다른 PC로 옮기기: 입력 세션 · 일하는 중이면 흐리게 + 까닭
+      const why = s.info.id === intakeState?.sessionId ? '입력 세션은 PC 마다 하나라 옮기지 않아요' : s.info.status === 'working' || s.info.status === 'starting' ? '일하는 중 — 끝난 뒤에 옮길 수 있어요' : !(peerState?.peers ?? []).some((p) => p.ok) ? '연결된 PC 가 없어요(왼쪽 연결)' : '';
+      return ['다른 PC로 옮기기', () => moveDialog(s), why ? 'off' : '', why];
+    })(),
     ['복사', () => {
       pendingCopy = s.info.id;
       send({ type: 'session.copy', sessionId: s.info.id });
@@ -2229,10 +2234,11 @@ function openTaskMenu(s, x, y) {
       if (await askDialog({ title: '작업 삭제', text: `${short}\n${running}기록 파일은 남습니다.`, ok: '삭제', danger: true })) send({ type: 'session.delete', sessionId: s.info.id });
     }, 'danger'],
   ];
-  for (const [label, fn, cls] of items) {
+  for (const [label, fn, cls, why] of items) {
     const b = el('button', cls ?? '', label);
     b.type = 'button';
-    b.onclick = () => { closeMenu(); fn(); };
+    if (why) { b.disabled = true; b.title = why; b.append(el('span', 'menu-why', why)); }
+    else b.onclick = () => { closeMenu(); fn(); };
     menu.append(b);
   }
   placeMenu(x, y);
@@ -2707,6 +2713,10 @@ async function moveDialog(s, remote) {
   } else info.append(el('p', 'hint', `${remote.pc.name} 이 옮깁니다. 옮길 것 · 뺄 것은 그 PC 기준으로 같고, 비밀 파일은 옮기지 않습니다.`));
   info.append(el('p', 'hint', '이 작업은 지우지 않고 "옮김"으로 보관해 되돌릴 수 있어요(받은 PC 작업에서 다시 옮기기).'));
   box.append(info);
+  // 하위 작업이 있으면 함께 옮길지(받는 PC 에서도 그 작업 아래로)
+  const kidsN = s ? mainsAll().filter((k) => k !== s && descendsFrom(k, s) && !k.info.archived).length : 0;
+  const withKids = el('input'); withKids.type = 'checkbox';
+  if (kidsN) { const l = el('label', 'move-secret'); l.append(withKids, ` 하위 작업 ${kidsN}개도 함께 옮기기(받는 PC 에서도 이 작업 아래로)`); box.append(l); }
   const foot = el('div', 'dlg-foot');
   const no = el('button', 'dlg-no', '취소'); no.type = 'button';
   const ok = el('button', 'dlg-yes', '옮기기'); ok.type = 'button';
@@ -2719,7 +2729,7 @@ async function moveDialog(s, remote) {
   back.onmousedown = (e) => { if (e.target === back) close(); };
   ok.onclick = async () => {
     close();
-    const cmd = { type: 'session.moveToPeer', sessionId: remote ? remoteKey(remote.pc.url, remote.t.id) : s.info.id, url: pcSel.value, folder: folder.value.trim(), secrets: picks.filter((c) => c.checked).map((c) => c.value) };
+    const cmd = { type: 'session.moveToPeer', sessionId: remote ? remoteKey(remote.pc.url, remote.t.id) : s.info.id, url: pcSel.value, folder: folder.value.trim(), secrets: picks.filter((c) => c.checked).map((c) => c.value), ...(withKids.checked ? { withKids: true } : {}) };
     await send(cmd);
     flash('옮기는 중 — 진행은 그 작업 대화에 보여요');
   };

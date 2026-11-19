@@ -1311,7 +1311,15 @@ export class SessionManager {
         const live = this.get(cmd.sessionId);
         if (!live || live.info.role !== 'main') return;
         try {
-          await this.moveToPeer(live, cmd.url, cmd.folder, cmd.secrets ?? []);
+          // 하위 작업도 함께: 위 작업을 먼저 옮기고, 그 아래 작업을 차례로 받는 PC 의 그 작업 아래로(위 · 하위 관계 그대로)
+          const moveTree = async (l: Live, parentId?: string, folder?: string, secrets: string[] = []) => {
+            const kids = cmd.withKids ? [...this.sessions.values()].filter((k) => k.info.role === 'main' && !k.info.archived && (k.info.splitFrom ?? k.info.forkedFrom) === l.info.id) : [];
+            const newId = await this.moveToPeer(l, cmd.url, folder, secrets, parentId);
+            for (const k of kids) {
+              try { await moveTree(k, newId); } catch (err) { this.publish({ type: 'error', sessionId: k.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` }); }
+            }
+          };
+          await moveTree(live, undefined, cmd.folder, cmd.secrets ?? []);
         } catch (err) {
           this.publish({ type: 'error', sessionId: live.info.id, message: `다른 PC 로 못 옮김: ${(err as Error).message}` });
         }
@@ -2234,9 +2242,10 @@ export class SessionManager {
     };
   }
 
-  private async moveToPeer(live: Live, rawUrl: string, folderName: string | undefined, secrets: string[]) {
+  private async moveToPeer(live: Live, rawUrl: string, folderName: string | undefined, secrets: string[], parentId?: string): Promise<string> {
     const peers = this.peers;
     if (!peers) throw new Error('연결 기능이 꺼져 있음');
+    if (live.info.id === this.intake?.sessionId) throw new Error('입력 세션은 옮기지 않는다(PC 마다 하나)');
     if (live.info.status === 'working' || live.info.status === 'starting') throw new Error('일하는 중 — 끝난 뒤에 옮긴다');
     const view = (await peers.all()).find((v) => v.url === rawUrl);
     if (!view?.ok) throw new Error(view ? `그 PC 와 연결이 끊김(${view.error ?? ''})` : '연결된 PC 가 아님');
@@ -2280,9 +2289,19 @@ export class SessionManager {
       schedules: (this.schedules?.forSession(live.info.id) ?? []).map(({ prompt, repeat, time, date, weekday, every, enabled }) => ({ prompt, repeat, time, date, weekday, every, enabled })),
       folder: (folderName || basename(plan.folder) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
       own: plan.own, git: plan.git, setup: plan.setup, cannot: plan.cannot, fromPc: peers.summary().name, fromId: live.info.id, secrets: secrets.length,
+      viaIntake: Boolean(live.info.viaIntake), ...(parentId ? { parentId } : {}),
     };
     const done = (await peers.post(view.url, '/peer/move/finish', { id, sha1: size ? sha1 : '', meta })) as { sessionId: string; workdir: string };
     rmSync(tgz, { force: true });
+    // 채팅에 띄운 그림(최근 20장)도 받은 작업에 — 한 장씩(옛 PC 의 요청 크기 제한 안에서)
+    const shots = live.history.flatMap((e) => (e.type === 'agent.image' ? [e] : [])).slice(-20);
+    if (shots.length) say(`옮기는 중 · 그림 ${shots.length}장 보내는 중`);
+    for (const e of shots) {
+      const m = e.url.match(/^\/images\/([^/]+)\/([^/]+)$/);
+      const f = m && this.imagePath(m[1], m[2]);
+      if (!f || statSync(f.path).size > 4_000_000) continue;
+      try { await peers.post(view.url, '/peer/image', { to: done.sessionId, fromPc: peers.summary().name, title: this.nameOf(live), name: e.name, ext: extname(f.path), ...(e.caption ? { caption: e.caption } : {}), ...(e.from ? { from: e.from } : {}), data: readFileSync(f.path).toString('base64') }); } catch {}
+    }
     // 4) 이 PC: 예약은 끄고(두 번 돌지 않게) 작업은 "옮김"으로 보관 — 지우지 않아 되돌릴 수 있다
     for (const s of this.schedules?.forSession(live.info.id) ?? []) if (s.enabled) { try { this.schedules!.save({ ...s, enabled: false }); } catch {} }
     this.schedulesChanged();
@@ -2291,6 +2310,7 @@ export class SessionManager {
     live.info.archived = true;
     this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
     this.notice(`${this.nameOf(live)} 를 ${view.name}(${done.workdir}) 로 옮김 — 이 PC 에서는 보관하고 예약은 껐음. 되돌리려면 그 PC 작업에서 다시 이 PC 로 옮긴다`);
+    return done.sessionId;
   }
 
   /** 받는 PC: 옮겨 오는 묶음 받기 시작(이미 받은 만큼을 알려 이어 받는다) */
@@ -2332,6 +2352,14 @@ export class SessionManager {
     const live = await this.create({ agent, role: 'main', workdir: dest, origin: { via: 'local', user: `Agent Hub ${String(m.fromPc ?? '').slice(0, 40)}` }, ...(typeof m.model === 'string' && m.model ? { model: m.model } : {}), title: String(m.title ?? '옮겨 온 작업').slice(0, 120), customTitle: String(m.title ?? '옮겨 온 작업').slice(0, 120) });
     if (typeof m.about === 'string' && m.about) this.setAbout(live, m.about);
     if (EFFORTS.includes(m.effort)) { live.info.effort = m.effort; this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } }); }
+    // 입력 거치기: 원래 작업 설정 그대로(예전 PC 가 안 보내면 이 PC 기본값)
+    if (typeof m.viaIntake === 'boolean' && Boolean(live.info.viaIntake) !== m.viaIntake) {
+      if (m.viaIntake) live.info.viaIntake = true; else delete live.info.viaIntake;
+      this.publish({ type: 'session.intakeSet', sessionId: live.info.id, on: m.viaIntake });
+    }
+    // 하위 작업을 함께 옮기면 받는 PC 에서도 그 위 작업 아래로
+    const parent = typeof m.parentId === 'string' ? this.sessions.get(m.parentId) : undefined;
+    if (parent && parent.info.role === 'main') this.reparent(live, parent.info.id);
     const t = `${String(m.fromPc ?? '').slice(0, 60)}/${String(m.title ?? '').slice(0, 80)}`;
     const body = String(m.conversation ?? '').slice(0, 60000);
     this.publish({ type: 'session.merged', sessionId: live.info.id, fromId: `peer:${String(m.fromPc ?? '').slice(0, 60)}:${String(m.fromId ?? '').slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });

@@ -143,7 +143,7 @@ export type ClientCommand =
   | { type: 'session.reparent'; sessionId: string; parentId: string | null }
   | { type: 'session.mergeInto'; sessionId: string; targetId: string }
   | { type: 'session.mergeIntoPeer'; sessionId: string; url: string; targetId: string }
-  | { type: 'session.moveToPeer'; sessionId: string; url: string; folder?: string; secrets?: string[] } // 다른 PC 로 옮기기(folder = 받는 PC 작업 폴더 이름, secrets = 함께 옮길 비밀 파일)
+  | { type: 'session.moveToPeer'; sessionId: string; url: string; folder?: string; secrets?: string[]; withKids?: boolean } // 다른 PC 로 옮기기(folder = 받는 PC 작업 폴더 이름, secrets = 함께 옮길 비밀 파일)
   | { type: 'session.setModel'; sessionId: string; model: string | null } // 모델만 바꾸기(null = CLI 기본). 같은 대화로 다음 차례부터
   | { type: 'session.effort'; sessionId: string; effort: Effort | null } // 생각 깊이(null = CLI 기본). 다음 차례부터 // 다른 PC 작업에 합치기(url = 그 PC 원격 접속 주소)
   | { type: 'session.reorder'; sessionId: string; rank: number }
@@ -286,7 +286,7 @@ export function parseCommand(raw: unknown): ClientCommand | null {
       return { type: 'session.mergeInto', sessionId: c.sessionId as string, targetId: c.targetId as string };
     case 'session.moveToPeer':
       if (!str(c.sessionId) || !str(c.url)) return null;
-      return { type: 'session.moveToPeer', sessionId: c.sessionId as string, url: c.url as string, ...(str(c.folder) ? { folder: (c.folder as string).slice(0, 80) } : {}), ...(Array.isArray(c.secrets) ? { secrets: (c.secrets as unknown[]).filter(str).slice(0, 50) as string[] } : {}) };
+      return { type: 'session.moveToPeer', sessionId: c.sessionId as string, url: c.url as string, ...(str(c.folder) ? { folder: (c.folder as string).slice(0, 80) } : {}), ...(Array.isArray(c.secrets) ? { secrets: (c.secrets as unknown[]).filter(str).slice(0, 50) as string[] } : {}), ...(c.withKids === true ? { withKids: true } : {}) };
     case 'session.setModel':
       if (!str(c.sessionId) || !(c.model === null || (str(c.model) && MODEL_RE.test(c.model as string)))) return null;
       return { type: 'session.setModel', sessionId: c.sessionId as string, model: c.model as string | null };
