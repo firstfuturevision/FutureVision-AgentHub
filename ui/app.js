@@ -2006,7 +2006,7 @@ function reduceEvent(s, ev, at) {
       break;
     case 'agent.models':
       // CLI 가 알려 준 실제 모델 목록으로 드롭다운을 바꾼다
-      models[ev.agent] = ev.models;
+      models[ev.agent] = byModel(ev.models);
       fillSelects();
       break;
     case 'agent.tool':
@@ -2743,7 +2743,7 @@ async function moveDialog(s, remote) {
   };
 }
 
-/** 생각 깊이(effort): 작업마다, 다음 차례부터(일하는 중이면 끝난 뒤). Claude 만 받는다 */
+/** 생각 깊이(effort): 작업마다, 다음 차례부터(일하는 중이면 끝난 뒤). Claude · Codex 만 받는다(Codex 는 모델 이름 뒤 [깊이] 로 넘긴다) */
 const EFFORT_NAMES = { low: '낮게 (low)', medium: '보통 (medium)', high: '높게 (high)', xhigh: '아주 높게 (xhigh)', max: '최대 (max)' };
 /** 작업 정보 맨 위: 지금 도는 모델과 모델 고르기(다음 차례부터, 같은 대화로) */
 function renderModel(s) {
@@ -2769,11 +2769,11 @@ function effortRow(s) {
   const sel = el('select');
   sel.append(new Option('기본 (CLI 설정 그대로)', ''), ...Object.entries(EFFORT_NAMES).map(([v, n]) => new Option(n, v)));
   sel.value = s.info.effort ?? '';
-  const ok = s.info.agent === 'claude';
+  const ok = s.info.agent === 'claude' || s.info.agent === 'codex';
   sel.disabled = !ok;
   sel.onchange = () => send({ type: 'session.effort', sessionId: s.info.id, effort: sel.value || null });
   l.append(el('span', 'p-meta', '생각 깊이'), sel);
-  box.append(l, el('div', 'p-meta', ok ? `높을수록 더 깊게 생각하고 토큰이 더 듭니다. ${s.info.status === 'working' || s.info.status === 'starting' ? '지금 차례가 끝난 뒤' : '다음 지시'}부터 같은 대화로 이어서 씁니다.` : `${NAMES[s.info.agent]} 는 이 설정을 받지 않아요(Claude 만)`));
+  box.append(l, el('div', 'p-meta', ok ? `높을수록 더 깊게 생각하고 토큰이 더 듭니다. ${s.info.status === 'working' || s.info.status === 'starting' ? '지금 차례가 끝난 뒤' : '다음 지시'}부터 같은 대화로 이어서 씁니다.` : `${NAMES[s.info.agent]} 는 이 설정을 받지 않아요(Claude · Codex 만)`));
   return box;
 }
 
@@ -3883,18 +3883,28 @@ function renderChat() {
   stickBottom = false;
 }
 
+/** Codex 가 예전에 알려 준 "모델[생각 깊이]" 줄(3개 × 5단계)을 모델 하나씩으로 — 생각 깊이는 작업 정보에서 따로 고른다 */
+function byModel(list) {
+  if (!list.length || !list.every((m) => /^[^\[\]]+\[[a-z]+\]$/.test(m.id))) return list;
+  const out = new Map();
+  for (const m of list) { const id = m.id.replace(/\[[a-z]+\]$/, ''); if (!out.has(id)) out.set(id, { id, name: m.name.replace(/\s*\([a-z]+\)$/, '') }); }
+  return [...out.values()];
+}
 const modelName = (agent, id) => models[agent].find((m) => m.id === id)?.name ?? id;
 /** 실제로 돈 모델의 짧은 이름: claude-opus-5-5 → Opus 5.5, claude-fable-5-2[1m] → Fable 5.2 (모르는 이름은 그대로) */
 function shortModel(id) {
   if (!id) return '';
   const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?/.exec(id);
   if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
-  return models.claude.find((x) => x.id === id)?.name ?? id;
+  // Codex: gpt-6-luna[high] → 6 Luna · high
+  const c = /^(.+)\[([a-z]+)\]$/.exec(id);
+  if (c) { const name = models.codex.find((x) => x.id === c[1])?.name ?? c[1]; return `${name} · ${c[2]}`; }
+  return models.claude.find((x) => x.id === id)?.name ?? models.codex.find((x) => x.id === id)?.name ?? id;
 }
 /** 이 작업이 지금 쓰는 모델: 마지막 차례에 실제로 쓴 모델, 아직 없으면 정해 둔 모델 */
 const modelNow = (s) => shortModel(s.info.lastModel) || (s.info.model ? shortModel(s.info.model) : '');
 /** 정해 둔 모델이 마지막 차례와 다르면 다음 차례부터 쓸 모델 이름(같거나 정한 게 없으면 '') */
-const modelNext = (s) => { const want = s.info.model ? shortModel(s.info.model) : ''; return want && s.info.lastModel && want !== shortModel(s.info.lastModel) ? want : ''; };
+const modelNext = (s) => { const want = s.info.model ? shortModel(s.info.model) : ''; const last = shortModel(s.info.lastModel); return want && last && want !== last && !last.startsWith(`${want} · `) ? want : ''; }; // Codex: "6 Luna" 와 "6 Luna · high" 는 같은 모델
 // 답한 승인 요청도 접힌 줄 안으로(카드는 아직 답하지 않은 것만)
 const isToolLine = (it) => it.k === 'line tool' || it.k === 'line ok' || it.k === 'line fail' || (it.k === 'perm' && it.resolved);
 const isBusy = (s) => s.info.status === 'working' || s.info.status === 'starting' || workersOf(s).some((w) => w.info.status === 'working');

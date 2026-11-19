@@ -83,21 +83,25 @@ export class AcpAdapter implements AgentAdapter {
           this.acpSessionId = res.sessionId;
           // 쓸 수 있는 모델 목록을 알려 주면(ACP models) 화면 드롭다운을 실제 목록으로 바꾼다
           const avail = res?.models?.availableModels;
-          if (Array.isArray(avail) && avail.length) {
-            this.emit({
-              type: 'agent.models',
-              agent: session.agent,
-              models: avail.filter((m: any) => typeof m?.modelId === 'string').map((m: any) => ({ id: m.modelId, name: m.name ?? m.modelId })),
-              current: typeof res.models.currentModelId === 'string' ? res.models.currentModelId : null,
-            });
-          }
-          if (session.model && !this.opts.modelArg) {
+          const current: string | null = typeof res?.models?.currentModelId === 'string' ? res.models.currentModelId : null;
+          const list: { id: string; name: string }[] = Array.isArray(avail) ? avail.filter((m: any) => typeof m?.modelId === 'string').map((m: any) => ({ id: m.modelId, name: m.name ?? m.modelId })) : [];
+          // Codex 는 "모델[생각 깊이]" 하나하나를 모델로 알려 준다(3개 × 5단계 = 16줄). 화면에는 모델만 주고, 생각 깊이는 따로 고른 값과 합쳐 지정한다
+          const split = splitEffortModels(list);
+          if (list.length) this.emit({ type: 'agent.models', agent: session.agent, models: split ? split.models : list, current: split && current ? baseOf(current) : current });
+          let modelId: string | null = session.model ?? null;
+          const effort = ctx.effort ?? session.effort;
+          if (split && !this.opts.modelArg && (modelId || effort)) modelId = withEffort(split, modelId ?? current, effort);
+          if (modelId && !this.opts.modelArg) {
             try {
-              await this.request('session/set_model', { sessionId: this.acpSessionId, modelId: session.model });
+              await this.request('session/set_model', { sessionId: this.acpSessionId, modelId });
             } catch (err: any) {
-              this.emit({ type: 'error', message: `${this.opts.label} 모델 지정 실패(${session.model}) — 기본 모델로 진행: ${err?.message ?? err}` });
+              this.emit({ type: 'error', message: `${this.opts.label} 모델 지정 실패(${modelId}) — 기본 모델로 진행: ${err?.message ?? err}` });
+              modelId = null;
             }
           }
+          // 실제로 도는 모델(작업 정보 · 채팅 위에 보인다)
+          const running = modelId && !this.opts.modelArg ? modelId : current;
+          if (running) this.emit({ type: 'session.model', model: running });
         })(),
         timeoutMs,
       );
@@ -295,4 +299,38 @@ function summarizeContent(content: unknown): string {
   });
   const text = parts.join(' ').replace(/\s+/g, ' ').trim();
   return text.length > 200 ? text.slice(0, 200) + '…' : text;
+}
+
+/** "gpt-6-luna[high]" → "gpt-6-luna" */
+export const baseOf = (id: string) => id.replace(/\[[^\]]*\]$/, '');
+
+interface EffortModels { models: { id: string; name: string }[]; efforts: Map<string, string[]>; defaults: Map<string, string> }
+
+/**
+ * 모델 목록이 모두 "모델[생각 깊이]" 꼴이면(Codex) 모델별로 묶는다. 아니면 null.
+ * 이름의 " (high)" 는 떼고, 모델마다 받는 생각 깊이(테라만 ultra 등)를 기억한다
+ */
+export function splitEffortModels(list: { id: string; name: string }[]): EffortModels | null {
+  if (!list.length || !list.every((m) => /^[^\[\]]+\[[a-z]+\]$/.test(m.id))) return null;
+  const models: { id: string; name: string }[] = [];
+  const efforts = new Map<string, string[]>();
+  for (const m of list) {
+    const base = baseOf(m.id);
+    const e = /\[([a-z]+)\]$/.exec(m.id)![1];
+    if (!efforts.has(base)) { efforts.set(base, []); models.push({ id: base, name: m.name.replace(/\s*\([a-z]+\)$/, '') }); }
+    efforts.get(base)!.push(e);
+  }
+  const defaults = new Map([...efforts].map(([b, es]) => [b, es.includes('medium') ? 'medium' : es[0]]));
+  return { models, efforts, defaults };
+}
+
+/** 모델(묶은 이름이나 예전에 고른 "모델[깊이]")과 생각 깊이를 CLI 가 받는 "모델[깊이]" 로. 그 모델이 받지 않는 깊이면 모델에 적힌 것 · 기본(medium) */
+export function withEffort(s: EffortModels, model: string | null, effort?: string): string | null {
+  if (!model) return null;
+  const base = baseOf(model);
+  const ok = s.efforts.get(base);
+  if (!ok) return model; // 모르는 모델은 그대로(CLI 가 판단)
+  if (effort && ok.includes(effort)) return `${base}[${effort}]`;
+  if (model !== base) return model;
+  return `${base}[${s.defaults.get(base)}]`;
 }

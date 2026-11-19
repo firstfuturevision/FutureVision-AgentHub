@@ -59,8 +59,9 @@ const DEFAULTS: Config = {
     ],
     // 확실하지 않음 — 로그인하면 codex-acp 가 알려 주는 목록으로 바뀐다
     codex: [
-      { id: 'gpt-5.5', name: 'GPT-5.5' },
-      { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max' },
+      { id: 'gpt-6-luna', name: '6 Luna' },
+      { id: 'gpt-5.6-terra', name: '5.6 Terra' },
+      { id: 'gpt-5.6-luna', name: '5.6 Luna' },
     ],
   },
   dashboard: { enabled: false, url: '', tokenEnv: 'AGENT_HUB_DASHBOARD_TOKEN' },
