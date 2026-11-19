@@ -1324,6 +1324,17 @@ function renderSkills() {
     };
     if (k.shared) head.append(el('span', 'preset-name', k.name), ...sharedButtons('skills', k, k.name, () => openSkillForm({ ...k, name: `${k.name}-mine`, shared: undefined }, true)));
     else head.append(el('span', 'preset-name', k.name), edit, del, ...sharedButtons('skills', k, k.name));
+    // 모든 작업에 넣기: 에이전트 없이 도는 Claude 작업에도 이 스킬을 더한다(계정 스킬은 그대로, 같은 이름이 있으면 넣지 않음)
+    const all = el('button', `p-mini${k.everywhere ? ' on' : ''}`, k.everywhere ? '모든 작업에 넣음 · 끄기' : '모든 작업에 넣기');
+    all.type = 'button';
+    all.disabled = k.enabled === false;
+    all.title = k.enabled === false ? '꺼 둔 스킬이라 넣지 않아요' : '에이전트 없이 도는 Claude 작업에도 이 스킬을 넣습니다. 쉬는 작업은 다음 지시부터, 일하는 작업은 지금 차례가 끝난 뒤부터';
+    all.onclick = async () => {
+      const r = await fetch('/hub-skills/everywhere', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: k.name, everywhere: !k.everywhere }) });
+      if (r.ok) hubSkillList = await r.json(); else flash(await r.text(), true);
+      renderSkills();
+    };
+    head.append(all);
     row.append(head, el('div', 'preset-desc', k.description), el('div', 'preset-inst', k.body.length > 160 ? k.body.slice(0, 160) + '…' : k.body));
     list.append(row);
   }

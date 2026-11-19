@@ -60,6 +60,7 @@ interface Live {
   info: SessionInfo;
   relaunch?: boolean; // 이번 차례가 끝나면 CLI 를 내려 바뀐 설정(생각 깊이)으로 다시 띄운다
   turnEffort?: Effort; // 이번 차례만의 생각 깊이(입력 세션이 고름). 차례가 끝나면 지우고 작업 설정으로
+  hubClashTold?: boolean; // 같은 이름 때문에 뺀 Agent Hub 스킬을 이미 알렸음
   launchedEffort?: Effort | null; // 지금 떠 있는 CLI 의 생각 깊이
   schedRun?: { id: string; skip: number; started: number; note: string; error?: string }; // 예약으로 보낸 지시의 차례 — 끝나면 예약 결과를 고친다
   adapter: AgentAdapter;
@@ -419,10 +420,30 @@ export class SessionManager {
     return false;
   }
 
+  /** "모든 작업에 넣기"가 바뀜: 에이전트 없는 Claude 작업을 같은 대화로 다시 띄워(쉬면 지금 내려 두고, 일하면 그 차례 뒤) 새 스킬 목록을 쓰게 */
+  hubSkillsChanged() {
+    for (const l of this.sessions.values()) {
+      if (l.info.role !== 'main' || l.info.agent !== 'claude' || l.info.preset || l.dormant) continue;
+      if (l.info.status === 'working' || l.info.status === 'starting') l.relaunch = true;
+      else this.sleep(l);
+    }
+  }
+
+  /** 에이전트 없는 Claude 작업에 넣을 Agent Hub 스킬과, 같은 이름의 Claude 스킬이 있어 뺀 것 */
+  private hubForAll(workdir: string): { use: string[]; clash: string[] } {
+    const names = this.hubSkills?.everywhere() ?? [];
+    const taken = (n: string) => [join(this.claudeHome, 'skills', n), join(workdir, '.claude', 'skills', n)].some((d) => existsSync(join(d, 'SKILL.md')));
+    return { use: names.filter((n) => !taken(n)), clash: names.filter(taken) };
+  }
+
   /** 오른쪽 패널의 스킬: 프리셋 세션은 Agent Hub 스킬 중 고른 것, 아니면 그 CLI 가 계정에서 읽는 것 */
   skillsOf(id: string): SkillInfo[] {
     const s = this.sessions.get(id)?.info;
     if (!s) return [];
+    if (!s.preset && s.agent === 'claude' && this.hubSkills) {
+      const use = new Set(this.hubForAll(s.workdir).use);
+      return [...this.hubSkills.list().filter((k) => use.has(k.name)).map((k) => ({ name: k.name, description: k.description, where: 'Agent Hub' })), ...skillsFor(s.agent, s.workdir)];
+    }
     if (!s.preset || !this.hubSkills) return skillsFor(s.agent, s.workdir);
     const preset = this.presets?.find(s.preset.id);
     const names = new Set(this.hubSkills.pick(preset?.skills));
@@ -1889,6 +1910,15 @@ export class SessionManager {
       } else if (o.agent === 'codex') {
         env.CODEX_HOME = this.profileDir('codex');
         this.hubSkills?.syncTo(join(env.CODEX_HOME, 'skills'), names);
+      }
+    } else if (o.agent === 'claude' && this.hubSkills) {
+      // 에이전트 없이 도는 Claude 작업: 계정 스킬은 그대로 두고, "모든 작업에 넣기"를 켠 Agent Hub 스킬만 더한다(플러그인 agent-hub:<이름>).
+      // 같은 이름의 Claude 스킬(계정 · 작업 폴더)이 있으면 넣지 않고 알린다 — 기존 스킬을 덮거나 헷갈리게 하지 않게
+      const { use, clash } = this.hubForAll(o.workdir);
+      pluginDir = this.hubSkills.buildPlugin(join(configDir, `${info.id}-skills`), use) ?? undefined;
+      if (clash.length && !live.hubClashTold) {
+        live.hubClashTold = true;
+        this.publish({ type: 'notice', sessionId: info.id, message: `Agent Hub 스킬 ${clash.join(', ')} 은 같은 이름의 Claude 스킬이 있어 이 작업에 넣지 않음(기존 스킬 그대로)` });
       }
     }
     const ctx: StartContext = { tools, configDir, env, authMethod: launch?.authMethod, extraDirs: o.extraDirs, pluginDir, ...(live.resume ? { resume: live.resume } : {}), ...(live.turnEffort ? { effort: live.turnEffort } : {}) };

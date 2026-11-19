@@ -413,6 +413,14 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         try { hubSkills.setEnabled(String(body?.name ?? ''), body?.enabled); } catch (err) { return send(res, 400, (err as Error).message); }
         return json(res, 200, hubSkills.list());
       }
+      // Agent Hub 스킬 "모든 작업에 넣기"(에이전트 없이 도는 Claude 작업에도). 쉬는 작업은 다음 지시에, 일하는 작업은 그 차례 뒤 같은 대화로 다시 떠 반영
+      if (url.pathname === '/hub-skills/everywhere' && hubSkills && req.method === 'POST') {
+        const body = (await readJson(req, res)) as any;
+        if (body === undefined) return;
+        try { hubSkills.setEverywhere(String(body?.name ?? ''), body?.everywhere); } catch (err) { return send(res, 400, (err as Error).message); }
+        sessions.hubSkillsChanged();
+        return json(res, 200, hubSkills.list());
+      }
       // 이 PC 의 Claude Code 스킬 전체(개인 · 작업 폴더 · 플러그인) — 사람이 보고 고치는 화면용
       if (url.pathname === '/claude-skills' || url.pathname === '/claude-skills/file' || url.pathname === '/claude-skills/enabled') {
         const cs = new ClaudeSkills(undefined, () => sessions.list().map((s) => s.workdir));

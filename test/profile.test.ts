@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,7 @@ test('프리셋 세션은 전용 프로필(CLAUDE_CONFIG_DIR) + 고른 스킬만
     presets,
     hubSkills,
     profilesDir: join(base, 'data', 'profiles'),
+    claudeHome: join(base, 'claude-home'),
     makeAdapter: () => new ClaudeAdapter({ command: process.execPath, extraArgs: [join(here, 'fake-claude.mjs')], permissionMode: 'default' }),
   });
   sessions.subscribe((e) => events.push(e));
@@ -72,5 +73,19 @@ test('프리셋 세션은 전용 프로필(CLAUDE_CONFIG_DIR) + 고른 스킬만
   const d = (await waitFor(events, (e) => e.type === 'session.created' && !e.session.preset && e.session.role === 'main')).session;
   assert.equal(await ask(d.id, 'env?'), 'env: ANTHROPIC_API_KEY=unset CLAUDE_CONFIG_DIR=unset');
   assert.doesNotMatch(await ask(d.id, 'argv?'), /--plugin-dir/);
+
+  // "모든 작업에 넣기": 기본 메인에도 그 스킬만(같은 대화로 다시 떠서). 같은 이름의 Claude 스킬이 있으면 넣지 않고 알림
+  mkdirSync(join(base, 'claude-home', 'skills', 'quote-writing'), { recursive: true });
+  writeFileSync(join(base, 'claude-home', 'skills', 'quote-writing', 'SKILL.md'), '---\nname: quote-writing\ndescription: 계정 스킬\n---\n');
+  hubSkills.setEverywhere('code-review', true);
+  hubSkills.setEverywhere('quote-writing', true);
+  sessions.hubSkillsChanged();
+  const argv2 = await ask(d.id, 'argv?');
+  const plugin2 = join(base, 'data', 'mcp', `${d.id}-skills`);
+  assert.ok(argv2.includes(`--plugin-dir ${plugin2}`), argv2);
+  assert.ok(existsSync(join(plugin2, 'skills', 'code-review', 'SKILL.md')));
+  assert.ok(!existsSync(join(plugin2, 'skills', 'quote-writing'))); // 계정에 같은 이름 — 넣지 않음
+  assert.ok(events.some((e) => e.type === 'notice' && e.sessionId === d.id && /quote-writing/.test(e.message)));
+  assert.ok(sessions.skillsOf(d.id).some((s) => s.name === 'code-review' && s.where === 'Agent Hub'));
   sessions.stopAll();
 });

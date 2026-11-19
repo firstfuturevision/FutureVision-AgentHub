@@ -471,6 +471,7 @@ body.resizing iframe { pointer-events: none; }
 .p-add select { width: 100%; max-width: none; border: 1px dashed var(--rule); padding: 5px 8px; appearance: none; font-size: 12px; }
 .p-acts { display: flex; gap: 6px; margin-top: 8px; }
 .p-mini { font-size: 12px; color: var(--ink-soft); padding: 3px 8px; border: 1px solid var(--rule); border-radius: 7px; }
+.p-mini.on { color: var(--accent, #c2410c); border-color: currentColor; }
 .p-mini:hover { background: var(--hover); color: var(--ink); }
 .p-conf { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
 .move-dlg { max-width: 520px; }

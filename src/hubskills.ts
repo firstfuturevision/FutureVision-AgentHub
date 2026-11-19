@@ -9,7 +9,7 @@ import { SHARED_READONLY } from './presets.ts';
  *  - Codex : 전용 프로필(CODEX_HOME)/skills 에 넣는다
  * SKILL.md 형식은 Claude·Codex 공통(Agent Skills).
  */
-export interface HubSkill { name: string; description: string; body: string; shared?: true; enabled?: boolean }
+export interface HubSkill { name: string; description: string; body: string; shared?: true; enabled?: boolean; everywhere?: boolean }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/; // 스킬 이름 규칙(소문자·숫자·-)
 
@@ -25,7 +25,23 @@ export class HubSkillStore {
     const shared = this.sharedDir ? readSkills(this.sharedDir).map((s) => ({ ...s, shared: true as const })) : [];
     const local = readSkills(this.dir).filter((s) => !shared.some((x) => x.name === s.name));
     const off = this.disabled();
-    return [...shared, ...local].map((s) => ({ ...s, enabled: !off.has(s.name) })).sort((a, b) => a.name.localeCompare(b.name));
+    const all = this.allTasks();
+    return [...shared, ...local].map((s) => ({ ...s, enabled: !off.has(s.name), everywhere: all.has(s.name) })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** "모든 작업에 넣기"를 켠 스킬 이름 — 에이전트(프리셋) 없이 도는 Claude 작업에도 넣는다 */
+  private get allFile() { return join(this.dir, '..', 'skills-everywhere.json'); }
+  private allTasks(): Set<string> { try { return new Set(JSON.parse(readFileSync(this.allFile, 'utf8'))); } catch { return new Set(); } }
+  setEverywhere(name: string, on: unknown) {
+    if (on !== true && on !== false) throw new Error('everywhere 는 true 나 false');
+    if (!this.list().some((s) => s.name === name)) throw new Error('없는 스킬');
+    const all = this.allTasks();
+    if (on) all.add(name); else all.delete(name);
+    writeFileSync(this.allFile, JSON.stringify([...all].sort()));
+  }
+  /** 에이전트 없이 도는 작업에 넣을 스킬: 켜져 있고 "모든 작업에 넣기"를 켠 것 */
+  everywhere(): string[] {
+    return this.list().filter((s) => s.enabled !== false && s.everywhere).map((s) => s.name);
   }
 
   /** 꺼 둔 스킬 이름(프리셋 세션에 넣지 않는다). 공유받은 것도 이 PC 에서만 끌 수 있다 */
