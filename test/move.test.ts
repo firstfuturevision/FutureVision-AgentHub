@@ -26,6 +26,7 @@ function pc(name: string) {
 function link(a: ReturnType<typeof pc>, b: ReturnType<typeof pc>) {
   (a.sessions as any).peers = {
     summary: () => ({ name: a.name, tasks: [] }),
+    myUrl: () => a.url,
     all: async () => [{ url: b.url, ok: true, name: b.name, summary: { name: b.name, tasks: [] } }],
     post: async (_u: string, path: string, body: any) => (path === '/peer/move/start' ? b.sessions.moveStart(body) : path === '/peer/move/finish' ? b.sessions.moveFinish(body) : path === '/peer/image' ? b.sessions.receiveRemoteImage(body.to, body.fromPc, body.title, body) : null),
     postRaw: async (_u: string, path: string, buf: Buffer) => { const q = new URL(`http://x${path}`).searchParams; return b.sessions.moveChunk(q.get('id')!, Number(q.get('offset')), buf); },
@@ -172,4 +173,27 @@ test('묶음: 한글 경로 · 빈 폴더 · 빼는 폴더 · 윈도우에서 �
   const old = join(base, 'old'); mkdirSync(old);
   await unpackTo(tgz, old, false);
   assert.ok(existsSync(join(old, '첨부', '20261118-024644-image.png')));
+});
+
+test('옮긴 뒤 트리 자리: 하위 작업만 옮기면 받는 PC 에서 원래 PC 의 위 작업 아래로(같은 순서), 위 작업만 옮기면 남은 하위 작업이 옮겨 간 작업 아래로', async () => {
+  const a = pc('a'), b = pc('b');
+  link(a, b);
+  await a.sessions.handle({ type: 'session.create', role: 'main', agent: 'claude' }, local);
+  const top = (await waitFor(a.events, (e) => e.type === 'session.created')).session.id;
+  await a.sessions.handle({ type: 'session.split', sessionId: top }, local);
+  const k1 = (await waitFor(a.events, (e) => e.type === 'session.created' && e.session.splitFrom === top)).session.id;
+  await a.sessions.handle({ type: 'session.reorder', sessionId: k1, rank: 12345 } as any, local);
+  // 하위 작업만 옮기기
+  await a.sessions.handle({ type: 'session.moveToPeer', sessionId: k1, url: b.url } as any, local);
+  const bk1 = b.events.filter((e) => e.type === 'session.created').at(-1).session.id;
+  assert.deepEqual(b.sessions.info(bk1)!.remoteParent, { url: a.url, id: top, pc: 'a' }, '원래 PC 의 위 작업 아래');
+  assert.equal(b.sessions.info(bk1)!.rank, 12345, '같은 순서');
+  // 위 작업만 옮기기(남은 하위 작업 하나)
+  await a.sessions.handle({ type: 'session.split', sessionId: top }, local);
+  const k2 = (await waitFor(a.events, (e) => e.type === 'session.created' && e.session.splitFrom === top && e.session.id !== k1)).session.id;
+  await a.sessions.handle({ type: 'session.moveToPeer', sessionId: top, url: b.url } as any, local);
+  const btop = b.events.filter((e) => e.type === 'session.created').at(-1).session.id;
+  assert.deepEqual(a.sessions.info(k2)!.remoteParent, { url: b.url, id: btop, pc: 'b' }, '남은 하위 작업은 옮겨 간 작업 아래');
+  assert.ok(!a.sessions.info(k2)!.splitFrom);
+  a.sessions.stopAll(); b.sessions.stopAll();
 });

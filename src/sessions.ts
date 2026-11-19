@@ -2306,6 +2306,10 @@ export class SessionManager {
       folder: (folderName || (plan.own ? basename(plan.folder) : this.nameOf(live)) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
       own: plan.own, git: plan.git, setup: plan.setup, cannot: plan.cannot, fromPc: peers.summary().name, fromId: live.info.id, secrets: secrets.length,
       viaIntake: Boolean(live.info.viaIntake), ...(parentId ? { parentId } : {}), ...(reuse !== undefined ? { reuse } : {}),
+      // 트리 자리: 같은 순서 값, 위 작업이 이 PC 에 남으면 받는 PC 작업을 이 PC 의 그 위 작업 아래로(다른 PC 작업도 이 PC 작업의 하위로 보인다)
+      rank: live.info.rank ?? (live.info.splitFrom || live.info.forkedFrom ? 1 : -1) * Date.parse(live.info.createdAt),
+      ...(!parentId && (live.info.splitFrom ?? live.info.forkedFrom) && peers.myUrl() ? { remoteParent: { url: peers.myUrl(), id: live.info.splitFrom ?? live.info.forkedFrom, pc: peers.summary().name } } : {}),
+      ...(!parentId && live.info.remoteParent ? { remoteParent: live.info.remoteParent } : {}),
     };
     const done = (await peers.post(view.url, '/peer/move/finish', { id, sha1: size ? sha1 : '', meta })) as { sessionId: string; workdir: string };
     rmSync(tgz, { force: true });
@@ -2325,6 +2329,8 @@ export class SessionManager {
     this.publish({ type: 'session.configured', sessionId: live.info.id, session: { ...live.info } });
     live.info.archived = true;
     this.publish({ type: 'session.archived', sessionId: live.info.id, archived: true });
+    // 함께 옮기지 않은 하위 작업은 이 PC 에 남아 옮겨 간 작업(그 PC) 아래로 — 트리 자리 그대로, 한 일은 그 작업으로 공유
+    if (!withKids) for (const k of [...this.sessions.values()]) if (k.info.role === 'main' && !k.info.archived && (k.info.splitFrom ?? k.info.forkedFrom) === live.info.id) this.setRemoteParent(k.info.id, { url: view.url, id: done.sessionId, pc: view.name ?? '' });
     this.notice(`${this.nameOf(live)} 를 ${view.name}(${done.workdir}) 로 옮김 — 이 PC 에서는 보관하고 예약은 껐음. 되돌리려면 그 PC 작업에서 다시 이 PC 로 옮긴다`);
     return done;
   }
@@ -2378,6 +2384,11 @@ export class SessionManager {
     // 하위 작업을 함께 옮기면 받는 PC 에서도 그 위 작업 아래로
     const parent = typeof m.parentId === 'string' ? this.sessions.get(m.parentId) : undefined;
     if (parent && parent.info.role === 'main') this.reparent(live, parent.info.id);
+    else if (m.remoteParent && typeof m.remoteParent.url === 'string' && typeof m.remoteParent.id === 'string') {
+      // 원래 PC 의 위 작업 아래 자리 그대로(그 PC 트리에 "이 PC/작업"으로 같은 자리)
+      this.setRemoteParent(live.info.id, { url: m.remoteParent.url.slice(0, 80), id: m.remoteParent.id.slice(0, 60), pc: String(m.remoteParent.pc ?? '').slice(0, 60) });
+    }
+    if (typeof m.rank === 'number' && Number.isFinite(m.rank)) { live.info.rank = m.rank; this.publish({ type: 'session.reordered', sessionId: live.info.id, rank: m.rank }); }
     const t = `${String(m.fromPc ?? '').slice(0, 60)}/${String(m.title ?? '').slice(0, 80)}`;
     const body = String(m.conversation ?? '').slice(0, 60000);
     this.publish({ type: 'session.merged', sessionId: live.info.id, fromId: `peer:${String(m.fromPc ?? '').slice(0, 60)}:${String(m.fromId ?? '').slice(0, 60)}`, title: t, text: body, lines: 0, kind: 'split' });
