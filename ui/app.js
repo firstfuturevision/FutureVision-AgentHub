@@ -2694,7 +2694,7 @@ async function moveDialog(s, remote) {
   const pcSel = el('select');
   pcSel.append(...peersOk.map((p) => new Option(p.name || p.url, p.url)));
   const folder = el('input', 'dlg-input');
-  folder.value = plan ? plan.folder.split(/[\\/]/).filter(Boolean).pop() ?? '' : name.replace(/[\\/:*?"<>|]/g, '-');
+  folder.value = plan?.own ? plan.folder.split(/[\\/]/).filter(Boolean).pop() ?? '' : name.replace(/[\\/:*?"<>|]/g, '-').slice(0, 80); // 함께 쓰는 폴더(workspace 등)면 작업 이름으로
   const row = (label, input) => { const l = el('label', 'p-conf-row'); l.append(el('span', 'p-meta', label), input); return l; };
   box.append(row('받을 PC', pcSel), row('받을 폴더', folder));
   const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);

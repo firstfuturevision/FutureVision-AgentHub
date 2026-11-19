@@ -4,7 +4,7 @@ import { spawnSync, spawn, execFileSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve, relative, isAbsolute, extname, basename, sep } from 'node:path';
 import { AGENTS, EFFORTS, MODEL_RE, viaLabel } from './protocol.ts';
-import { scanFolder, setupCommands, cannotMove, packFolder, unpackTo, type MovePlan } from './move.ts';
+import { scanFolder, setupCommands, cannotMove, packFolder, packFiles, unpackTo, type MovePlan } from './move.ts';
 import type { Effort, AgentKind, Attachment, ClientCommand, CommandOrigin, ContextItem, HostEvent, PermMode, RemoteLink, RemoteVia, SessionInfo, SessionRole } from './protocol.ts';
 import { UnavailableAdapter, type AgentAdapter, type AdapterEvent, type StartContext } from './adapters/types.ts';
 import { withRole, type Preset, type PresetStore } from './presets.ts';
@@ -2255,10 +2255,10 @@ export class SessionManager {
     const id = `${live.info.id.slice(0, 8)}-${createHash('sha1').update(rawUrl).digest('hex').slice(0, 8)}`;
     const tgz = join(this.moveDir, `out-${id}.tgz`);
     say('옮기는 중 · 파일 묶는 중');
-    if (plan.own) packFolder(plan.folder, tgz, plan.secrets.filter((f) => !secrets.includes(f)));
+    if (plan.own) await packFolder(plan.folder, tgz, plan.secrets.filter((f) => !secrets.includes(f)));
     else {
       const atts = [...new Set(live.history.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []).map((a) => a.path) : [])))].filter((p) => this.attachmentPath(live, p));
-      if (atts.length) execFileSync('tar', ['-czf', tgz, '-C', plan.folder, ...atts], { stdio: ['ignore', 'ignore', 'pipe'] });
+      if (atts.length) await packFiles(plan.folder, tgz, atts);
       else rmSync(tgz, { force: true });
     }
     const size = existsSync(tgz) ? statSync(tgz).size : 0;
@@ -2287,7 +2287,8 @@ export class SessionManager {
       title: this.nameOf(live), about: live.info.about ?? '', agent: live.info.agent, model: live.info.model, effort: live.info.effort,
       conversation: all.length > 60000 ? '…' + all.slice(-60000) : all,
       schedules: (this.schedules?.forSession(live.info.id) ?? []).map(({ prompt, repeat, time, date, weekday, every, enabled }) => ({ prompt, repeat, time, date, weekday, every, enabled })),
-      folder: (folderName || basename(plan.folder) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
+      // 여러 작업이 함께 쓰는 폴더(예: workspace)면 그 이름 대신 작업 이름으로 — 받는 PC 에 workspace\\workspace 처럼 겹치지 않게
+      folder: (folderName || (plan.own ? basename(plan.folder) : this.nameOf(live)) || 'moved').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80),
       own: plan.own, git: plan.git, setup: plan.setup, cannot: plan.cannot, fromPc: peers.summary().name, fromId: live.info.id, secrets: secrets.length,
       viaIntake: Boolean(live.info.viaIntake), ...(parentId ? { parentId } : {}),
     };
@@ -2345,7 +2346,7 @@ export class SessionManager {
     let dest = join(this.workspaceRoot, base);
     for (let i = 2; existsSync(dest) && readdirSync(dest).length; i++) dest = join(this.workspaceRoot, `${base}-${i}`);
     mkdirSync(dest, { recursive: true });
-    if (b.sha1) unpackTo(file, dest);
+    const renamed = b.sha1 ? (await unpackTo(file, dest)).renamed : [];
     rmSync(file, { force: true });
     rmSync(`${file}.json`, { force: true });
     const agent = AGENTS.includes(m.agent) ? m.agent : 'claude';
@@ -2368,7 +2369,7 @@ export class SessionManager {
     for (const s of Array.isArray(m.schedules) ? m.schedules.slice(0, 30) : []) { try { this.schedules?.save({ ...s, sessionId: live.info.id }); } catch {} }
     this.schedulesChanged();
     const todo = (Array.isArray(m.cannot) ? m.cannot : []).map(String).slice(0, 10);
-    this.publish({ type: 'notice', sessionId: live.info.id, message: `${t} 에서 옮겨 옴 — 폴더 ${dest}${m.own ? '' : '(그 PC 에서 여러 작업이 함께 쓰던 폴더라 첨부만)'}${todo.length ? `. 이 PC 에서 할 일: ${todo.join(' / ')}` : ''}` });
+    this.publish({ type: 'notice', sessionId: live.info.id, message: `${t} 에서 옮겨 옴 — 폴더 ${dest}${m.own ? '' : '(그 PC 에서 여러 작업이 함께 쓰던 폴더라 첨부만)'}${renamed.length ? `. 이 PC 에서 못 쓰는 이름 ${renamed.length}개는 바꿔 풂(${renamed.slice(0, 3).join(', ')}${renamed.length > 3 ? ' …' : ''})` : ''}${todo.length ? `. 이 PC 에서 할 일: ${todo.join(' / ')}` : ''}` });
     // 설치 명령: 뒤에서 차례로 돌리고 결과만 알린다(받는 PC 운영체제에 맞는 셸)
     const cmds = (Array.isArray(m.setup) ? m.setup : []).map(String).filter((c: string) => /^(npm|pnpm|yarn|uv|python3? -m venv)\b/.test(c)).slice(0, 3);
     if (cmds.length && m.own) void this.runSetup(live, dest, cmds);

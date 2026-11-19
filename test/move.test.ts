@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,4 +123,43 @@ test('옮기기: 하위 작업도 함께(받는 PC 에서도 그 아래로), 채
   assert.equal(a.sessions.info(top)!.archived, true);
   assert.equal(a.sessions.info(kid)!.archived, true);
   a.sessions.stopAll(); b.sessions.stopAll();
+});
+
+test('묶음: 한글 경로 · 빈 폴더 · 빼는 폴더 · 윈도우에서 못 쓰는 이름은 바꿔 풀고, 폴더 밖 이름은 버림', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'agent hub pack '));
+  const src = join(base, 'src');
+  mkdirSync(join(src, '첨부', '빈 폴더'), { recursive: true });
+  mkdirSync(join(src, 'node_modules', 'x'), { recursive: true });
+  writeFileSync(join(src, '첨부', '20261118-024644-image.png'), Buffer.from([1, 2, 3]));
+  writeFileSync(join(src, 'a:b?.txt'), '윈도우 금지 글자');
+  writeFileSync(join(src, 'node_modules', 'x', 'big.js'), 'x');
+  writeFileSync(join(src, '.env'), 'S=1');
+  writeFileSync(join(src, 'big.bin'), Buffer.alloc(3 * 1024 * 1024, 7));
+  const { packFolder, packFiles, unpackTo } = await import('../src/move.ts');
+  const out = join(base, 'a.pk');
+  await packFolder(src, out, ['.env']);
+  const linux = join(base, 'linux'); mkdirSync(linux);
+  assert.deepEqual((await unpackTo(out, linux, false)).renamed, []);
+  assert.deepEqual([...readFileSync(join(linux, '첨부', '20261118-024644-image.png'))], [1, 2, 3]);
+  assert.ok(existsSync(join(linux, '첨부', '빈 폴더')));
+  assert.equal(readFileSync(join(linux, 'a:b?.txt'), 'utf8'), '윈도우 금지 글자');
+  assert.equal(readFileSync(join(linux, 'big.bin')).length, 3 * 1024 * 1024);
+  assert.ok(!existsSync(join(linux, 'node_modules')));
+  assert.ok(!existsSync(join(linux, '.env')));
+  const win = join(base, 'win'); mkdirSync(win);
+  const r = await unpackTo(out, win, true); // 윈도우처럼: 못 쓰는 이름은 바꿔 푼다
+  assert.deepEqual(r.renamed, ['a:b?.txt']);
+  assert.equal(readFileSync(join(win, 'a_b_.txt'), 'utf8'), '윈도우 금지 글자');
+  // 첨부만 묶기
+  const out2 = join(base, 'b.pk');
+  await packFiles(src, out2, ['첨부/20261118-024644-image.png']);
+  const only = join(base, 'only'); mkdirSync(only);
+  await unpackTo(out2, only, false);
+  assert.deepEqual(readdirSync(only), ['첨부']);
+  // 예전 형식(tar.gz)도 푼다
+  const tgz = join(base, 'old.tgz');
+  execFileSync('tar', ['-czf', tgz, '-C', src, '첨부']);
+  const old = join(base, 'old'); mkdirSync(old);
+  await unpackTo(tgz, old, false);
+  assert.ok(existsSync(join(old, '첨부', '20261118-024644-image.png')));
 });
