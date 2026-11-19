@@ -27,6 +27,8 @@ function link(a: ReturnType<typeof pc>, b: ReturnType<typeof pc>) {
   (a.sessions as any).peers = {
     summary: () => ({ name: a.name, tasks: [] }),
     myUrl: () => a.url,
+    setParent: async (_u: string, taskId: string, parentId: string | null, me: string) => b.sessions.setRemoteParent(taskId, parentId ? { url: a.url, id: parentId, pc: me } : null),
+    cmd: async (_u: string, c: any) => b.sessions.handle(c, local),
     all: async () => [{ url: b.url, ok: true, name: b.name, summary: { name: b.name, tasks: [] } }],
     post: async (_u: string, path: string, body: any) => (path === '/peer/move/start' ? b.sessions.moveStart(body) : path === '/peer/move/finish' ? b.sessions.moveFinish(body) : path === '/peer/image' ? b.sessions.receiveRemoteImage(body.to, body.fromPc, body.title, body) : null),
     postRaw: async (_u: string, path: string, buf: Buffer) => { const q = new URL(`http://x${path}`).searchParams; return b.sessions.moveChunk(q.get('id')!, Number(q.get('offset')), buf); },

@@ -2313,6 +2313,12 @@ export class SessionManager {
     };
     const done = (await peers.post(view.url, '/peer/move/finish', { id, sha1: size ? sha1 : '', meta })) as { sessionId: string; workdir: string };
     rmSync(tgz, { force: true });
+    // 트리 자리: 받는 PC 가 예전 버전이라 meta 의 자리 정보를 모를 수 있어 보내는 쪽에서도 한 번 더 맞춘다(같은 값이라 두 번 해도 그대로)
+    try {
+      const up = live.info.splitFrom ?? live.info.forkedFrom;
+      if (!parentId && up && peers.myUrl()) await peers.setParent(view.url, done.sessionId, up, peers.summary().name);
+      if (typeof meta.rank === 'number' && Number.isFinite(meta.rank)) await peers.cmd(view.url, { type: 'session.reorder', sessionId: done.sessionId, rank: meta.rank });
+    } catch (err) { say(`옮겼지만 트리 자리를 못 맞춤: ${(err as Error).message}`); }
     // 채팅에 띄운 그림(최근 20장)도 받은 작업에 — 한 장씩(옛 PC 의 요청 크기 제한 안에서)
     const shots = live.history.flatMap((e) => (e.type === 'agent.image' ? [e] : [])).slice(-20);
     if (shots.length) say(`옮기는 중 · 그림 ${shots.length}장 보내는 중`);

@@ -217,6 +217,12 @@ export class Peers {
     await this.post(url, '/peer/parent', { taskId, parent: parentId ? { url: me, id: parentId, pc: myName } : null });
   }
 
+  /** 그 PC 에 명령 하나(작업 순서 바꾸기 등 — 그 PC 의 /cmd 로) */
+  async cmd(url: string, cmd: unknown) {
+    const r = await fetch(`${peerUrl(url)}/cmd`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cmd), signal: AbortSignal.timeout(TIMEOUT_MS * 2) });
+    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+  }
+
   /** 그 PC 의 공통 지침·회사 기억(맞추기 비교용) */
   async shared(url: string): Promise<{ guide: string; items: { text: string; at: string }[] } | null> {
     const u = peerUrl(url);
