@@ -3325,8 +3325,9 @@ function renderList() {
     g.append(taskRow(s, depth, kids.length || rkids.length ? open : null));
     if ((kids.length || rkids.length) && open) {
       const box = el('div', 'task-kids');
-      for (const k of kids) box.append(group(k, depth + 1));
-      for (const r of rkids) box.append(remoteGroup(r, depth + 1, true));
+      // 이 PC 하위 작업과 이 작업 아래에 둔 다른 PC 작업을 순서 값대로 섞어서(옮긴 하위 작업이 원래 자리에 그대로)
+      const mixed = [...kids.map((k) => ({ rank: rankOf(k), draw: () => group(k, depth + 1) })), ...rkids.map((r) => ({ rank: r.t.rank ?? Infinity, draw: () => remoteGroup(r, depth + 1, true) }))];
+      for (const m of mixed.sort((a, b) => a.rank - b.rank)) box.append(m.draw());
       g.append(box);
     }
     return g;
