@@ -2012,7 +2012,7 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      { const u = { k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, by: ev.via?.by ? `${ev.via.by} · ${ev.via.app.replace(/^Agent Hub /, '')}` : undefined, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort };
+      { const u = { k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, by: ev.via?.by ? [...new Set([ev.via.by, ev.via.app.replace(/^Agent Hub /, '')])].join(' · ') : undefined, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort };
         // 입력 세션이 정리한 지시: 원래 사람 말풍선이 이 작업에 있으면 그 아래 접기 줄로 붙이고 이 글은 따로 그리지 않는다(되감기 번호는 그대로 세게 목록에는 남김)
         const own = INTAKE_HEAD.test(ev.text) ? intakeTarget(s, false) : null;
         if (own) { own.intake = { state: 'done', brief: intakeBrief(ev.text) }; u.hidden = true; }
@@ -4238,14 +4238,16 @@ const INTAKE_HEAD = /^\[입력 세션이 정리한 지시\]/;
 const intakeOpen = new WeakSet();
 /** 입력 세션이 지금 다루는 사람 말풍선: 마지막 사람 글(입력 세션 글 · 이미 끝난 것 빼고). fresh = 새로 정리를 시작할 때(아직 표시 없는 글만) */
 function intakeTarget(s, fresh) {
+  // 정리 시작은 맨 끝 사람 글에. 정리 결과(넘김 · 물음 · 보냄)는 아직 안 끝난 글 가운데 가장 앞 것에 — 글이 연달아 와도 차례대로 붙게
+  let open = null;
   for (let i = s.items.length - 1; i >= 0; i--) {
     const it = s.items[i];
     if (it.k !== 'user' || it.hidden || it.pending) continue;
-    if (INTAKE_HEAD.test(it.t ?? '')) return null;
+    if (INTAKE_HEAD.test(it.t ?? '')) break;
     if (fresh) return it.intake ? null : it;
-    return it.intake && it.intake.state !== 'done' ? it : null;
+    if (it.intake && it.intake.state !== 'done') open = it;
   }
-  return null;
+  return open;
 }
 /** 정리본에서 [사람 원문] 앞까지(원문은 사람 말풍선에 이미 있다) */
 function intakeBrief(text) {
