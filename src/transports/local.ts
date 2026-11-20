@@ -52,7 +52,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
   const uploads = new Map<string, { abs: string; path: string; name: string; mime: string; size: number; got: number; at: number }>();
   setInterval(() => { for (const [k, u] of uploads) if (Date.now() - u.at > 3600_000) uploads.delete(k); }, 600_000).unref();
   // 연결 상태(화면이 받는 모양 하나로): 이 PC 이름·원격 접속 주소(다른 PC 작업이 이 PC 아래에 있는지 알아보는 데 씀)·다른 PC 들
-  const peerState = async (fresh = false) => ({ me: peers!.summary().name, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers!.all(fresh) });
+  const peerState = async (fresh = false) => ({ me: peers!.summary().name, user: peers!.user, myUrls: remote?.enabled ? remote.urls() : [], peers: await peers!.all(fresh) });
 
   const route = async (req: IncomingMessage, res: ServerResponse, lanReq = false) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`);
@@ -126,8 +126,8 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         const target = peers.urls().find((u) => u === body?.url);
         const cmd = parseCommand(body?.cmd);
         if (!target || !cmd) return send(res, 400, '연결된 PC 와 명령을 주세요');
-        // 사람이 이 화면에서 보낸 지시는 그 PC 기록에 "Agent Hub <이 PC> · 사람"으로
-        const out = cmd.type === 'user.message' ? { ...cmd, via: { app: `Agent Hub ${peers.summary().name}`.slice(0, 40), label: '사람' } } : cmd;
+        // 사람이 이 화면에서 보낸 지시는 그 PC 기록에 "Agent Hub <이 PC> · 사람"으로, 쓴 사람(대시보드 계정 · 이 PC 설정의 이름 · PC 이름)과 함께
+        const out = cmd.type === 'user.message' ? { ...cmd, via: { app: `Agent Hub ${peers.summary().name}`.slice(0, 40), label: '사람', by: peers.writer(authorOf(req, lanReq, relayToken).name) } } : cmd;
         try {
           const r = await fetch(`${target}/cmd`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(out), signal: AbortSignal.timeout(10000) });
           if (!r.ok) return send(res, 502, `${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -186,6 +186,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
           void peers.hello(added); // 상대 목록에도 이 PC 를
           return json(res, 200, await peerState());
         }
+        if (req.method === 'PATCH') { const body = (await readJson(req, res)) as any; if (body === undefined) return; peers.setUser(body?.user); return json(res, 200, await peerState()); } // 이 PC 를 쓰는 사람 이름
         if (req.method === 'DELETE') { const u = url.searchParams.get('url'); peers.remove(u); if (u) void peers.hello(u, true); return json(res, 200, await peerState()); }
       }
       // 다른 PC 의 입력 세션 모델·기억 맞추기(그 PC 의 원격 접속으로)
@@ -203,7 +204,7 @@ export function startLocalServer(opts: { port: number; uiDir: string; sessions: 
         if (body === undefined) return;
         const text = String(body?.text ?? '').trim().slice(0, 20000);
         if (!text || !Array.isArray(body?.ids)) return send(res, 400, '보낼 글과 작업이 필요함');
-        try { return json(res, 200, { sent: await peers.sendIds(String(body.url ?? ''), body.ids.map(String).slice(0, 300), text) }); } catch (err) { return send(res, 400, (err as Error).message); }
+        try { return json(res, 200, { sent: await peers.sendIds(String(body.url ?? ''), body.ids.map(String).slice(0, 300), text, authorOf(req, lanReq, relayToken).name) }); } catch (err) { return send(res, 400, (err as Error).message); }
       }
       // 설정 → 기억 → 입력 세션: 모델
       if (url.pathname === '/intake' && sessions.intake) {

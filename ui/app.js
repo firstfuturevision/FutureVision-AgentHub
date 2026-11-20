@@ -395,6 +395,26 @@ function renderPeers(box) {
   const top = el('div', 'sched-top');
   top.append(el('span', 'sched-when', peerState?.me ?? '이 PC'), el('span', 'link-kind', '이 PC'));
   me.append(top, el('div', 'sched-meta', `작업 ${mine.length}개 · 작업 중 ${mine.filter(isBusy).length}개`));
+  // 이 PC 를 쓰는 사람: 다른 PC 작업에 글을 보내면 그 PC 말풍선 아래에 "이름 · 이 PC" 로 보인다(비우면 PC 이름, 대시보드 원격 연결은 그 계정 이름)
+  const who = el('form', 'peer-user');
+  const name = el('input', 'key-input');
+  name.value = peerState?.user ?? '';
+  name.placeholder = peerState?.me ?? 'PC 이름';
+  name.maxLength = 40;
+  name.setAttribute('aria-label', '이 PC 를 쓰는 사람 이름');
+  const keep = el('button', 'line-btn', '저장');
+  keep.type = 'submit';
+  who.append(el('span', 'p-meta', '쓰는 사람'), name, keep);
+  who.title = '다른 PC 작업에 글을 보내면 그 PC 대화에 이 이름이 쓴 사람으로 보여요. 비우면 PC 이름. 대시보드 원격 연결로 쓴 글은 그 계정 이름';
+  who.onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch('/peers', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user: name.value }) });
+    if (!r.ok) return flash(await r.text(), true);
+    peerState = await r.json();
+    flash(peerState.user ? `쓰는 사람: ${peerState.user}` : '쓰는 사람을 비웠어요(PC 이름으로 보여요)');
+    renderTaskLinks(true);
+  };
+  me.append(who);
   list.append(me);
   for (const p of peerState?.peers ?? []) {
     const row = el('div', `sched-row${p.ok ? '' : ' off'}`);
@@ -1992,7 +2012,7 @@ function reduceEvent(s, ev, at) {
     case 'user.message':
       // 이 화면에서 보내며 미리 그린 글("보내는 중")은 서버가 받은 글로 바꾼다
       { const i = s.items.findIndex((it) => it.pending && it.t === ev.text); if (i >= 0) s.items.splice(i, 1); }
-      { const u = { k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort };
+      { const u = { k: 'user', t: ev.text, from: ev.via ? `${ev.via.app} · ${ev.via.label}` : ev.from, by: ev.via?.by ? `${ev.via.by} · ${ev.via.app.replace(/^Agent Hub /, '')}` : undefined, author: ev.author, files: ev.attachments, sid: s.info.id, effort: ev.effort };
         // 입력 세션이 정리한 지시: 원래 사람 말풍선이 이 작업에 있으면 그 아래 접기 줄로 붙이고 이 글은 따로 그리지 않는다(되감기 번호는 그대로 세게 목록에는 남김)
         const own = INTAKE_HEAD.test(ev.text) ? intakeTarget(s, false) : null;
         if (own) { own.intake = { state: 'done', brief: intakeBrief(ev.text) }; u.hidden = true; }
@@ -3949,6 +3969,7 @@ function stampText(it) {
 }
 /** 사람 글을 쓴 사람 · 들어온 길(없으면 빈 글자 — 옛 글은 지어 붙이지 않는다) */
 function whoOf(it) {
+  if (it.by) return it.by; // 연결된 다른 PC 에서 쓴 글: "이름 · 그 PC"
   if (it.author) return [it.author.name, it.author.path].filter(Boolean).join(' · ');
   return it.from && it.from !== 'local' ? it.from : '';
 }

@@ -19,7 +19,7 @@ export type PermMode = 'ask' | 'readonly' | 'data'; // data = 데이터만: 파�
  * 원격 접속 — 바깥 시스템(회사 업무 웹 등)이 HTTP(/events + /cmd)로 이 작업에 붙어 글을 주고받을 때 자기를 밝히는 표.
  * app = 시스템 이름(예: 대시보드), label = 그 안의 자리(예: 채팅 #일반), ref = 그 자리를 여는 주소(있으면)
  */
-export interface RemoteVia { app: string; label: string; ref?: string }
+export interface RemoteVia { app: string; label: string; ref?: string; by?: string } // by: 연결된 다른 PC 에서 사람이 쓴 글의 쓴 사람(그 PC 설정의 이름 · 대시보드 계정 이름)
 /** 작업에 연결된 원격 접속 하나 — 작업 기록에서 모은다(app + label 이 같으면 같은 연결) */
 export interface RemoteLink extends RemoteVia {
   firstAt: string; // ISO
@@ -226,7 +226,8 @@ export function parseVia(v: unknown): RemoteVia | undefined {
       if (u.protocol === 'http:' || u.protocol === 'https:') ref = u.href.length <= 300 ? u.href : undefined;
     } catch {}
   }
-  return { app, label, ...(ref ? { ref } : {}) };
+  const by = remoteName(o.by, 40);
+  return { app, label, ...(ref ? { ref } : {}), ...(by ? { by } : {}) };
 }
 
 /** 원격 접속을 사람에게 보이는 이름: "대시보드 · 채팅 #일반" */

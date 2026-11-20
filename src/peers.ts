@@ -39,6 +39,8 @@ function ownAddresses(): Set<string> {
 export class Peers {
   private file: string;
   private manual: string[] = [];
+  /** 이 PC 를 쓰는 사람 이름(설정 → 연결). 다른 PC 작업에 글을 보낼 때 쓴 사람으로 함께 간다. 비면 PC 이름 */
+  user = '';
   private found = new Map<string, { name: string; seenAt: number }>();
   private cache = new Map<string, { at: number; view: PeerView }>();
   private sock: Socket | null = null;
@@ -51,7 +53,13 @@ export class Peers {
   constructor(file: string, remote?: RemoteAccess) {
     this.file = file;
     this.remote = remote;
-    try { if (existsSync(file)) this.manual = (JSON.parse(readFileSync(file, 'utf8')).manual ?? []).map(peerUrl).filter(Boolean); } catch {}
+    try {
+      if (existsSync(file)) {
+        const raw = JSON.parse(readFileSync(file, 'utf8'));
+        this.manual = (raw.manual ?? []).map(peerUrl).filter(Boolean);
+        this.user = cleanName(raw.user);
+      }
+    } catch {}
   }
 
   /** UDP 로 듣고(늘), 원격 접속이 켜져 있으면 알린다 */
@@ -113,9 +121,20 @@ export class Peers {
     this.save();
   }
 
+  /** 이 PC 를 쓰는 사람 이름 바꾸기(빈 글 = 지움 → PC 이름) */
+  setUser(v: unknown) {
+    this.user = cleanName(v);
+    this.save();
+  }
+
+  /** 다른 PC 에 보내는 사람 글의 쓴 사람: 중계가 넘긴 이름(대시보드 계정) > 이 PC 설정의 이름 > PC 이름 */
+  writer(name?: string): string {
+    return cleanName(name) || this.user || hostname().slice(0, 40);
+  }
+
   private save() {
     mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(`${this.file}.tmp`, JSON.stringify({ manual: this.manual }, null, 2));
+    writeFileSync(`${this.file}.tmp`, JSON.stringify({ manual: this.manual, ...(this.user ? { user: this.user } : {}) }, null, 2));
     renameSync(`${this.file}.tmp`, this.file);
   }
 
@@ -241,7 +260,7 @@ export class Peers {
   }
 
   /** 사람이 화면에서 다른 PC 작업들에 보내기(id 로). 보낸 곳은 "Agent Hub <이 PC> · 사람" */
-  async sendIds(url: string, ids: string[], text: string): Promise<number> {
+  async sendIds(url: string, ids: string[], text: string, by?: string): Promise<number> {
     const v = await this.view(peerUrl(url) ?? '', true);
     if (!v.ok) throw new Error(`${v.name || url}: ${v.error}`);
     const known = new Set(v.summary!.tasks.map((t) => t.id));
@@ -250,7 +269,7 @@ export class Peers {
       const r = await fetch(`${v.url}/cmd`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'user.message', sessionId: id, text, via: { app: `Agent Hub ${hostname()}`.slice(0, 40), label: '사람' } }),
+        body: JSON.stringify({ type: 'user.message', sessionId: id, text, via: { app: `Agent Hub ${hostname()}`.slice(0, 40), label: '사람', by: this.writer(by) } }),
         signal: AbortSignal.timeout(TIMEOUT_MS * 3),
       });
       if (r.ok) n++;
@@ -276,4 +295,9 @@ export class Peers {
     this.cache.delete(v.url);
     return `${v.name} 의 ${t.name} 에 보냄`;
   }
+}
+
+/** 사람 이름: 제어 글자 빼고 40자까지 */
+function cleanName(v: unknown): string {
+  return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40) : '';
 }
